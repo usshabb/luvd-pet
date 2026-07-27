@@ -4,6 +4,7 @@ load_dotenv()
 
 import os
 import re
+from html import escape as html_escape
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_from_directory
@@ -62,12 +63,46 @@ def subscribe():
     return jsonify({"ok": True})
 
 
+@app.route("/unsubscribe", methods=["GET", "POST"])
+def unsubscribe():
+    """Signed one-click unsubscribe. GET is the email footer link; POST is
+    the RFC 8058 one-click endpoint mail clients call from their own UI."""
+    import hmac as _hmac
+    import emailer
+    email = (request.values.get("e") or "").strip().lower()
+    token = request.values.get("t") or ""
+    if not email or not _hmac.compare_digest(token, emailer.unsub_token(email)):
+        return ("This unsubscribe link isn't valid.", 400)
+    db.deactivate_subscriber(email)
+    if request.method == "POST":
+        return jsonify({"ok": True})
+    return f"""<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unsubscribed — LUVD NYC</title>
+<body style="background:#fbfbfd;margin:0;padding:48px 16px;
+             font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
+  <div style="max-width:440px;margin:0 auto;background:#fff;border-radius:20px;
+              padding:36px 28px;text-align:center;">
+    <div style="font:700 13px inherit;letter-spacing:.2em;text-transform:uppercase;
+                color:#FF002E;">LUVD NYC</div>
+    <h1 style="font:700 24px inherit;color:#1d1d1f;margin:16px 0 8px;">
+      You're unsubscribed</h1>
+    <p style="font:400 15px inherit;color:#6e6e73;margin:0;">
+      {html_escape(email)} won't get any more morning emails.<br>
+      Changed your mind? Just sign up again on the site.</p>
+    <a href="/" style="display:inline-block;margin-top:22px;color:#FF002E;
+       font:600 15px inherit;text-decoration:none;">← Back to the dogs</a>
+  </div>
+</body>"""
+
+
 @app.route("/robots.txt")
 def robots():
     site = os.getenv("SITE_URL", "").rstrip("/")
     body = "User-agent: *\nAllow: /\n"
     # Keep crawlers out of the write/counter endpoints.
-    body += "Disallow: /view\nDisallow: /subscribe\nDisallow: /subscribers\n"
+    body += ("Disallow: /view\nDisallow: /subscribe\nDisallow: /subscribers\n"
+             "Disallow: /unsubscribe\n")
     if site:
         body += f"\nSitemap: {site}/sitemap.xml\n"
     return Response(body, mimetype="text/plain")

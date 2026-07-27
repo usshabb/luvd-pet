@@ -6,10 +6,13 @@ where you actually browse.
 All outbound mail (daily digest, scraper alerts, weekly report) goes through
 send_email() so there is exactly one place that knows the provider.
 """
+import hashlib
+import hmac
 import os
 import html
 from datetime import date
 from typing import List
+from urllib.parse import quote
 
 import requests
 
@@ -17,6 +20,17 @@ from sources.base import Dog
 
 MANDRILL_URL = "https://mandrillapp.com/api/1.0/messages/send.json"
 PREVIEW_COUNT = 6
+
+
+def unsub_token(email: str) -> str:
+    """Signed token so an unsubscribe link only works for its own address."""
+    secret = os.getenv("UNSUB_SECRET", "luvd-dev-secret")
+    return hmac.new(secret.encode(), email.strip().lower().encode(),
+                    hashlib.sha256).hexdigest()[:20]
+
+
+def unsub_url(email: str) -> str:
+    return f"{_site_url()}/unsubscribe?e={quote(email)}&t={unsub_token(email)}"
 
 
 def email_configured() -> bool:
@@ -32,7 +46,8 @@ def _from_parts():
     return raw.strip(), "LUVD NYC"
 
 
-def send_email(to_email: str, subject: str, html_body: str = None, text_body: str = None):
+def send_email(to_email: str, subject: str, html_body: str = None, text_body: str = None,
+               headers: dict = None):
     key = os.getenv("MANDRILL_API_KEY")
     if not key:
         raise RuntimeError("MANDRILL_API_KEY not set")
@@ -47,6 +62,8 @@ def send_email(to_email: str, subject: str, html_body: str = None, text_body: st
         message["html"] = html_body
     if text_body:
         message["text"] = text_body
+    if headers:
+        message["headers"] = headers
     resp = requests.post(MANDRILL_URL, json={"key": key, "message": message}, timeout=30)
     body = resp.json()
     # Mandrill signals API-level errors as a dict (often with HTTP 500),
@@ -83,7 +100,7 @@ def _site_url() -> str:
     return os.getenv("SITE_URL", "http://localhost:8000")
 
 
-def build_html(dogs: List[Dog], for_date: date = None) -> str:
+def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None) -> str:
     for_date = for_date or date.today()
     n = len(dogs)
     with_photos = [d for d in dogs if d.photos][:PREVIEW_COUNT]
@@ -91,6 +108,11 @@ def build_html(dogs: List[Dog], for_date: date = None) -> str:
     rows = ""
     for i in range(0, len(with_photos), 3):
         rows += f"<tr>{''.join(_thumb(d) for d in with_photos[i:i + 3])}</tr>"
+
+    unsub_line = ""
+    if unsubscribe_for:
+        unsub_line = (f'<br><a href="{html.escape(unsub_url(unsubscribe_for))}" '
+                      f'style="color:#98989d;">Unsubscribe</a>')
 
     more = ""
     if n > len(with_photos):
@@ -124,7 +146,7 @@ def build_html(dogs: List[Dog], for_date: date = None) -> str:
     <p style="font:400 12px -apple-system,Segoe UI,Roboto,sans-serif;color:#98989d;
               text-align:center;margin:22px 0 0;">
       {for_date.strftime('%A, %B %-d, %Y')}<br>
-      You only get this when there are new dogs.</p>
+      You only get this when there are new dogs.{unsub_line}</p>
   </div>
 </div>"""
 
@@ -134,5 +156,11 @@ def send_digest(to_email: str, dogs: List[Dog], for_date: date = None):
     return send_email(
         to_email,
         f"🐶 {n} new dog{'' if n == 1 else 's'} in NYC today",
-        html_body=build_html(dogs, for_date),
+        html_body=build_html(dogs, for_date, unsubscribe_for=to_email),
+        # One-click unsubscribe headers — Gmail/Yahoo require these for bulk
+        # senders, and they keep spam-report rates from hurting deliverability.
+        headers={
+            "List-Unsubscribe": f"<{unsub_url(to_email)}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
     )

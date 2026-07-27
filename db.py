@@ -336,6 +336,14 @@ def add_subscriber(email: str):
         )
 
 
+def deactivate_subscriber(email: str):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE subscribers SET active = 0 WHERE email = ?",
+            (email.strip().lower(),),
+        )
+
+
 def list_subscribers():
     with connect() as conn:
         rows = conn.execute(
