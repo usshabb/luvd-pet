@@ -45,6 +45,8 @@ class Dog:
     scores: dict = field(default_factory=dict)      # energy/apartment/experience, 1-5
     breed_key: Optional[str] = None
     breed_info: dict = field(default_factory=dict)
+    size_outlook: dict = field(default_factory=dict)
+    monthly_cost: dict = field(default_factory=dict)
 
     def primary_photo(self) -> str:
         return self.photos[0] if self.photos else ""
@@ -67,6 +69,8 @@ class Dog:
             "first_seen": self.first_seen, "listed_since": self.listed_since,
             "cta_url": self.cta_url(),
             "scores": self.scores, "breed_info": self.breed_info,
+            "size_outlook": self.size_outlook,
+            "monthly_cost": self.monthly_cost,
         }
 
 

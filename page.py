@@ -102,19 +102,19 @@ def waiting_days(dog: Dog, today: date):
         return None
 
 
+def _ordinal(n: int) -> str:
+    if 11 <= n % 100 <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
 def _day_label(iso: str, today: date) -> str:
+    """Always the real date — relative labels stop being useful past a day."""
     try:
         d = date.fromisoformat(iso)
     except ValueError:
         return "Earlier"
-    delta = (today - d).days
-    if delta <= 0:
-        return "New today"
-    if delta == 1:
-        return "Yesterday"
-    if delta < 7:
-        return d.strftime("%A")
-    return d.strftime("%B %-d")
+    return f"{d.strftime('%B')} {_ordinal(d.day)}"
 
 
 def _card(d: Dog, i: int, today: date) -> str:
@@ -290,6 +290,7 @@ def render(dated, for_date: date = None) -> str:
         sections.append(f"""
     <section class="day{' today' if is_today else ''}">
       <div class="day-hd">
+        {'<span class="day-new">New today</span>' if is_today else ''}
         <h2>{html.escape(_day_label(iso, for_date))}</h2>
         <span class="day-n">{len(group)} dog{'' if len(group) == 1 else 's'}</span>
       </div>
@@ -476,9 +477,12 @@ def render(dated, for_date: date = None) -> str:
   .nav-count{{display:flex;align-items:center;gap:7px;font-size:12.5px;
     transition:opacity .24s ease,transform .28s ease;
     color:var(--muted);white-space:nowrap;background:var(--hair2);
-    border:1px solid var(--hair);border-radius:980px;padding:5px 12px;}}
+    border-radius:980px;padding:6px 13px;}}
   .nav-count[hidden]{{visibility:hidden;}}
-  .nav-count b{{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums;}}
+  .nav-count b{{color:var(--text);font-weight:700;
+    font-variant-numeric:tabular-nums;}}
+  /* Room for seven figures without the bar reflowing. */
+  .nav-count{{min-width:0;}}
   .nc-dot{{width:6px;height:6px;border-radius:50%;background:var(--good);
     box-shadow:0 0 0 0 var(--good);animation:pulse 2.4s ease-out infinite;}}
   @keyframes pulse{{
@@ -492,27 +496,41 @@ def render(dated, for_date: date = None) -> str:
     100%{{transform:scale(1);}}
   }}
   @media (max-width:860px){{ .nc-l{{display:none;}} }}
-  @media (max-width:520px){{ .nav-date span{{display:none;}} .nav-count{{display:none;}}
-    .nav-logo img{{width:88px;}} }}
+  @media (max-width:680px){{
+    /* No room for the date or a centred mark. The saved-hearts chip is the
+       thing people need to reach, so it takes the left edge. */
+    .nav-date{{display:none;}}
+    .nav-mid{{display:none;}}
+
+  }}
   @media (prefers-reduced-motion:reduce){{
     .nc-dot,.nav-count b.bump{{animation:none;}}
   }}
   .logo{{font-size:14px;font-weight:800;letter-spacing:.2em;color:var(--accent);
     text-transform:uppercase;text-decoration:none;}}
+  .nav-left{{display:flex;align-items:center;gap:12px;min-width:0;}}
   .nav-r{{display:flex;align-items:center;gap:8px;}}
-  .nav-btn{{all:unset;cursor:pointer;font-size:13.5px;font-weight:500;color:var(--text);
+  .nav-btn{{all:unset;box-sizing:border-box;cursor:pointer;font-size:13.5px;
+    font-weight:500;color:var(--text);
     padding:7px 13px;border-radius:980px;transition:background .2s,opacity .2s;}}
   .nav-btn:hover{{background:var(--hair2);}}
   .nav-btn[hidden]{{display:none;}}
   .saved-chip{{color:var(--accent);font-weight:700;display:inline-flex;
-    align-items:center;gap:6px;}}
-  .saved-chip.active{{background:var(--accent-soft);}}
+    align-items:center;gap:6px;padding:7px 13px;border-radius:980px;
+    background:var(--accent-soft);}}
+  .saved-chip:hover{{background:var(--accent-soft);opacity:.85;}}
   .sc-hrt{{width:15px;height:15px;stroke:var(--accent);stroke-width:2;fill:none;
     transition:fill .2s ease;}}
   .saved-chip.has .sc-hrt{{fill:var(--accent);}}
   /* Nothing saved yet — present, but clearly not urgent. */
-  .saved-chip.none{{color:var(--muted);}}
+  .saved-chip.none{{color:var(--muted);background:var(--hair2);}}
   .saved-chip.none .sc-hrt{{stroke:var(--muted);}}
+  /* Filtered state wins over both — must be unmistakable. */
+  .saved-chip.active,.saved-chip.none.active{{background:var(--accent);
+    color:#fff;}}
+  .saved-chip.active .sc-hrt,.saved-chip.none.active .sc-hrt{{
+    stroke:#fff;fill:#fff;}}
+  .saved-chip.active:hover{{background:var(--accent);opacity:.9;}}
   .nav-cta{{background:var(--accent);color:#fff;font-weight:600;}}
   .nav-cta:hover{{background:var(--accent);opacity:.88;}}
 
@@ -566,9 +584,10 @@ def render(dated, for_date: date = None) -> str:
     color:var(--text);font-family:inherit;}}
   .hero-sub input:focus{{outline:2px solid var(--accent);outline-offset:-1px;
     border-color:transparent;}}
-  .hero-sub button{{all:unset;cursor:pointer;background:var(--accent);color:#fff;
-    font-weight:600;font-size:15px;padding:12px 18px;border-radius:11px;
-    white-space:nowrap;transition:opacity .2s;}}
+  .hero-sub button{{all:unset;box-sizing:border-box;cursor:pointer;
+    background:var(--accent);color:#fff;font-weight:600;font-size:15px;
+    padding:12px 18px;border-radius:11px;white-space:nowrap;
+    transition:opacity .2s;text-align:center;}}
   .hero-sub button:hover{{opacity:.88;}}
   .hero-note{{font-size:12.5px;color:var(--muted);margin-top:9px;}}
   .hero-note.ok{{color:var(--accent);font-weight:700;font-size:14px;}}
@@ -581,6 +600,7 @@ def render(dated, for_date: date = None) -> str:
   body.shrunk .brand-wrap{{opacity:0;transform:scale(.9) translateY(-10px);}}
   .brand-logo{{width:clamp(190px,27vw,330px);height:auto;cursor:pointer;display:block;
     transition:transform .45s cubic-bezier(.34,1.56,.64,1),filter .35s ease;
+    will-change:filter,transform;transform:translateZ(0);
     /* Two soft drop-shadows: a tight one for the edge, a wide diffuse one so
        the mark lifts off the background rather than sitting flat on it. */
     filter:drop-shadow(0 2px 3px rgba(0,0,0,.14))
@@ -637,6 +657,20 @@ def render(dated, for_date: date = None) -> str:
   }}
   @media (prefers-reduced-motion:reduce){{ .egg{{display:none;}} }}
 
+  /* Double-tap confirmation: a heart that punches in and fades. */
+  .dbl-heart{{position:absolute;inset:0;display:grid;place-items:center;
+    pointer-events:none;z-index:6;}}
+  .dbl-heart svg{{width:34%;height:34%;fill:#fff;stroke:none;
+    filter:drop-shadow(0 4px 16px rgba(0,0,0,.45));
+    animation:dblpop .9s cubic-bezier(.2,.9,.3,1) forwards;}}
+  @keyframes dblpop{{
+    0%{{transform:scale(.3);opacity:0;}}
+    18%{{transform:scale(1.15);opacity:.96;}}
+    36%{{transform:scale(1);opacity:.96;}}
+    100%{{transform:scale(1.08);opacity:0;}}
+  }}
+  @media (prefers-reduced-motion:reduce){{ .dbl-heart{{display:none;}} }}
+
   /* ---------- day sections ---------- */
   .day{{padding-top:8px;}}
   .day + .day{{border-top:1px solid var(--hair2);margin-top:18px;padding-top:34px;}}
@@ -645,7 +679,9 @@ def render(dated, for_date: date = None) -> str:
   .day-hd h2{{font-size:23px;font-weight:700;letter-spacing:-.022em;margin:0;}}
   /* Same type as the day name, just grey — a tiny caption read as an error. */
   .day-n{{font-size:23px;font-weight:700;letter-spacing:-.022em;color:var(--muted);}}
-  .day.today .day-hd h2{{color:var(--accent);}}
+  .day-new{{font-size:11px;font-weight:800;letter-spacing:.09em;
+    text-transform:uppercase;color:#fff;background:var(--accent);
+    padding:5px 10px;border-radius:980px;align-self:center;}}
 
   /* ---------- grid ---------- */
   .grid{{display:grid;gap:28px;padding:22px 0 8px;
@@ -757,12 +793,28 @@ def render(dated, for_date: date = None) -> str:
     border:1px solid var(--hair);background:var(--bg);color:var(--text);font-family:inherit;}}
   .sub-form input:focus{{outline:2px solid var(--accent);outline-offset:-1px;
     border-color:transparent;}}
-  .sub-form button{{all:unset;cursor:pointer;background:var(--accent);color:#fff;font-weight:600;
-    font-size:16px;padding:14px 26px;border-radius:13px;transition:opacity .2s;}}
+  .sub-form button{{all:unset;box-sizing:border-box;cursor:pointer;
+    background:var(--accent);color:#fff;font-weight:600;font-size:16px;
+    padding:14px 26px;border-radius:13px;transition:opacity .2s;
+    text-align:center;}}
   .sub-form button:hover{{opacity:.88;}}
   .sub-note{{font-size:13px;color:var(--muted);margin-top:14px;}}
   .sub-note a{{color:var(--accent);}}
   .sub-ok{{color:var(--accent);font-weight:600;margin-top:14px;font-size:15px;}}
+
+  /* ---------- saved filter bar ---------- */
+  .filter-bar{{display:flex;align-items:center;justify-content:space-between;
+    gap:14px;background:var(--accent-soft);border:1px solid var(--accent);
+    border-radius:14px;padding:12px 16px;margin:26px 0 0;}}
+  .filter-bar[hidden]{{display:none;}}
+  .fb-label{{display:flex;align-items:center;gap:9px;font-size:14.5px;
+    font-weight:600;color:var(--accent);}}
+  .fb-hrt{{width:16px;height:16px;fill:var(--accent);stroke:var(--accent);
+    stroke-width:1.8;}}
+  .fb-clear{{all:unset;box-sizing:border-box;cursor:pointer;font-size:13.5px;
+    font-weight:600;color:var(--accent);padding:6px 12px;border-radius:980px;
+    background:var(--surface);white-space:nowrap;}}
+  .fb-clear:hover{{opacity:.8;}}
 
   /* ---------- saved empty state ---------- */
   .saved-empty{{text-align:center;padding:70px 20px 40px;max-width:420px;
@@ -806,15 +858,29 @@ def render(dated, for_date: date = None) -> str:
     opacity:0;transition:opacity .28s ease;}}
   .scrim.on{{display:flex;}} .scrim.vis{{opacity:1;}}
   .modal{{position:relative;background:var(--surface);border-radius:26px;width:min(880px,100%);
-    max-height:min(88vh,900px);overflow:hidden;box-shadow:var(--shadow-lg);
+    max-height:min(88vh,900px);overflow:visible;box-shadow:var(--shadow-lg);
     display:flex;flex-direction:column;
     transform:scale(.96) translateY(12px);
     transition:transform .34s cubic-bezier(.2,.9,.25,1);}}
   /* The contact button is the whole point of the page, so it never scrolls
      out of reach — the body scrolls beneath a pinned action bar. */
-  .m-scroll{{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1 1 auto;}}
+  .m-scroll{{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1 1 auto;
+    border-radius:26px 26px 0 0;
+    /* The default desktop scrollbar is a chunky grey slab against a rounded
+       modal. Slim, translucent, and only as present as it needs to be. */
+    scrollbar-width:thin;
+    scrollbar-color:var(--hair) transparent;
+    overscroll-behavior:contain;}}
+  .m-scroll::-webkit-scrollbar{{width:7px;}}
+  .m-scroll::-webkit-scrollbar-track{{background:transparent;}}
+  .m-scroll::-webkit-scrollbar-thumb{{background:var(--hair);
+    border-radius:980px;border:2px solid transparent;background-clip:content-box;}}
+  .m-scroll::-webkit-scrollbar-thumb:hover{{background:var(--muted);
+    border:2px solid transparent;background-clip:content-box;}}
+  /* No footer (about, share, contact) means the scroller owns all four. */
+  .modal:not(:has(.m-foot)) .m-scroll{{border-radius:26px;}}
   .m-foot{{flex:0 0 auto;padding:14px 28px 18px;border-top:1px solid var(--hair);
-    background:var(--surface);}}
+    background:var(--surface);border-radius:0 0 26px 26px;}}
   .m-foot .cta{{margin-top:0;}}
   .m-foot .cta-sub{{margin-top:9px;}}
   .foot-row{{display:grid;grid-template-columns:1fr 1fr;gap:10px;}}
@@ -872,11 +938,14 @@ def render(dated, for_date: date = None) -> str:
     background:var(--hair);border-radius:16px;overflow:hidden;}}
   .m-hero img{{width:100%;height:100%;object-fit:cover;object-position:center;
     display:block;}}
-  .m-close{{position:absolute;top:14px;right:14px;width:34px;height:34px;border:none;
-    z-index:12;
-    border-radius:50%;cursor:pointer;font-size:17px;line-height:1;background:rgba(0,0,0,.5);
-    color:#fff;backdrop-filter:blur(12px);display:grid;place-items:center;
-    transition:background .2s;z-index:5;}}
+  .m-close{{position:absolute;top:-12px;right:-12px;width:36px;height:36px;border:none;
+    border-radius:50%;cursor:pointer;font-size:17px;line-height:1;
+    background:rgba(28,28,30,.72);color:#fff;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    display:grid;place-items:center;z-index:20;
+    box-shadow:0 3px 12px rgba(0,0,0,.3);
+    transition:background .2s,transform .2s;}}
+  .m-close:active{{transform:scale(.92);}}
   .m-close:hover{{background:rgba(0,0,0,.75);}}
   .thumbs{{display:flex;gap:8px;overflow-x:auto;flex:0 0 auto;
     scrollbar-width:none;}}
@@ -918,20 +987,15 @@ def render(dated, for_date: date = None) -> str:
     color:var(--text);font-weight:500;}}
   .chip.rescue{{background:var(--text);color:var(--bg);font-weight:600;}}
   .chip.wait{{background:var(--warn-soft);color:var(--warn);font-weight:600;}}
-  .chip.views-chip{{background:var(--hair2);color:var(--muted);font-weight:600;}}
-  .chip.views-chip b{{color:var(--text);}}
+  .m-views{{left:12px;top:12px;}}
   .chip[hidden]{{display:none;}}
 
   /* Benefits and challenges, spelled out rather than colour-coded confetti. */
-  .tlists{{background:var(--hair2);border-radius:18px;padding:18px 18px 16px;
-    margin-bottom:22px;}}
+
   .tl-hd{{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
     color:var(--muted);margin-bottom:13px;}}
-  /* Three columns — the panel is full width, so a single stacked list left
-     most of the row empty and pushed everything else down. */
-  .tlists ul{{list-style:none;margin:0;padding:0;
-    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
-    gap:11px 20px;}}
+  .tlists ul{{list-style:none;margin:0;padding:0;display:grid;
+    grid-template-columns:1fr;gap:9px;}}
   .tlists li{{display:flex;align-items:flex-start;gap:9px;font-size:14.5px;
     line-height:1.4;color:var(--text);min-width:0;}}
   .tl-ic{{flex:0 0 auto;display:grid;place-items:center;width:17px;height:17px;
@@ -960,6 +1024,50 @@ def render(dated, for_date: date = None) -> str:
   .sc-note{{font-size:11.5px;color:var(--muted);line-height:1.45;padding-top:14px;
     border-top:1px solid var(--hair);margin-top:22px;}}
 
+  /* ---------- size + cost ---------- */
+  .sizecost{{margin-bottom:22px;background:var(--hair2);border-radius:18px;}}
+  .sc-inner{{display:grid;grid-template-columns:1.1fr 1fr;}}
+  .sc-inner > .sc-right{{border-left:1px solid var(--hair);
+    display:flex;flex-direction:column;}}
+  /* Two stacked blocks on the right, divided rather than gapped. */
+  .sc-right > * + *{{border-top:1px solid var(--hair);}}
+  .sc-right > *{{flex:1;}}
+  .sc-block{{padding:18px 20px 18px;display:flex;flex-direction:column;}}
+  .sc-block .sc-note{{margin-top:auto;padding-top:14px;}}
+  .sc-block p{{font-size:14.5px;line-height:1.5;color:var(--text);margin:0;}}
+  .gw{{height:8px;border-radius:980px;background:var(--hair);overflow:hidden;
+    margin-top:14px;}}
+  .gw span{{display:block;height:100%;border-radius:980px;
+    background:var(--accent);}}
+  .gw-l{{display:flex;justify-content:space-between;font-size:11.5px;
+    color:var(--muted);margin-top:6px;font-weight:600;}}
+  /* Where this dog sits between a chihuahua and a mastiff. */
+  .szscale{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;
+    margin-top:18px;}}
+  .szb{{display:flex;flex-direction:column;gap:6px;}}
+  .szb i{{height:7px;border-radius:980px;background:var(--hair);display:block;}}
+  .szb em{{font-style:normal;font-size:10.5px;font-weight:600;
+    color:var(--muted);letter-spacing:.01em;}}
+  .szb.on i{{background:var(--accent);}}
+  .szb.on em{{color:var(--accent);}}
+  .szb.from i{{background:var(--accent);opacity:.35;}}
+  .szcap{{font-size:12.5px;color:var(--muted);margin-top:11px;line-height:1.45;}}
+  .cost-big{{font-size:30px;font-weight:800;letter-spacing:-.03em;
+    margin-bottom:12px;}}
+  .cost-big span{{font-size:14px;font-weight:600;color:var(--muted);
+    letter-spacing:0;}}
+  .cost-list{{list-style:none;margin:0 0 12px;padding:0;}}
+  .cost-list li{{display:flex;justify-content:space-between;font-size:13.5px;
+    padding:5px 0;border-bottom:1px solid var(--hair2);color:var(--muted);}}
+  .cost-list li:last-child{{border-bottom:0;}}
+  .cost-list b{{color:var(--text);font-weight:600;}}
+  .cost-note{{font-size:11.5px !important;color:var(--muted) !important;
+    line-height:1.45 !important;}}
+  @media (max-width:680px){{
+    .sc-inner{{grid-template-columns:1fr;}}
+    .sc-inner > .sc-right{{border-left:0;border-top:1px solid var(--hair);}}
+  }}
+
   /* ---------- tabs ---------- */
   .tabs{{display:flex;gap:4px;background:var(--hair2);padding:3px;border-radius:11px;
     margin-bottom:16px;}}
@@ -984,7 +1092,12 @@ def render(dated, for_date: date = None) -> str:
 
   .cta{{display:block;width:100%;text-align:center;background:var(--accent);color:#fff;
     text-decoration:none;padding:15px;border-radius:14px;font-weight:600;font-size:16.5px;
-    transition:opacity .2s;margin-top:24px;}}
+    transition:opacity .2s;margin-top:24px;
+    /* Also used on <button>, which brings a default border, its own font and
+       an iOS appearance. Reset all three. */
+    border:none;appearance:none;-webkit-appearance:none;
+    font-family:inherit;line-height:normal;cursor:pointer;}}
+  .cta:focus-visible{{outline:3px solid var(--accent);outline-offset:3px;}}
   .cta:hover{{opacity:.88;}}
   .cta-sub{{text-align:center;font-size:13px;color:var(--muted);margin-top:11px;}}
   .cta-sub a{{color:var(--muted);}}
@@ -1051,9 +1164,12 @@ def render(dated, for_date: date = None) -> str:
     .card{{border-radius:15px;}}
     .meta{{padding:11px 12px 13px;}}
     .nm{{font-size:19px;margin:0 0 8px;}}
-    .save{{width:30px;height:30px;right:8px;top:8px;}}
+    .save{{width:38px;height:38px;right:7px;top:7px;}}
+    .hrt{{width:19px;height:19px;}}
     .waiting{{right:8px;bottom:8px;font-size:9.5px;}}
     .pill{{font-size:10.5px;padding:3px 7px;}}
+    /* Two pills fit a half-width card; a third gets sliced. */
+    .pills .pill:nth-child(3){{display:none;}}
     .badge{{font-size:9.5px;padding:4px 8px;left:8px;bottom:8px;}}
     .views{{font-size:11.5px;padding:5px 9px;left:8px;top:8px;}}
     .day-hd{{padding-top:26px;}}
@@ -1070,6 +1186,10 @@ def render(dated, for_date: date = None) -> str:
     .scrim{{padding:0;align-items:stretch;}}
     .modal{{width:100%;max-width:100%;height:100%;max-height:100%;border-radius:0;
       transform:translateY(18px) scale(1);}}
+    .m-scroll,.m-foot,.modal:not(:has(.m-foot)) .m-scroll{{border-radius:0;}}
+    .scrim.compact .modal{{border-radius:22px;}}
+    .scrim.compact .m-scroll,
+    .scrim.compact .modal:not(:has(.m-foot)) .m-scroll{{border-radius:22px;}}
     .scrim.vis .modal{{transform:none;}}
     /* The close button rides above the hero image, always top-right. */
     .m-close{{position:fixed;top:max(14px,env(safe-area-inset-top));right:14px;
@@ -1079,10 +1199,27 @@ def render(dated, for_date: date = None) -> str:
     .foot-row{{grid-template-columns:1fr;gap:8px;}}
     .share{{padding:22px 18px 20px;}}
     .modal.narrow{{width:100%;}}
-    /* The subscribe modal stays a centered card — it's one field, not a page. */
+    /* The subscribe and contact sheets stay centred cards — one field each. */
     .scrim.compact{{align-items:center;padding:18px;}}
     .scrim.compact .modal{{height:auto;max-height:92vh;border-radius:22px;}}
     .scrim.compact .m-close{{position:absolute;}}
+    /* About is a page of reading, so it goes full screen like a dog does. */
+    .scrim.compact.sheet{{align-items:stretch;padding:0;}}
+    .scrim.compact.sheet .modal{{width:100%;max-width:100%;height:100%;
+      max-height:100%;border-radius:0;}}
+    .scrim.compact.sheet .m-close{{position:fixed;
+      top:max(14px,env(safe-area-inset-top));right:14px;}}
+    /* Centring the content leaves space above the hero, which showed the
+       modal surface as a white band. Move the gradient onto the container so
+       it covers the whole sheet. */
+    .scrim.compact.sheet .about{{display:flex;flex-direction:column;
+      justify-content:center;min-height:100%;
+      background:radial-gradient(120% 60% at 50% 0%,
+        var(--accent-soft) 0%, transparent 62%);}}
+    .scrim.compact.sheet .about-hero{{background:none;
+      padding-top:max(58px,calc(env(safe-area-inset-top) + 46px));}}
+    .scrim.compact.sheet .about-body{{padding-bottom:max(28px,
+      env(safe-area-inset-bottom));}}
     .topgrid.with-photo{{grid-template-rows:none;min-height:0;}}
     .m-media{{grid-row:auto;}}
     .m-hero{{aspect-ratio:1/1;flex:0 0 auto;}}
@@ -1101,6 +1238,15 @@ def render(dated, for_date: date = None) -> str:
     .topgrid{{grid-template-columns:1fr;gap:16px;margin-bottom:16px;}}
   }}
   /* Only the very narrowest phones drop to one column; 375px still fits two. */
+  @media (max-width:680px){{
+    .filter-bar{{padding:10px 12px;margin-top:20px;}}
+    .fb-label{{font-size:14px;}}
+    .fb-clear{{font-size:13px;padding:6px 11px;}}
+    .pick-menu{{position:fixed;left:50%;transform:translateX(-50%) translateY(-6px);
+      width:calc(100vw - 28px);max-width:330px;min-width:0;}}
+    .pick.open .pick-menu{{transform:translateX(-50%);}}
+    .pick-menu button{{padding:13px 15px;font-size:16.5px;}}
+  }}
   @media (max-width:400px){{
     .tlists ul{{grid-template-columns:1fr;}}
   }}
@@ -1113,9 +1259,15 @@ def render(dated, for_date: date = None) -> str:
 
 <nav>
   <div class="nav-in">
-    <div class="nav-date">{for_date.strftime('%A')}<span>, {for_date.strftime('%B %-d')}</span></div>
+    <div class="nav-left">
+      <button class="nav-btn saved-chip" id="saved-chip"
+              aria-label="Your saved dogs">
+        <svg class="hrt sc-hrt" viewBox="0 0 24 24" aria-hidden="true"><path
+          d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1
+          8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg><b>0</b></button>
+    </div>
     <div class="nav-mid">
-      <div class="nav-count" id="nav-count" hidden>
+      <div class="nav-count" id="nav-count">
         <span class="nc-dot"></span><b id="nc-n">0</b>
         <span class="nc-l">dogs viewed</span>
       </div>
@@ -1124,11 +1276,6 @@ def render(dated, for_date: date = None) -> str:
       </a>
     </div>
     <div class="nav-r">
-      <button class="nav-btn saved-chip" id="saved-chip"
-              aria-label="Your saved dogs">
-        <svg class="hrt sc-hrt" viewBox="0 0 24 24" aria-hidden="true"><path
-          d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1
-          8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg><b>0</b></button>
       <button class="nav-btn" id="about-btn">About</button>
       <button class="nav-btn nav-cta" id="sub-btn">Subscribe</button>
     </div>
@@ -1181,6 +1328,15 @@ def render(dated, for_date: date = None) -> str:
       <div class="hero-note" id="hero-note">Get notified when there are new dogs.</div>
     </div>
   </header>
+
+  <div class="filter-bar" id="filter-bar" hidden>
+    <span class="fb-label">
+      <svg class="hrt fb-hrt" viewBox="0 0 24 24" aria-hidden="true"><path
+        d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1
+        8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg>
+      Saved dogs</span>
+    <button class="fb-clear" id="fb-clear">All dogs ✕</button>
+  </div>
 
   <div class="saved-empty" id="saved-empty" hidden>
     <div class="se-art" aria-hidden="true">
@@ -1503,6 +1659,82 @@ async function openShare(d) {{
   }}
 }}
 
+// Two questions people ask after "is it cute": how big will it get, and what
+// will it cost me every month. Both are estimates and say so.
+function sizeAndCost(d) {{
+  const so = d.size_outlook || {{}};
+  const mc = d.monthly_cost || {{}};
+  if (!so.line && !mc.low) return '';
+
+  let sizeBlock = '';
+  if (so.line) {{
+    const growing = so.status === 'growing';
+    const w = so.adult || so.now;
+
+    // "120 lbs" means nothing without a scale. Showing where a dog lands
+    // between a chihuahua and a mastiff is the actually useful part.
+    const BANDS = [['Small', 0, 25], ['Medium', 25, 50],
+                   ['Large', 50, 90], ['Giant', 90, 1e9]];
+    let scale = '';
+    if (w) {{
+      const idx = BANDS.findIndex(b => w >= b[1] && w < b[2]);
+      const nowIdx = so.now ? BANDS.findIndex(b => so.now >= b[1] && so.now < b[2]) : -1;
+      scale = `<div class="szscale">${{BANDS.map((b, i) => {{
+        const on = i === idx;
+        const from = growing && i === nowIdx && nowIdx !== idx;
+        return `<span class="szb${{on ? ' on' : ''}}${{from ? ' from' : ''}}">
+          <i></i><em>${{b[0]}}</em></span>`;
+      }}).join('')}}</div>
+      <div class="szcap">${{growing && nowIdx !== idx && nowIdx >= 0
+        ? `Now ${{BANDS[nowIdx][0].toLowerCase()}}, growing into a
+           ${{BANDS[idx][0].toLowerCase()}} dog`
+        : `A ${{BANDS[idx][0].toLowerCase()}} dog by weight`}}</div>`;
+    }}
+
+    let bar = '';
+    if (so.now && so.adult && so.adult > so.now) {{
+      const pct = Math.max(6, Math.min(100, (so.now / so.adult) * 100));
+      bar = `<div class="gw"><span style="width:${{pct.toFixed(0)}}%"></span></div>
+        <div class="gw-l"><span>${{Math.round(so.now)}} lbs now</span>
+        <span>~${{Math.round(so.adult)}} lbs grown</span></div>`;
+    }}
+
+    sizeBlock = `
+      <div class="sc-block">
+        <div class="tl-hd">${{growing ? '📈 Still growing' : '📏 Full size'}}</div>
+        <p>${{esc(so.line)}}</p>
+        ${{bar}}
+        ${{scale}}
+      </div>`;
+  }}
+
+  let costBlock = '';
+  if (mc.low) {{
+    const rows = (mc.items || []).map(it =>
+      `<li><span>${{esc(it[0])}}</span><b>$${{it[1]}}–${{it[2]}}</b></li>`).join('');
+    costBlock = `
+      <div class="sc-block">
+        <div class="tl-hd">💵 Typical monthly cost</div>
+        <div class="cost-big">$${{mc.low}}–${{mc.high}}<span>/month</span></div>
+        <ul class="cost-list">${{rows}}</ul>
+        <p class="cost-note">A NYC estimate for a dog this size and coat.
+          Excludes the adoption fee and anything unexpected.</p>
+      </div>`;
+  }}
+
+  const traits = (d.traits && d.traits.length)
+    ? traitLists(d.traits.filter(t => t.kind === 'good'),
+                 d.traits.filter(t => t.kind === 'caution'))
+    : '';
+  const rightCount = (sizeBlock ? 1 : 0) + (traits ? 1 : 0);
+  return `<div class="sizecost">
+      <div class="sc-inner${{rightCount === 1 ? ' one-right' : ''}}">
+        ${{costBlock}}
+        <div class="sc-right">${{sizeBlock}}${{traits}}</div>
+      </div>
+    </div>`;
+}}
+
 function traitLists(good, warn) {{
   // Most dogs have no traits at all — render nothing rather than an empty box.
   if (!good.length && !warn.length) return '';
@@ -1512,8 +1744,8 @@ function traitLists(good, warn) {{
     `<li class="${{kind}}"><i class="tl-ic">${{icon}}</i><span>${{esc(t.text)}}</span></li>`;
   const items = good.map(t => row(t, 'good', '✓'))
     .concat(warn.map(t => row(t, 'warn', '!'))).join('');
-  return `<div class="tlists">
-      <div class="tl-hd">What to expect</div>
+  return `<div class="sc-block tlists">
+      <div class="tl-hd">🐾 What to expect</div>
       <ul>${{items}}</ul>
     </div>`;
 }}
@@ -1550,7 +1782,7 @@ function tabs(d) {{
   return `
     <div class="tabs">
       <button class="tab on" data-t="0">Breed guide</button>
-      <button class="tab" data-t="1">Dog story</button>
+      <button class="tab" data-t="1">From the rescue</button>
     </div>
     <div class="pane on" data-p="0">
       <span class="breed-tag">${{esc(bi.name)}}</span>
@@ -1637,6 +1869,7 @@ function simSection(d) {{
 function showModal(inner, size) {{
   modal.classList.toggle('narrow', size === 'narrow');
   modal.classList.toggle('mid', size === 'mid');
+  scrim.classList.remove('sheet');
   // `compact` keeps the small modals (subscribe, about) as centered cards on
   // phones, while a dog's detail view goes full screen.
   scrim.classList.toggle('compact', !!size);
@@ -1713,9 +1946,7 @@ function renderDog(d) {{
     .map(f => `<span class="chip">${{esc(f)}}</span>`).join('')
     + (d.waiting_days >= {WAIT_BADGE_DAYS}
         ? `<span class="chip wait">⏳ Listed ${{d.waiting_days}} days</span>` : '')
-    + `<span class="chip views-chip" id="m-views" data-id="${{esc(d.id)}}"${{
-        (VIEW_COUNTS[d.id] || 0) >= VIEW_FLOOR ? '' : ' hidden'}}>🔥 <b>${{
-        VIEW_COUNTS[d.id] || 0}}</b> viewed</span>`;
+;
   // Facts stay as neutral chips. Anything that helps or complicates an
   // adoption moves out into its own labelled list, so a glance tells you
   // what's easy about this dog and what you'd be signing up for.
@@ -1737,7 +1968,11 @@ function renderDog(d) {{
   const media = hasPhoto ? `
     <div class="m-media">
       <div class="m-hero"><img id="hero" src="${{esc(d.photos[0])}}"
-        alt="${{esc(d.name)}}"></div>
+        alt="${{esc(d.name)}}">
+        <span class="views m-views" id="m-views" data-id="${{esc(d.id)}}"${{
+          (VIEW_COUNTS[d.id] || 0) >= VIEW_FLOOR ? '' : ' hidden'}}>
+          <span class="fire">🔥</span><b>${{VIEW_COUNTS[d.id] || 0}}</b></span>
+      </div>
       ${{thumbs}}
     </div>` : '';
 
@@ -1764,7 +1999,7 @@ function renderDog(d) {{
         </div>
         ${{bars(d)}}
       </div>
-      ${{traitLists(goodT, warnT)}}
+      ${{sizeAndCost(d)}}
       ${{tabs(d)}}
       <div class="cta-sub" style="margin-top:18px;">
         <a href="${{esc(d.url)}}" target="_blank" rel="noopener">View original listing</a></div>
@@ -1830,6 +2065,8 @@ const CREED = [
 ];
 
 function openAbout() {{
+  // 'mid' keeps it a 560px card on desktop; on mobile the CSS below takes it
+  // full screen, matching the dog detail view.
   const items = CREED.map((c, n) => `
     <li><span class="num">${{String(n + 1).padStart(2, '0')}}</span>
       <span><b>${{esc(c[0])}}</b> ${{esc(c[1])}}</span></li>`).join('');
@@ -1847,6 +2084,7 @@ function openAbout() {{
         <div class="cta-sub">We’re not a shelter. We point you to the rescues who are.</div>
       </div>
     </div>`, 'mid');
+  scrim.classList.add('sheet');
 }}
 
 function closeModal(fromHash) {{
@@ -1881,12 +2119,14 @@ function paintViews(counts) {{
 }}
 
 function paintTotal(n) {{
-  if (typeof n !== 'number' || n <= 0) return;
+  if (typeof n !== 'number' || n < 0) return;
   const wrap = document.getElementById('nav-count');
   const el = document.getElementById('nc-n');
   if (!wrap || !el) return;
   const prev = +el.textContent.replace(/,/g, '') || 0;
-  el.textContent = n.toLocaleString();
+  el.textContent = n.toLocaleString('en-US');
+  const label = wrap.querySelector('.nc-l');
+  if (label) label.textContent = n === 1 ? 'dog viewed' : 'dogs viewed';
   wrap.hidden = false;
   if (n > prev && prev > 0) {{
     el.classList.remove('bump');
@@ -2007,6 +2247,12 @@ if (location.hash) setTimeout(openFromHash, 0);
       closeAll();
       if (!open) {{
         menu.hidden = false;
+        // Fixed on mobile, so the top has to be measured rather than inherited.
+        if (window.matchMedia('(max-width:680px)').matches) {{
+          menu.style.top = (trigger.getBoundingClientRect().bottom + 10) + 'px';
+        }} else {{
+          menu.style.top = '';
+        }}
         requestAnimationFrame(() => pick.classList.add('open'));
         trigger.setAttribute('aria-expanded', 'true');
       }}
@@ -2087,13 +2333,62 @@ if (location.hash) setTimeout(openFromHash, 0);
   }});
 }})();
 
-document.querySelectorAll('.card').forEach(c => c.addEventListener('click', e => {{
-  if (e.target.closest('.save')) return;
-  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-  e.preventDefault();
-  openDog(+c.dataset.i);
-  countView(c);
-}}));
+// Double-tap a card on touch to save it, the way you'd expect from a photo
+// grid. Only on coarse pointers: on a mouse a double click should just open
+// the dog, and there's no ambiguity to resolve.
+const COARSE = window.matchMedia('(pointer: coarse)').matches;
+const DBL_MS = 280;
+
+function bigHeart(card) {{
+  const wrap = card.querySelector('.ph-wrap');
+  if (!wrap) return;
+  const h = document.createElement('span');
+  h.className = 'dbl-heart';
+  h.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20.4S3.6 15.1 3.6 9.3A4.7'
+    + ' 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg>';
+  wrap.appendChild(h);
+  setTimeout(() => h.remove(), 900);
+}}
+
+function doubleTapSave(card) {{
+  const set = savedSet();
+  if (!set.has(card.dataset.id)) {{
+    set.add(card.dataset.id);
+    writeSaved(set);
+    paintSaved();
+    const btn = card.querySelector('.save');
+    if (btn) floatHearts(btn);
+    if (window.luvdBeat) window.luvdBeat();
+  }}
+  bigHeart(card);                       // confirm even if already saved
+  if (navigator.vibrate) navigator.vibrate(12);
+}}
+
+document.querySelectorAll('.card').forEach(c => {{
+  let tapTimer = null, lastTap = 0;
+  c.addEventListener('click', e => {{
+    if (e.target.closest('.save')) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+
+    if (!COARSE) {{ openDog(+c.dataset.i); countView(c); return; }}
+
+    const now = Date.now();
+    if (now - lastTap < DBL_MS) {{     // second tap — save instead of opening
+      clearTimeout(tapTimer);
+      tapTimer = null;
+      lastTap = 0;
+      doubleTapSave(c);
+      return;
+    }}
+    lastTap = now;
+    tapTimer = setTimeout(() => {{
+      tapTimer = null;
+      openDog(+c.dataset.i);
+      countView(c);
+    }}, DBL_MS);
+  }});
+}});
 
 // ---- saved dogs -------------------------------------------------------------
 // Local only. No account, nothing sent to the server — the list never leaves
@@ -2182,6 +2477,13 @@ function toggleSavedView() {{
   const set = savedSet();
   const empty = document.getElementById('saved-empty');
   if (empty) empty.hidden = !(showingSaved && set.size === 0);
+  const bar = document.getElementById('filter-bar');
+  if (bar) bar.hidden = !showingSaved;
+  // Keep the big footer signup for the main feed only.
+  const sec = document.getElementById('subscribe');
+  if (sec) sec.style.display = showingSaved ? 'none' : '';
+  const faq = document.querySelector('.faq');
+  if (faq) faq.style.display = showingSaved ? 'none' : '';
   document.querySelectorAll('.card').forEach(c => {{
     c.style.display = (!showingSaved || set.has(c.dataset.id)) ? '' : 'none';
   }});
@@ -2198,6 +2500,8 @@ const savedChip = document.getElementById('saved-chip');
 if (savedChip) savedChip.onclick = toggleSavedView;
 const seBrowse = document.getElementById('se-browse');
 if (seBrowse) seBrowse.onclick = toggleSavedView;   // flip back to everything
+const fbClear = document.getElementById('fb-clear');
+if (fbClear) fbClear.onclick = toggleSavedView;
 paintSaved();
 // ---- logo easter egg --------------------------------------------------------
 // Paws drift up while you hover; clicking sets off a burst, and the fifth click

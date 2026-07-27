@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "note": "Breed reference for LUVD NYC. Scores are 1-5 general breed tendencies, NOT claims about an individual dog. energy: 1=couch potato, 5=needs a job. apartment: 1=poor fit, 5=great fit. experience: 1=great first dog, 5=needs an experienced owner. alone: 1=needs company most of the day, 5=comfortable through a workday.",
+    "note": "Breed reference for LUVD NYC. Scores are 1-5 general breed tendencies, NOT claims about an individual dog. energy: 1=couch potato, 5=needs a job. apartment: 1=poor fit, 5=great fit. experience: 1=great first dog, 5=needs an experienced owner. alone: 1=needs company most of the day, 5=comfortable through a workday. adult_lbs: typical adult weight range, used to project growth and scale food cost.",
     "source": "General breed-typical guidance. Always defer to the rescue's own assessment of the individual animal."
   },
   "_default": {
@@ -11,7 +11,11 @@
     "exercise": "Most adult dogs do well with 30-60 minutes of walking a day plus play and sniffing time.",
     "grooming": "Brush regularly, bathe as needed, keep nails trimmed and ears clean.",
     "nyc": "Ask the rescue about leash manners, elevator and stair comfort, alone-time tolerance, and whether the dog settles in a small space.",
-    "alone": 3
+    "alone": 3,
+    "adult_lbs": [
+      30,
+      45
+    ]
   },
   "breeds": {
     "mixed breed": {
@@ -22,7 +26,11 @@
       "exercise": "Depends on the individual. A daily walk plus play is the baseline; ask the foster how the dog behaves after a quiet day.",
       "grooming": "Varies with coat type. Short coats need little; longer or double coats need regular brushing.",
       "nyc": "Mixes are often excellent city dogs. Building breed restrictions are usually enforced on what a dog looks like, so ask the rescue how the dog is typically identified.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        35,
+        45
+      ]
     },
     "labrador retriever": {
       "energy": 4,
@@ -32,7 +40,11 @@
       "exercise": "High needs — 60-90 minutes daily. Labs love retrieving and swimming, and an under-exercised Lab tends to get mouthy and destructive.",
       "grooming": "Short double coat that sheds heavily year-round and more in spring and fall. Weekly brushing helps a lot.",
       "nyc": "Can do well in an apartment if genuinely exercised. Size and shedding are the main constraints; most are elevator- and crowd-tolerant.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        65,
+        75
+      ]
     },
     "golden retriever": {
       "energy": 4,
@@ -42,7 +54,11 @@
       "exercise": "60-90 minutes daily plus mental work. They thrive on fetch and training games.",
       "grooming": "Long double coat needs brushing several times a week and sheds a lot.",
       "nyc": "Manageable in a city if exercised well. Their sociability suits busy sidewalks and dog runs.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        60,
+        70
+      ]
     },
     "poodle": {
       "energy": 3,
@@ -52,7 +68,11 @@
       "exercise": "45-60 minutes daily plus puzzle work. Mental exercise matters as much as physical for this breed.",
       "grooming": "High maintenance. The curly single coat doesn't shed much but mats easily; expect brushing several times a week and professional grooming every 6-8 weeks.",
       "nyc": "Excellent city dogs — low shedding, adaptable and highly trainable. Budget for grooming.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        45,
+        60
+      ]
     },
     "doberman pinscher": {
       "energy": 4,
@@ -62,7 +82,11 @@
       "exercise": "High — 60-90 minutes daily plus training. A bored Doberman is an anxious Doberman.",
       "grooming": "Very easy. Short coat, weekly wipe-down, minimal shedding. They feel the cold and often need a coat in a NYC winter.",
       "nyc": "Their size and reputation trigger breed restrictions in many buildings — check your lease before falling in love. Otherwise they are clean, quiet indoors and settle well.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        70,
+        90
+      ]
     },
     "german shepherd": {
       "energy": 4,
@@ -72,7 +96,11 @@
       "exercise": "High — 60-90+ minutes daily plus a job to do. Scent work and obedience are ideal outlets.",
       "grooming": "Heavy double-coat shedding year-round with two big blowouts a year. Brush several times a week.",
       "nyc": "Demanding in an apartment: large, vocal and often reactive to the constant stimulus of a city street. Very doable for an experienced owner, hard for a first-timer.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        65,
+        85
+      ]
     },
     "siberian husky": {
       "energy": 5,
@@ -82,7 +110,11 @@
       "exercise": "Very high — 90+ minutes of real exertion daily. Under-exercised huskies dig, howl and escape.",
       "grooming": "Thick double coat that sheds enormously twice a year. Frequent brushing is not optional.",
       "nyc": "One of the harder city breeds: vocal, high-energy, heat-sensitive and rarely reliable off leash. Needs an owner ready to run in the cold.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        40,
+        55
+      ]
     },
     "french bulldog": {
       "energy": 2,
@@ -92,7 +124,11 @@
       "exercise": "Low — two or three short walks and some indoor play. They tire quickly.",
       "grooming": "Short coat is easy, but facial folds need regular cleaning to prevent infection.",
       "nyc": "Near-ideal apartment dog: small, quiet and low-exercise. The serious caveat is breathing — flat faces make them dangerously heat-intolerant, so summer walks must be early, short and shaded. Expect higher vet costs.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        20,
+        28
+      ]
     },
     "bulldog": {
       "energy": 2,
@@ -102,7 +138,11 @@
       "exercise": "Low — short walks only, and never in the heat.",
       "grooming": "Short coat, but skin and facial folds need regular cleaning.",
       "nyc": "Quiet and space-efficient. Same heat and breathing cautions as the French Bulldog; plan for higher vet bills.",
-      "alone": 4
+      "alone": 4,
+      "adult_lbs": [
+        45,
+        50
+      ]
     },
     "american pit bull terrier": {
       "energy": 4,
@@ -112,7 +152,11 @@
       "exercise": "High — 60+ minutes daily plus chew and puzzle outlets. They are strong and benefit from structured training.",
       "grooming": "Very easy. Short coat, minimal shedding, thin coat means a winter jacket.",
       "nyc": "The main obstacle is paperwork, not the dog: many buildings and insurers restrict pit bull type dogs, and enforcement is based on appearance. Confirm your building's policy first.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        45,
+        60
+      ]
     },
     "american staffordshire terrier": {
       "energy": 4,
@@ -122,7 +166,11 @@
       "exercise": "High — 60+ minutes daily plus mental work.",
       "grooming": "Minimal. Short coat, occasional brushing, needs a coat in winter.",
       "nyc": "Frequently caught by building breed restrictions. Check your lease. Otherwise a clean, adaptable and affectionate city dog.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        50,
+        65
+      ]
     },
     "terrier": {
       "energy": 4,
@@ -132,7 +180,11 @@
       "exercise": "Moderate to high, and mental more than physical — 45-60 minutes plus digging, sniffing or puzzle outlets.",
       "grooming": "Varies. Wiry coats need hand-stripping or clipping every few months; smooth coats need very little.",
       "nyc": "Their small size suits apartments well. Watch for barking at hallway noise and a strong interest in squirrels and rats.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        20,
+        30
+      ]
     },
     "chihuahua": {
       "energy": 2,
@@ -142,7 +194,11 @@
       "exercise": "Low — short walks and indoor play are plenty.",
       "grooming": "Easy for both smooth and long coats. Dental care is the real priority; small breeds are prone to tooth disease.",
       "nyc": "Extremely apartment-friendly and easy to carry on the subway. They get cold fast and need a sweater most of the winter.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        4,
+        7
+      ]
     },
     "pomeranian": {
       "energy": 3,
@@ -152,7 +208,11 @@
       "exercise": "Low to moderate — a couple of short walks plus play.",
       "grooming": "Thick double coat needs brushing several times a week to avoid mats.",
       "nyc": "Great size for a small apartment, but barking is the thing to work on early if you share walls.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        4,
+        8
+      ]
     },
     "great pyrenees": {
       "energy": 2,
@@ -162,7 +222,11 @@
       "exercise": "Low to moderate for their size — a couple of long relaxed walks. They are not endurance athletes.",
       "grooming": "Enormous double coat that sheds constantly. Brush several times a week.",
       "nyc": "Hard in an apartment mostly because of size, shedding and their instinct to bark at every noise. Individuals raised as city dogs can do fine — ask the foster.",
-      "alone": 4
+      "alone": 4,
+      "adult_lbs": [
+        90,
+        115
+      ]
     },
     "cattle dog": {
       "energy": 5,
@@ -172,7 +236,11 @@
       "exercise": "Very high — 90+ minutes plus daily training or a dog sport.",
       "grooming": "Short weather-resistant double coat, easy but sheds seasonally.",
       "nyc": "One of the toughest apartment breeds. Only realistic if you are genuinely active and ready to train daily.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        35,
+        50
+      ]
     },
     "shepherd": {
       "energy": 4,
@@ -182,7 +250,11 @@
       "exercise": "High — 60+ minutes plus mental work.",
       "grooming": "Usually a double coat with regular shedding; brush weekly or more.",
       "nyc": "Trainability helps a lot in the city. Socialize early to bikes, scooters and crowds.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        55,
+        75
+      ]
     },
     "retriever": {
       "energy": 4,
@@ -192,7 +264,11 @@
       "exercise": "High — 60-90 minutes daily with fetch and swimming as favorites.",
       "grooming": "Double coats that shed; brush weekly.",
       "nyc": "Size and shedding are the constraints, temperament rarely is.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        60,
+        75
+      ]
     },
     "feist": {
       "energy": 4,
@@ -202,7 +278,11 @@
       "exercise": "Moderate to high — 45-60 minutes plus sniffing and chase games.",
       "grooming": "Short coat, very easy.",
       "nyc": "Good size for an apartment, but the prey drive is real on a city street full of pigeons and rats.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        15,
+        25
+      ]
     },
     "beagle": {
       "energy": 3,
@@ -212,7 +292,11 @@
       "exercise": "Moderate — 45-60 minutes with plenty of sniffing.",
       "grooming": "Short coat, easy, sheds moderately.",
       "nyc": "Good size for an apartment; the baying voice is the thing to check with neighbors.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        20,
+        28
+      ]
     },
     "dachshund": {
       "energy": 2,
@@ -222,7 +306,11 @@
       "exercise": "Low to moderate — walks on flat ground and gentle play.",
       "grooming": "Depends on coat; smooth is easy, long and wire need brushing.",
       "nyc": "Great apartment size. Protect the back — discourage stair and furniture jumping, and use a harness rather than a collar.",
-      "alone": 3
+      "alone": 3,
+      "adult_lbs": [
+        14,
+        22
+      ]
     },
     "shih tzu": {
       "energy": 2,
@@ -232,7 +320,11 @@
       "exercise": "Low — short walks and indoor play.",
       "grooming": "High. The long coat mats quickly; either commit to daily brushing or keep it in a short puppy cut.",
       "nyc": "An easy, quiet apartment companion. Flat-faced, so keep summer walks short and cool.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        10,
+        16
+      ]
     },
     "border collie": {
       "energy": 5,
@@ -242,7 +334,11 @@
       "exercise": "Very high — 90+ minutes plus daily mental work or a dog sport.",
       "grooming": "Medium double coat, brush a few times a week.",
       "nyc": "A difficult apartment fit unless you are committed to serious daily activity.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        32,
+        45
+      ]
     },
     "boxer": {
       "energy": 4,
@@ -252,7 +348,11 @@
       "exercise": "High — 60+ minutes of active play.",
       "grooming": "Short coat, very easy.",
       "nyc": "Doable with real exercise. Flat-faced enough to be heat-sensitive, and they get cold in winter.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        55,
+        70
+      ]
     },
     "maltese": {
       "energy": 2,
@@ -262,7 +362,11 @@
       "exercise": "Low — short walks and play.",
       "grooming": "High. The silky white coat mats and stains without frequent brushing.",
       "nyc": "Excellent small-apartment companion. Watch for separation anxiety and hallway barking.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        5,
+        8
+      ]
     },
     "yorkshire terrier": {
       "energy": 3,
@@ -272,7 +376,11 @@
       "exercise": "Low to moderate — short walks plus play.",
       "grooming": "High if kept long; much easier in a short cut. Dental care matters.",
       "nyc": "Very apartment-friendly. Barking at hallway noise is the common complaint.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        5,
+        8
+      ]
     },
     "husky mix": {
       "energy": 4,
@@ -282,7 +390,11 @@
       "exercise": "High — 60-90 minutes daily.",
       "grooming": "Usually a shedding double coat; brush often.",
       "nyc": "Ask the foster specifically about howling and alone-time — that is the usual apartment dealbreaker.",
-      "alone": 2
+      "alone": 2,
+      "adult_lbs": [
+        35,
+        55
+      ]
     }
   }
 }

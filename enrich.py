@@ -178,6 +178,122 @@ def _size_from_breed_string(breed: str) -> str:
     return m.group(1).lower() if m else ""
 
 
+# NYC-specific monthly costs. Deliberately a range, and deliberately excluding
+# one-off adoption fees and emergencies — this is "what does this dog cost me
+# every month", which is the question that actually stops adoptions.
+_FOOD_PER_LB_MONTH = (0.55, 0.95)     # quality kibble, scaled by body weight
+_BASE_INSURANCE = (35, 60)            # NYC pet insurance, mixed breed adult
+_BASE_VET = (25, 45)                  # routine care amortised monthly
+_BASE_SUPPLIES = (15, 30)             # toys, treats, poop bags, replacements
+
+
+def _parse_age_years(age: str):
+    """Rough age in years from strings like '2 years', '3 months', 'Senior'."""
+    if not age:
+        return None
+    a = age.lower()
+    m = re.search(r"([\d.]+)\s*year", a)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"([\d.]+)\s*month", a)
+    if m:
+        return float(m.group(1)) / 12
+    if "senior" in a:
+        return 9.0
+    if "adult" in a:
+        return 4.0
+    if "young" in a:
+        return 1.5
+    if "baby" in a or "puppy" in a:
+        return 0.4
+    return None
+
+
+def _weight_lbs(dog):
+    m = re.search(r"([\d.]+)", dog.weight or "")
+    return float(m.group(1)) if m else None
+
+
+def _size_outlook(dog, base, age_years, lbs):
+    """Will this dog get bigger, and how big. Says nothing we can't support."""
+    rng = base.get("adult_lbs")
+    adult_mid = sum(rng) / 2 if rng else None
+    grown = age_years is not None and age_years >= 1.5
+
+    if grown:
+        if lbs:
+            return {"status": "grown",
+                    "line": f"Fully grown at about {int(lbs)} lbs.",
+                    "now": lbs, "adult": lbs}
+        if adult_mid:
+            return {"status": "grown",
+                    "line": f"Fully grown. This breed typically settles "
+                            f"around {rng[0]}–{rng[1]} lbs.",
+                    "now": None, "adult": adult_mid}
+        return {"status": "grown", "line": "Fully grown.",
+                "now": None, "adult": None}
+
+    if age_years is None:
+        return None
+
+    # Still growing.
+    if rng:
+        line = (f"Still growing. This breed usually reaches "
+                f"{rng[0]}–{rng[1]} lbs.")
+        if lbs:
+            line = (f"About {int(lbs)} lbs now and still growing — this breed "
+                    f"usually reaches {rng[0]}–{rng[1]} lbs.")
+        return {"status": "growing", "line": line, "now": lbs,
+                "adult": adult_mid}
+    if lbs:
+        return {"status": "growing",
+                "line": f"About {int(lbs)} lbs now and still growing. Ask "
+                        f"the rescue how big they expect this one to get.",
+                "now": lbs, "adult": None}
+    return {"status": "growing",
+            "line": "Still growing. Ask the rescue about expected adult size.",
+            "now": None, "adult": None}
+
+
+def _monthly_cost(dog, base, adult_lbs, grooming_text):
+    """A monthly range for THIS dog, scaled by the size it will actually be."""
+    w = adult_lbs or 40
+    lo = hi = 0.0
+    food_lo = max(18, w * _FOOD_PER_LB_MONTH[0])
+    food_hi = max(30, w * _FOOD_PER_LB_MONTH[1])
+    lo += food_lo; hi += food_hi
+
+    ins_lo, ins_hi = _BASE_INSURANCE
+    if w >= 70:                       # large breeds cost more to insure
+        ins_lo, ins_hi = ins_lo + 12, ins_hi + 25
+    lo += ins_lo; hi += ins_hi
+
+    vet_lo, vet_hi = _BASE_VET
+    lo += vet_lo; hi += vet_hi
+    lo += _BASE_SUPPLIES[0]; hi += _BASE_SUPPLIES[1]
+
+    # Professional grooming is the biggest swing between breeds.
+    g = (grooming_text or "").lower()
+    groom_lo = groom_hi = 0
+    if any(k in g for k in ("high maintenance", "mats", "professional grooming",
+                            "hand-stripping", "clipping")):
+        groom_lo, groom_hi = 55, 100
+    elif "brush" in g and "easy" not in g:
+        groom_lo, groom_hi = 10, 30
+    lo += groom_lo; hi += groom_hi
+
+    return {
+        "low": int(round(lo / 5) * 5),
+        "high": int(round(hi / 5) * 5),
+        "items": [
+            ("Food", int(food_lo), int(food_hi)),
+            ("Insurance", int(ins_lo), int(ins_hi)),
+            ("Routine vet", int(vet_lo), int(vet_hi)),
+            ("Supplies", int(_BASE_SUPPLIES[0]), int(_BASE_SUPPLIES[1])),
+        ] + ([("Grooming", groom_lo, groom_hi)] if groom_hi else []),
+    }
+
+
 def enrich(dogs: List[Dog]) -> List[Dog]:
     for d in dogs:
         key = _match_breed(d.breed)
@@ -230,4 +346,12 @@ def enrich(dogs: List[Dog]) -> List[Dog]:
             "from_rescue": _rescue_notes(d.description),
             "rescue_name": d.source_label,
         }
+
+        age_years = _parse_age_years(d.age)
+        lbs = _weight_lbs(d)
+        d.size_outlook = _size_outlook(d, base, age_years, lbs) or {}
+        adult_lbs = (d.size_outlook.get("adult")
+                     or lbs
+                     or (sum(base["adult_lbs"]) / 2 if base.get("adult_lbs") else None))
+        d.monthly_cost = _monthly_cost(d, base, adult_lbs, base.get("grooming"))
     return dogs

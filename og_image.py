@@ -70,30 +70,18 @@ def build(dogs, total: int = None) -> Path:
     ImageDraw.Draw(scrim).rectangle([0, 0, W, H], fill=(6, 6, 8, 205))
     canvas = Image.alpha_composite(canvas.convert("RGBA"), scrim).convert("RGB")
 
-    d = ImageDraw.Draw(canvas)
-
-    # Logo, centred
-    y = 132
+    # Just the mark, large and centred. The dog faces carry the message; the
+    # headline and counts only competed with them at thumbnail size.
     if LOGO.exists():
         lg = Image.open(LOGO).convert("RGBA")
-        lw = 430
+        lw = int(W * 0.62)
         lh = int(lw * lg.height / lg.width)
         lg = lg.resize((lw, lh), Image.LANCZOS)
-        canvas.paste(lg, ((W - lw) // 2, y), lg)
-        y += lh + 44
+        canvas.paste(lg, ((W - lw) // 2, (H - lh) // 2), lg)
     else:
-        f = _font(96)
-        d.text((W // 2, y), "LUVD", font=f, fill=(255, 0, 46), anchor="mt")
-        y += 130
-
-    f_head = _font(62)
-    d.text((W // 2, y), "Adopt a dog in NYC", font=f_head,
-           fill=(255, 255, 255), anchor="mt")
-
-    f_sub = _font(31)
-    sub = (f"{total} dogs waiting across every NYC rescue"
-           if total else "Every adoptable dog across NYC rescues")
-    d.text((W // 2, y + 88), sub, font=f_sub, fill=(198, 198, 204), anchor="mt")
+        d = ImageDraw.Draw(canvas)
+        f = _font(150)
+        d.text((W // 2, H // 2), "LUVD", font=f, fill=(255, 0, 46), anchor="mm")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(OUT, "PNG", optimize=True)
