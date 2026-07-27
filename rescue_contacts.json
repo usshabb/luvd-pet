@@ -1,0 +1,50 @@
+{
+  "muddypaws": {
+    "label": "Muddy Paws Rescue",
+    "method": "application",
+    "email": "adoptions@muddypawsrescue.org",
+    "apply_url": "https://muddypawsrescue.my.site.com/s/adoption-registration",
+    "contact_url": "https://www.muddypawsrescue.org/adopt",
+    "evidence": "https://www.muddypawsrescue.org/adopt - 'Only fully registered adopters can email us to schedule a meeting.' Registration form linked as 'register to adopt'; mailto:adoptions@muddypawsrescue.org published for questions/registration issues; registered adopters email adoptionmeetings@muddypawsrescue.org to schedule a meeting with a specific dog."
+  },
+  "animalhaven": {
+    "label": "Animal Haven",
+    "method": "application",
+    "email": "info@animalhaven.org",
+    "apply_url": "https://animalhaven.org/adopt/adoption-interest-form",
+    "contact_url": "https://animalhaven.org/contact-us",
+    "evidence": "https://animalhaven.org/contact-us - 'If you'd like to learn more about a specific animal, please fill out our Adoption Interest Form.' https://animalhaven.org/adopt/adoption-process - Step 1 is an in-person visit; the interest form 'is not an application and is not a requirement to meet our animals'; the real adoption application is filled out on site. info@animalhaven.org appears in the site-wide footer (mailto link)."
+  },
+  "waggytail": {
+    "label": "Waggytail Rescue",
+    "method": "application",
+    "email": "adopt@waggytailrescue.org",
+    "apply_url": "https://awo.petstablished.com/adoptions/personal-information?application_type=Adopt&donation_section=false&form_id=936&form_type=generic&generic_form_id=936&pet_id=41629&section=1&selected_pets=false",
+    "contact_url": "https://www.waggytailrescue.org/adopt-a-waggytail",
+    "evidence": "https://www.waggytailrescue.org/adopt-a-waggytail - 'If you're interested in adopting a Waggytail, please submit an application form.' 'Dog Adoption Application' links to the Petstablished form above (published link also carried an fbclid tracking param, stripped). Email adopt@waggytailrescue.org from https://www.waggytailrescue.org/adopter-faq - 'Still have questions? Reach out to our adoption team at adopt@waggytailrescue.org'"
+  },
+  "sugarmutts": {
+    "label": "Sugar Mutts Rescue",
+    "method": "email",
+    "email": "sugarmuttsrescue@gmail.com",
+    "apply_url": "https://www.sugarmuttsrescue.com/wp-content/uploads/2020/02/Dog-Adoption-Application.pdf",
+    "contact_url": "https://www.sugarmuttsrescue.com/contact/",
+    "evidence": "https://www.sugarmuttsrescue.com/sugar-mutts-rescue/how-to-adopt/ - 'you can download our adoption application below and email it back to us at sugarmuttsrescue@gmail.com'. Also https://www.sugarmuttsrescue.com/contact/ - 'You can email us at sugarmuttsrescue@gmail.com ... Feel free to contact us about anything... boarding a horse, adopting, fostering...'"
+  },
+  "seancasey": {
+    "label": "Sean Casey Animal Rescue",
+    "method": "email",
+    "email": "adopt@nyanimalrescue.org",
+    "apply_url": null,
+    "contact_url": "https://www.nyanimalrescue.org/contact",
+    "evidence": "https://www.nyanimalrescue.org/adopt - 'If you'd like to inquire about one of our dogs, email adopt@nyanimalrescue.org, or call us at 718-436-5163.' Confirmed on https://www.nyanimalrescue.org/contact which lists adopt@nyanimalrescue.org among department addresses. No online adoption application published; process is in-person at 153 East 3rd Street, Brooklyn."
+  },
+  "koreank9": {
+    "label": "Korean K9 Rescue",
+    "method": "application",
+    "email": "applications@koreank9rescue.org",
+    "apply_url": "https://www.koreank9rescue.org/adoption-application/",
+    "contact_url": "https://www.koreank9rescue.org/contact-us/",
+    "evidence": "Site is behind Cloudflare (403 to direct fetch; not bypassed). Confirmed via https://www.adoptapet.com/shelter/94459-korean-k9-rescue-long-island-city-new-york (lists applications@koreank9rescue.org and the application URL https://www.koreank9rescue.org/adoption-application/) and via web-search results indexing koreank9rescue.org pages, which state applications take 7-14 days and to follow up at applications@koreank9rescue.org if no reply after 14 days. Email is a follow-up channel, not the first step."
+  }
+}

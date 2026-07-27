@@ -1,0 +1,288 @@
+{
+  "_meta": {
+    "note": "Breed reference for LUVD NYC. Scores are 1-5 general breed tendencies, NOT claims about an individual dog. energy: 1=couch potato, 5=needs a job. apartment: 1=poor fit, 5=great fit. experience: 1=great first dog, 5=needs an experienced owner. alone: 1=needs company most of the day, 5=comfortable through a workday.",
+    "source": "General breed-typical guidance. Always defer to the rescue's own assessment of the individual animal."
+  },
+  "_default": {
+    "energy": 3,
+    "apartment": 3,
+    "experience": 2,
+    "temperament": "Every dog is an individual — temperament depends far more on this dog's history and personality than on breed. The rescue's write-up is the best guide.",
+    "exercise": "Most adult dogs do well with 30-60 minutes of walking a day plus play and sniffing time.",
+    "grooming": "Brush regularly, bathe as needed, keep nails trimmed and ears clean.",
+    "nyc": "Ask the rescue about leash manners, elevator and stair comfort, alone-time tolerance, and whether the dog settles in a small space.",
+    "alone": 3
+  },
+  "breeds": {
+    "mixed breed": {
+      "energy": 3,
+      "apartment": 3,
+      "experience": 2,
+      "temperament": "Mixed-breed dogs pull traits from several lines, which often means fewer breed-linked health problems and a temperament best judged by meeting the dog. What the foster or shelter observed day to day is far more predictive than any breed guess.",
+      "exercise": "Depends on the individual. A daily walk plus play is the baseline; ask the foster how the dog behaves after a quiet day.",
+      "grooming": "Varies with coat type. Short coats need little; longer or double coats need regular brushing.",
+      "nyc": "Mixes are often excellent city dogs. Building breed restrictions are usually enforced on what a dog looks like, so ask the rescue how the dog is typically identified.",
+      "alone": 3
+    },
+    "labrador retriever": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 1,
+      "temperament": "Friendly, people-focused and famously food-motivated, which makes training straightforward. Labs stay adolescent longer than many breeds and are often goofy well past their second birthday.",
+      "exercise": "High needs — 60-90 minutes daily. Labs love retrieving and swimming, and an under-exercised Lab tends to get mouthy and destructive.",
+      "grooming": "Short double coat that sheds heavily year-round and more in spring and fall. Weekly brushing helps a lot.",
+      "nyc": "Can do well in an apartment if genuinely exercised. Size and shedding are the main constraints; most are elevator- and crowd-tolerant.",
+      "alone": 3
+    },
+    "golden retriever": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 1,
+      "temperament": "Gentle, eager to please and highly social. Goldens generally love strangers, children and other dogs, and dislike being left alone for long stretches.",
+      "exercise": "60-90 minutes daily plus mental work. They thrive on fetch and training games.",
+      "grooming": "Long double coat needs brushing several times a week and sheds a lot.",
+      "nyc": "Manageable in a city if exercised well. Their sociability suits busy sidewalks and dog runs.",
+      "alone": 2
+    },
+    "poodle": {
+      "energy": 3,
+      "apartment": 4,
+      "experience": 2,
+      "temperament": "Genuinely one of the smartest breeds — quick to learn, and quick to invent bad habits if bored. Poodles are sensitive, bond hard to their people and tend to be more reserved with strangers than retrievers.",
+      "exercise": "45-60 minutes daily plus puzzle work. Mental exercise matters as much as physical for this breed.",
+      "grooming": "High maintenance. The curly single coat doesn't shed much but mats easily; expect brushing several times a week and professional grooming every 6-8 weeks.",
+      "nyc": "Excellent city dogs — low shedding, adaptable and highly trainable. Budget for grooming.",
+      "alone": 3
+    },
+    "doberman pinscher": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 4,
+      "temperament": "Intelligent, intensely loyal and strongly bonded to their person — Dobermans are often described as velcro dogs. They are naturally alert and watchful, which needs to be channeled through early socialization rather than suppressed.",
+      "exercise": "High — 60-90 minutes daily plus training. A bored Doberman is an anxious Doberman.",
+      "grooming": "Very easy. Short coat, weekly wipe-down, minimal shedding. They feel the cold and often need a coat in a NYC winter.",
+      "nyc": "Their size and reputation trigger breed restrictions in many buildings — check your lease before falling in love. Otherwise they are clean, quiet indoors and settle well.",
+      "alone": 2
+    },
+    "german shepherd": {
+      "energy": 4,
+      "apartment": 2,
+      "experience": 4,
+      "temperament": "Confident, highly trainable and deeply loyal, bred to work all day alongside a handler. They are naturally aloof with strangers and need thorough socialization to be comfortable in a crowded city.",
+      "exercise": "High — 60-90+ minutes daily plus a job to do. Scent work and obedience are ideal outlets.",
+      "grooming": "Heavy double-coat shedding year-round with two big blowouts a year. Brush several times a week.",
+      "nyc": "Demanding in an apartment: large, vocal and often reactive to the constant stimulus of a city street. Very doable for an experienced owner, hard for a first-timer.",
+      "alone": 3
+    },
+    "siberian husky": {
+      "energy": 5,
+      "apartment": 2,
+      "experience": 4,
+      "temperament": "Independent, playful and famously stubborn. Huskies were bred to run for hours and are generally friendly with everyone — they make poor guard dogs and excellent escape artists.",
+      "exercise": "Very high — 90+ minutes of real exertion daily. Under-exercised huskies dig, howl and escape.",
+      "grooming": "Thick double coat that sheds enormously twice a year. Frequent brushing is not optional.",
+      "nyc": "One of the harder city breeds: vocal, high-energy, heat-sensitive and rarely reliable off leash. Needs an owner ready to run in the cold.",
+      "alone": 2
+    },
+    "french bulldog": {
+      "energy": 2,
+      "apartment": 5,
+      "experience": 1,
+      "temperament": "Comic, affectionate and people-oriented. Frenchies want to be with you constantly and are usually easygoing with strangers and other dogs.",
+      "exercise": "Low — two or three short walks and some indoor play. They tire quickly.",
+      "grooming": "Short coat is easy, but facial folds need regular cleaning to prevent infection.",
+      "nyc": "Near-ideal apartment dog: small, quiet and low-exercise. The serious caveat is breathing — flat faces make them dangerously heat-intolerant, so summer walks must be early, short and shaded. Expect higher vet costs.",
+      "alone": 2
+    },
+    "bulldog": {
+      "energy": 2,
+      "apartment": 5,
+      "experience": 2,
+      "temperament": "Calm, stubborn and affectionate. Bulldogs are famously low-drive and content to spend most of the day asleep near you.",
+      "exercise": "Low — short walks only, and never in the heat.",
+      "grooming": "Short coat, but skin and facial folds need regular cleaning.",
+      "nyc": "Quiet and space-efficient. Same heat and breathing cautions as the French Bulldog; plan for higher vet bills.",
+      "alone": 4
+    },
+    "american pit bull terrier": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 3,
+      "temperament": "Affectionate, people-loving and often startlingly goofy — pit bull type dogs are typically very social with humans. Dog-to-dog tolerance varies a lot by individual, so the rescue's observations matter more than the label.",
+      "exercise": "High — 60+ minutes daily plus chew and puzzle outlets. They are strong and benefit from structured training.",
+      "grooming": "Very easy. Short coat, minimal shedding, thin coat means a winter jacket.",
+      "nyc": "The main obstacle is paperwork, not the dog: many buildings and insurers restrict pit bull type dogs, and enforcement is based on appearance. Confirm your building's policy first.",
+      "alone": 3
+    },
+    "american staffordshire terrier": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 3,
+      "temperament": "Confident, loyal and very people-focused, with the same goofy streak as other bully breeds. Strong-willed but highly food-motivated and responsive to reward-based training.",
+      "exercise": "High — 60+ minutes daily plus mental work.",
+      "grooming": "Minimal. Short coat, occasional brushing, needs a coat in winter.",
+      "nyc": "Frequently caught by building breed restrictions. Check your lease. Otherwise a clean, adaptable and affectionate city dog.",
+      "alone": 3
+    },
+    "terrier": {
+      "energy": 4,
+      "apartment": 4,
+      "experience": 2,
+      "temperament": "Bold, curious and busy. Terriers were bred to hunt independently, which shows up as tenacity, a strong prey drive and a low tolerance for boredom. They are often more dog-selective than people-selective.",
+      "exercise": "Moderate to high, and mental more than physical — 45-60 minutes plus digging, sniffing or puzzle outlets.",
+      "grooming": "Varies. Wiry coats need hand-stripping or clipping every few months; smooth coats need very little.",
+      "nyc": "Their small size suits apartments well. Watch for barking at hallway noise and a strong interest in squirrels and rats.",
+      "alone": 3
+    },
+    "chihuahua": {
+      "energy": 2,
+      "apartment": 5,
+      "experience": 2,
+      "temperament": "Bold and deeply bonded to one or two people. Chihuahuas are often wary of strangers and can be snappy if they were never taught that hands are safe — early gentle socialization matters.",
+      "exercise": "Low — short walks and indoor play are plenty.",
+      "grooming": "Easy for both smooth and long coats. Dental care is the real priority; small breeds are prone to tooth disease.",
+      "nyc": "Extremely apartment-friendly and easy to carry on the subway. They get cold fast and need a sweater most of the winter.",
+      "alone": 3
+    },
+    "pomeranian": {
+      "energy": 3,
+      "apartment": 5,
+      "experience": 2,
+      "temperament": "Lively, bold and much bigger in attitude than in body. Poms are alert little dogs who tend to announce everything that happens in the hallway.",
+      "exercise": "Low to moderate — a couple of short walks plus play.",
+      "grooming": "Thick double coat needs brushing several times a week to avoid mats.",
+      "nyc": "Great size for a small apartment, but barking is the thing to work on early if you share walls.",
+      "alone": 3
+    },
+    "great pyrenees": {
+      "energy": 2,
+      "apartment": 2,
+      "experience": 4,
+      "temperament": "Calm, independent and gentle, bred to guard livestock alone for days. That independence means they think for themselves rather than looking to you for direction, and they are natural night barkers.",
+      "exercise": "Low to moderate for their size — a couple of long relaxed walks. They are not endurance athletes.",
+      "grooming": "Enormous double coat that sheds constantly. Brush several times a week.",
+      "nyc": "Hard in an apartment mostly because of size, shedding and their instinct to bark at every noise. Individuals raised as city dogs can do fine — ask the foster.",
+      "alone": 4
+    },
+    "cattle dog": {
+      "energy": 5,
+      "apartment": 2,
+      "experience": 4,
+      "temperament": "Whip-smart, intense and endlessly driven. Australian Cattle Dogs bond hard to one person and need work; without it they herd whatever is available, including people and bikes.",
+      "exercise": "Very high — 90+ minutes plus daily training or a dog sport.",
+      "grooming": "Short weather-resistant double coat, easy but sheds seasonally.",
+      "nyc": "One of the toughest apartment breeds. Only realistic if you are genuinely active and ready to train daily.",
+      "alone": 2
+    },
+    "shepherd": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 3,
+      "temperament": "Herding-type dogs are typically bright, biddable and attentive to their person, with a tendency to be watchful and sometimes reactive to fast movement.",
+      "exercise": "High — 60+ minutes plus mental work.",
+      "grooming": "Usually a double coat with regular shedding; brush weekly or more.",
+      "nyc": "Trainability helps a lot in the city. Socialize early to bikes, scooters and crowds.",
+      "alone": 3
+    },
+    "retriever": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 1,
+      "temperament": "Retriever types are generally sociable, food-motivated and easy to train — among the most forgiving dogs for a first-time owner.",
+      "exercise": "High — 60-90 minutes daily with fetch and swimming as favorites.",
+      "grooming": "Double coats that shed; brush weekly.",
+      "nyc": "Size and shedding are the constraints, temperament rarely is.",
+      "alone": 3
+    },
+    "feist": {
+      "energy": 4,
+      "apartment": 4,
+      "experience": 2,
+      "temperament": "A small Southern hunting type — quick, alert, affectionate with their people and very driven by scent and movement. Think terrier energy in a compact frame.",
+      "exercise": "Moderate to high — 45-60 minutes plus sniffing and chase games.",
+      "grooming": "Short coat, very easy.",
+      "nyc": "Good size for an apartment, but the prey drive is real on a city street full of pigeons and rats.",
+      "alone": 3
+    },
+    "beagle": {
+      "energy": 3,
+      "apartment": 4,
+      "experience": 2,
+      "temperament": "Cheerful, sociable and governed almost entirely by their nose. Beagles are friendly with nearly everyone and famously hard to recall once they catch a scent.",
+      "exercise": "Moderate — 45-60 minutes with plenty of sniffing.",
+      "grooming": "Short coat, easy, sheds moderately.",
+      "nyc": "Good size for an apartment; the baying voice is the thing to check with neighbors.",
+      "alone": 2
+    },
+    "dachshund": {
+      "energy": 2,
+      "apartment": 5,
+      "experience": 2,
+      "temperament": "Bold, comic and stubborn, bred to go down a badger hole alone. Devoted to their people and often quite vocal.",
+      "exercise": "Low to moderate — walks on flat ground and gentle play.",
+      "grooming": "Depends on coat; smooth is easy, long and wire need brushing.",
+      "nyc": "Great apartment size. Protect the back — discourage stair and furniture jumping, and use a harness rather than a collar.",
+      "alone": 3
+    },
+    "shih tzu": {
+      "energy": 2,
+      "apartment": 5,
+      "experience": 1,
+      "temperament": "Bred purely for companionship — affectionate, cheerful and content to be near you all day.",
+      "exercise": "Low — short walks and indoor play.",
+      "grooming": "High. The long coat mats quickly; either commit to daily brushing or keep it in a short puppy cut.",
+      "nyc": "An easy, quiet apartment companion. Flat-faced, so keep summer walks short and cool.",
+      "alone": 2
+    },
+    "border collie": {
+      "energy": 5,
+      "apartment": 2,
+      "experience": 4,
+      "temperament": "Widely considered the most intelligent breed, and that is a demand rather than a convenience. Border Collies need a job and will invent one — often herding people or chasing traffic — if you don't supply it.",
+      "exercise": "Very high — 90+ minutes plus daily mental work or a dog sport.",
+      "grooming": "Medium double coat, brush a few times a week.",
+      "nyc": "A difficult apartment fit unless you are committed to serious daily activity.",
+      "alone": 2
+    },
+    "boxer": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 2,
+      "temperament": "Playful, exuberant and deeply attached to their families. Boxers stay puppyish for years and are usually great with children.",
+      "exercise": "High — 60+ minutes of active play.",
+      "grooming": "Short coat, very easy.",
+      "nyc": "Doable with real exercise. Flat-faced enough to be heat-sensitive, and they get cold in winter.",
+      "alone": 2
+    },
+    "maltese": {
+      "energy": 2,
+      "apartment": 5,
+      "experience": 1,
+      "temperament": "Gentle, affectionate lap dogs who bond closely and prefer not to be left alone for long.",
+      "exercise": "Low — short walks and play.",
+      "grooming": "High. The silky white coat mats and stains without frequent brushing.",
+      "nyc": "Excellent small-apartment companion. Watch for separation anxiety and hallway barking.",
+      "alone": 2
+    },
+    "yorkshire terrier": {
+      "energy": 3,
+      "apartment": 5,
+      "experience": 2,
+      "temperament": "Confident and lively, with more terrier boldness than their size suggests. Strongly bonded to their person.",
+      "exercise": "Low to moderate — short walks plus play.",
+      "grooming": "High if kept long; much easier in a short cut. Dental care matters.",
+      "nyc": "Very apartment-friendly. Barking at hallway noise is the common complaint.",
+      "alone": 2
+    },
+    "husky mix": {
+      "energy": 4,
+      "apartment": 3,
+      "experience": 3,
+      "temperament": "Husky mixes usually keep some of the vocal, independent, high-energy character, softened by whatever else is in the mix.",
+      "exercise": "High — 60-90 minutes daily.",
+      "grooming": "Usually a shedding double coat; brush often.",
+      "nyc": "Ask the foster specifically about howling and alone-time — that is the usual apartment dealbreaker.",
+      "alone": 2
+    }
+  }
+}

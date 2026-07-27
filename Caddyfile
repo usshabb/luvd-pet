@@ -1,0 +1,17 @@
+# Caddy fetches and renews Let's Encrypt certs automatically for both names.
+# luvd.com is canonical (shorter share links); www redirects to it.
+
+www.{$LUVD_DOMAIN} {
+	redir https://{$LUVD_DOMAIN}{uri} permanent
+}
+
+{$LUVD_DOMAIN} {
+	encode zstd gzip
+
+	# Rescue photos re-served through /img for the share canvas — they barely
+	# change, so let browsers and Caddy hold them.
+	@img path /img*
+	header @img Cache-Control "public, max-age=86400"
+
+	reverse_proxy web:8000
+}

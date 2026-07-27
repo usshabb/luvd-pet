@@ -1,0 +1,48 @@
+# Two services off one image: the site, and the nightly scrape.
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    expose: ["8000"]
+    env_file: [.env]
+    volumes:
+      - luvd-data:/data          # SQLite state — survives deploys
+      - luvd-public:/app/public  # the generated page, shared with cron
+
+  cron:
+    build: .
+    restart: unless-stopped
+    env_file: [.env]
+    volumes:
+      - luvd-data:/data
+      - luvd-public:/app/public
+    # Sleeps until the next 05:30 America/New_York, runs once, repeats.
+    # A plain "check the clock every 30s" loop double-fires and drifts.
+    command: >
+      sh -c 'while true; do
+        now=$$(date +%s);
+        next=$$(date -d "today 05:30" +%s 2>/dev/null || date -j -f "%H:%M" "05:30" +%s);
+        [ $$next -le $$now ] && next=$$((next + 86400));
+        echo "next run in $$((next - now))s";
+        sleep $$((next - now));
+        python check.py;
+        # Monday: also send the per-rescue digest.
+        [ "$$(date +%u)" = "1" ] && python weekly_report.py;
+      done'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: [.env]          # supplies LUVD_DOMAIN to the Caddyfile
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [web]
+
+volumes:
+  luvd-data:
+  luvd-public:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.luvdnyc.web</string>
+
+  <!-- Serves the page and the /subscribe, /view and /img endpoints. Without
+       this running, subscribing and the view counter silently fail. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/cory/luvd-nyc/.venv/bin/python</string>
+    <string>/Users/cory/luvd-nyc/app.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/cory/luvd-nyc</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/cory/luvd-nyc/logs/web.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/cory/luvd-nyc/logs/web.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
