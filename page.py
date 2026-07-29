@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from sources.base import Dog
 
 OUT_DIR = Path(__file__).parent / "public"
-CONTACT_EMAIL = "hello@coryokeefe.com"
+CONTACT_EMAIL = "cory@luvd.com"
 
 
 def _terms_html(email: str, for_date) -> str:

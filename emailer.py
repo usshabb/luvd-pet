@@ -3,14 +3,19 @@
 Deliberately NOT a full catalog: a few faces, a count, one button. The page is
 where you actually browse.
 
-All outbound mail (signup welcome, daily digest, scraper alerts, weekly report)
-goes through send_email() so there is exactly one place that knows the provider.
+All outbound mail (signup welcome, daily digest, unsubscribe goodbye, scraper
+alerts, weekly report) goes through send_email() so there is exactly one place
+that knows the provider.
 """
 import hashlib
 import hmac
+import json
 import os
 import html
+import random
+import re
 from datetime import date
+from pathlib import Path
 from typing import List
 from urllib.parse import quote
 
@@ -19,7 +24,53 @@ import requests
 from sources.base import Dog
 
 MANDRILL_URL = "https://mandrillapp.com/api/1.0/messages/send.json"
+PUBLIC = Path(__file__).parent / "public"
+
+# How many faces each layout shows. Phones get fewer and larger: three across
+# a 390px screen is a 95px tile, which is too small to be a face.
 PREVIEW_COUNT = 6
+PHONE_PREVIEW_COUNT = 4
+
+# The goodbye shows half as many. Six faces is a catalogue and reads as one
+# last pitch; three is a wave. Three and two are also the largest counts that
+# fill a single complete row in each layout — three across on desktop, two
+# across on a phone — so neither ends on an orphan tile, which the grid
+# otherwise has to work around and which reads as an image that failed. Two is
+# the base, since the phone layout is what a client without media queries gets.
+GOODBYE_COUNT = 3
+GOODBYE_PHONE_COUNT = 2
+
+# Tile edge lengths, in px. Every tile is EDGE wide and EDGE tall — one number
+# feeds both, so a photo cannot come out as a vertical slice the way a fluid
+# width against a fixed 168px height did.
+#
+# Desktop: the card is 560px with 28px of padding, so 504px of content, and
+# 3 * 162 + 2 * 9 gutters = 504 exactly.
+TILE_DESKTOP = 162
+# Phones, stepped so two tiles plus a gutter always fit the narrowest viewport
+# in each band rather than overflowing it. TILE_PHONE_TINY is the inline base
+# and the other two are stepped UP to from there, because the base is what a
+# client that drops the <style> block renders at every width — including a
+# 320px phone. Basing on 176 and stepping down looks identical in any client
+# that applies the queries, and overflows a 390px screen by 15px in one that
+# doesn't, which is the whole failure this layout exists to avoid.
+TILE_PHONE_TINY = 124     # base, and <=375px
+TILE_PHONE_SMALL = 148    # 376-480px  (a 390px iPhone lands here)
+TILE_PHONE = 176          # 481-600px
+GUTTER = 9
+
+# Ink fills 1162x364 of the source file, so this box puts the visible wordmark
+# at about 125x39 above the 27px headline — a clear step up from the 120x52 it
+# was, and still reading as a header rather than a billboard. 150x65 is exactly
+# 30:13, which is the source ratio to within 0.05%, so both this box and the
+# asset below are whole numbers with nothing rounded into a squash.
+LOGO_W, LOGO_H = 150, 65
+# The mail-sized asset: 300x130 — 2x this box, for retina — against the site
+# logo's 1400x607 and 275KB. It lives in public/assets, so it ships in the same
+# deploy as this line, but it 404s on the live domain until that deploy lands,
+# so anything sent or rendered from a developer machine has to override this
+# first.
+LOGO_FILE = "/assets/luvd-logo-email.png"
 
 
 def unsub_token(email: str) -> str:
@@ -38,12 +89,17 @@ def email_configured() -> bool:
 
 
 def _from_parts():
-    """FROM_EMAIL accepts 'Name <addr>' or a bare address."""
-    raw = os.getenv("FROM_EMAIL", "LUVD NYC <dogs@luvd.com>")
+    """FROM_EMAIL accepts 'Name <addr>' or a bare address.
+
+    The default has to be a mailbox that actually exists: it is what runs
+    whenever the environment variable is missing or stale, which is the
+    common case on a fresh box. dogs@luvd.com never did.
+    """
+    raw = os.getenv("FROM_EMAIL", "LUVD <cory@luvd.com>")
     if "<" in raw:
         name, _, rest = raw.partition("<")
-        return rest.rstrip("> ").strip(), (name.strip() or "LUVD NYC")
-    return raw.strip(), "LUVD NYC"
+        return rest.rstrip("> ").strip(), (name.strip() or "LUVD")
+    return raw.strip(), "LUVD"
 
 
 def send_email(to_email: str, subject: str, html_body: str = None, text_body: str = None,
@@ -78,69 +134,315 @@ def send_email(to_email: str, subject: str, html_body: str = None, text_body: st
     return result
 
 
-def _thumb(dog: Dog) -> str:
-    photo = dog.primary_photo()
-    if not photo:
-        return ""
-    return f"""
-      <td style="padding:0 6px 12px 0;" width="33%">
-        <a href="{html.escape(_site_url())}" style="text-decoration:none;">
-          <img src="{html.escape(photo)}" width="168" height="168" alt="{html.escape(dog.name)}"
-               style="width:100%;max-width:168px;height:168px;object-fit:cover;
-                      border-radius:14px;display:block;">
-          <div style="font:600 15px -apple-system,Segoe UI,Roboto,sans-serif;
-                      color:#1d1d1f;margin-top:7px;">{html.escape(dog.name)}</div>
-          <div style="font:400 12.5px -apple-system,Segoe UI,Roboto,sans-serif;
-                      color:#6e6e73;">{html.escape(dog.source_label)}</div>
-        </a>
-      </td>"""
-
-
 def _site_url() -> str:
     return os.getenv("SITE_URL", "http://localhost:8000")
 
 
-def _site_host() -> str:
-    """Bare hostname, for reading aloud in body copy rather than linking."""
-    host = _site_url().split("//", 1)[-1].strip("/")
-    return host.split("/", 1)[0] or "luvd.com"
+def _abs(path: str) -> str:
+    """Absolute URL on whatever site we are rendering for. Email has no
+    document base, so every src and href has to be spelled out in full."""
+    return f"{_site_url().rstrip('/')}{path}"
+
+
+def _dog_link(dog: Dog) -> str:
+    """The dog's own page, not the front page.
+
+    A tile is a face; tapping it should land on that face. check.py writes
+    every dog's page before it sends the digest, so the file on disk is the
+    honest test of whether the page exists — a dog without one falls back to
+    the front page rather than to a 404.
+    """
+    try:
+        from page import dog_path
+        path = dog_path(dog)
+    except Exception:
+        return _site_url()
+    if (PUBLIC / f"{path.lstrip('/')}.html").is_file():
+        return _abs(path)
+    return _site_url()
+
+
+# WordPress writes fixed renditions beside the original upload. Two cover the
+# 3:4 and 4:3 shapes nearly every rescue photo is in, and both are checked
+# before use, so a theme that generates neither costs us nothing.
+_WP_UPLOAD = re.compile(
+    r"^(https://[^/]+/wp-content/uploads/\d{4}/\d{2}/.+?)(\.(?:jpe?g|png))$", re.I)
+_PHOTO_CACHE = {}
+
+
+def _photo_candidates(url: str):
+    m = _WP_UPLOAD.match(url)
+    if m and not re.search(r"-\d+x\d+$", m.group(1)):
+        for size in ("768x1024", "1024x768"):
+            yield f"{m.group(1)}-{size}{m.group(2)}"
+
+
+def _serves_image(url: str) -> bool:
+    try:
+        r = requests.head(url, timeout=6, allow_redirects=True,
+                          headers={"User-Agent": "Mozilla/5.0 (LUVD NYC)"})
+    except requests.RequestException:
+        return False
+    return (r.status_code == 200
+            and r.headers.get("Content-Type", "").startswith("image/"))
+
+
+def _email_photo(url: str) -> str:
+    """A smaller rendition of the same photo, when one is addressable.
+
+    A 162px tile has no use for a 2880x3840 original, and six of those is
+    ~9.7MB of email. Only rewrite where the URL shape genuinely names a size,
+    and only after confirming the rewrite still serves an image — a thumbnail
+    that 404s is far worse than an original that merely weighs too much.
+
+    SmugMug (Muddy Paws) is deliberately left alone. The long path segment
+    before the size is a signature over that exact size: /4K/ -> /M/, the
+    filename suffix on its own, dropping the token, and the older
+    /photos/i-KEY/ form all return 403. Petstablished's S3 objects,
+    Shelterluv's profile pictures and Petango each publish one rendition and
+    ignore width parameters, so there is nothing smaller to ask them for.
+    """
+    if not url:
+        return url
+    if url not in _PHOTO_CACHE:
+        _PHOTO_CACHE[url] = next(
+            (c for c in _photo_candidates(url) if _serves_image(c)), url)
+    return _PHOTO_CACHE[url]
+
+
+def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
+          pad_right: int, mso_fallback: bool, caption: bool = True) -> str:
+    """One square photo tile. Width and height come from the same number.
+
+    `caption` carries the dog's name and rescue under the photo. The digest
+    needs it — that is someone deciding which dog to open. The goodbye doesn't:
+    nobody is choosing there, and the photos are the whole point. The name
+    still rides in the img alt either way, so a blocked-image render and a
+    screen reader both keep it.
+    """
+    photo = _email_photo(dog.primary_photo())
+    if not photo:
+        return ""
+    src = html.escape(photo)
+    alt = html.escape(dog.name)
+    square = (f'<img src="{src}" width="{edge}" height="{edge}" alt="{alt}" '
+              f'class="{img_class}" style="width:{edge}px;height:{edge}px;'
+              f'object-fit:cover;border-radius:14px;display:block;border:0;">')
+    if mso_fallback:
+        # Outlook on Windows has no object-fit and would stretch a portrait
+        # photo to fill the square. Letting it size on width alone keeps the
+        # dog in proportion; the row ends up ragged rather than distorted.
+        img = (f'<!--[if mso]><img src="{src}" width="{edge}" alt="{alt}" '
+               f'style="display:block;border:0;"><![endif]-->'
+               f'<!--[if !mso]><!-->{square}<!--<![endif]-->')
+    else:
+        img = square
+    if caption:
+        # 14px under the photo is the gap between a caption and the next row.
+        pad_bottom, words = 14, f"""
+          <div style="font:600 15px -apple-system,Segoe UI,Roboto,sans-serif;
+                      color:#1d1d1f;margin-top:7px;">{html.escape(dog.name)}</div>
+          <div style="font:400 12.5px -apple-system,Segoe UI,Roboto,sans-serif;
+                      color:#6e6e73;">{html.escape(dog.source_label)}</div>"""
+    else:
+        # With nothing under the photo, 14px is a hole. Matching the gutter
+        # makes the gaps between tiles equal in both directions.
+        pad_bottom, words = GUTTER, ""
+    return f"""
+      <td class="{cell_class}" width="{edge}" style="width:{edge}px;
+                 padding:0 {pad_right}px {pad_bottom}px 0;vertical-align:top;">
+        <a href="{html.escape(_dog_link(dog))}" style="text-decoration:none;">
+          {img}{words}
+        </a>
+      </td>"""
+
+
+def _grid(dogs: List[Dog], cols: int, edge: int, table_class: str,
+          img_class: str, cell_class: str, hidden: bool,
+          mso_fallback: bool, caption: bool = True) -> str:
+    """A table of square tiles, `cols` across.
+
+    Four dogs go two across rather than three-then-one: a row holding a single
+    tile reads as something that failed to load.
+    """
+    if not dogs:
+        return ""
+    if cols == 3 and len(dogs) == 4:
+        cols = 2
+    rows = ""
+    for i in range(0, len(dogs), cols):
+        chunk = dogs[i:i + cols]
+        cells = "".join(
+            _tile(d, edge, img_class, cell_class,
+                  0 if j == len(chunk) - 1 else GUTTER, mso_fallback, caption)
+            for j, d in enumerate(chunk))
+        rows += f"<tr>{cells}</tr>"
+    hide = "display:none;mso-hide:all;" if hidden else ""
+    return (f'<table class="{table_class}" cellpadding="0" cellspacing="0" '
+            f'align="center" style="border-collapse:collapse;margin:0 auto;'
+            f'{hide}">{rows}</table>')
+
+
+def _more_line(count: int, cls: str, hidden: bool) -> str:
+    """'+ N more on the site', per layout.
+
+    The two layouts show different numbers of dogs, so they need different
+    numbers here. Only one is ever visible, and the phone one is the base — a
+    client that ignores media queries shows the phone grid, so it has to read
+    the phone count or the sum wouldn't add up.
+    """
+    if count < 1:
+        return ""
+    hide = "display:none;mso-hide:all;" if hidden else ""
+    return (f'<p class="{cls}" style="font:400 14px -apple-system,Segoe UI,'
+            f'Roboto,sans-serif;color:#6e6e73;text-align:center;'
+            f'margin:4px 0 0;{hide}">+ {count} more on the site</p>')
+
+
+def _footer(unsubscribe_for: str = None) -> str:
+    """The wordmark, and an unsubscribe link under it if the mail carries one.
+
+    Everything that used to sit here — the date, the cadence reminder, the
+    "you're getting this because you signed up at luvd.com" line — is gone at
+    the owner's request. See HANDOFF.md: with no reason-for-receipt line and no
+    postal address, these no longer carry the sender identification CAN-SPAM
+    asks of commercial bulk mail.
+
+    #6e6e73 rather than the #98989d this used to be. Both read as quiet grey,
+    but #98989d on white is 2.5:1 and #6e6e73 is 5.1:1, which clears the 4.5:1
+    minimum. The hierarchy comes from size and weight instead of from being too
+    faint to read.
+    """
+    link = ""
+    if unsubscribe_for:
+        link = (f'<br><a href="{html.escape(unsub_url(unsubscribe_for))}" '
+                f'style="color:#6e6e73;text-decoration:underline;">'
+                f'Unsubscribe</a>')
+    return (f'<p style="font:700 12px -apple-system,Segoe UI,Roboto,sans-serif;'
+            f'color:#6e6e73;text-align:center;letter-spacing:.09em;'
+            f'margin:26px 0 0;">LUVD'
+            f'<span style="font-weight:400;letter-spacing:0;">{link}</span></p>')
+
+
+def _logo() -> str:
+    """The wordmark, in place of the old 'LUVD NYC' text eyebrow.
+
+    Most clients block remote images by default and this is now the only thing
+    naming the sender, so the alt text is styled to read as the wordmark: red,
+    bold, and sized to sit where the logo would have been.
+    """
+    return (f'<img src="{html.escape(_abs(LOGO_FILE))}" '
+            f'width="{LOGO_W}" height="{LOGO_H}" alt="LUVD" '
+            f'style="width:{LOGO_W}px;height:{LOGO_H}px;display:block;'
+            f'margin:0 auto;border:0;font:700 32px -apple-system,Segoe UI,'
+            f'Roboto,sans-serif;color:#FF002E;letter-spacing:-.01em;'
+            f'text-align:center;text-decoration:none;">')
+
+
+# The phone layout is the base and the desktop layout is the enhancement, which
+# is the reverse of the obvious way round. It has to be: the widest grid is the
+# one that can overflow, and every client that fails to apply this block gets
+# the base. Outlook on Windows ignores media queries, and the Gmail app signed
+# into a non-Gmail account strips the whole <style> element — both used to land
+# on the three-across grid, which is 548px of content in a 390px screen. Now
+# both land on two-across, which fits anything.
+#
+# The cost, accepted deliberately: Outlook on Windows is a desktop client and
+# will show the phone layout on a wide screen. Sparse, not broken.
+_STYLE = f"""
+    body,table,td,a{{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}}
+    @media only screen and (min-width:601px){{
+      .g-desk{{display:table !important;}}
+      .m-desk{{display:block !important;}}
+      .g-phone,.m-phone{{display:none !important;}}
+    }}
+    @media only screen and (min-width:376px){{
+      .ph-img{{width:{TILE_PHONE_SMALL}px !important;
+               height:{TILE_PHONE_SMALL}px !important;}}
+      .ph-cell{{width:{TILE_PHONE_SMALL}px !important;}}
+    }}
+    @media only screen and (min-width:481px){{
+      .ph-img{{width:{TILE_PHONE}px !important;
+               height:{TILE_PHONE}px !important;}}
+      .ph-cell{{width:{TILE_PHONE}px !important;}}
+    }}
+    @media only screen and (max-width:480px){{
+      .card{{padding-left:18px !important;padding-right:18px !important;}}
+    }}
+    @media only screen and (max-width:375px){{
+      .card{{padding-left:14px !important;padding-right:14px !important;}}
+    }}"""
+# The card's own padding is the one thing still stepped DOWN from an inline
+# base rather than up: 28px is right for the 560px card, and a client with no
+# media queries is either a phone showing 124px tiles, which fit inside it
+# anyway, or a wide desktop client that wants the roomier padding.
+
+
+def _document(body: str) -> str:
+    """Wrap a mail body in the shell the media queries need.
+
+    The grid steps up to the desktop layout at 601px, which needs a real
+    <style> block and a viewport meta, and neither works in a bare fragment.
+    Losing this block is survivable now — see _STYLE — but it still costs the
+    wider layout everywhere. color-scheme is declared light so clients that
+    force-invert leave the white card alone.
+    """
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<style>
+    :root{{color-scheme:light;supported-color-schemes:light;}}{_STYLE}
+</style>
+</head>
+<body style="margin:0;padding:0;background:#fbfbfd;">{body}</body>
+</html>"""
 
 
 def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None) -> str:
-    for_date = for_date or date.today()
+    # for_date is unused since the footer stopped printing the date. It stays
+    # in the signature because check.py passes it and a digest is still a thing
+    # that happened on a day; dropping it would be a breaking change for the
+    # sake of one line.
     n = len(dogs)
-    with_photos = [d for d in dogs if d.photos][:PREVIEW_COUNT]
+    with_photos = [d for d in dogs if d.photos]
+    desk = with_photos[:PREVIEW_COUNT]
+    phone = with_photos[:PHONE_PREVIEW_COUNT]
+    # Two across, an odd number leaves the last dog alone on its own row, which
+    # reads as a photo that failed to load. Drop it into "+ N more on the site"
+    # instead — the counts still add up and the grid stays a rectangle. Only
+    # from three up: one dog is a single row, not an orphaned one.
+    if len(phone) > 1 and len(phone) % 2:
+        phone = phone[:-1]
 
-    rows = ""
-    for i in range(0, len(with_photos), 3):
-        rows += f"<tr>{''.join(_thumb(d) for d in with_photos[i:i + 3])}</tr>"
+    # Both grids point at the same photo URLs, so the one that stays hidden
+    # costs no extra bytes on the wire. The phone grid is the visible base and
+    # the desktop grid is hidden until the min-width query reveals it; the mso
+    # fallback rides with whichever one Outlook ends up showing, which is now
+    # the phone one.
+    grid_desk = _grid(desk, 3, TILE_DESKTOP, "g-desk", "dk-img", "dk-cell",
+                      hidden=True, mso_fallback=False)
+    grid_phone = _grid(phone, 2, TILE_PHONE_TINY, "g-phone", "ph-img",
+                       "ph-cell", hidden=False, mso_fallback=True)
 
-    unsub_line = ""
-    if unsubscribe_for:
-        unsub_line = (f'<br><a href="{html.escape(unsub_url(unsubscribe_for))}" '
-                      f'style="color:#98989d;">Unsubscribe</a>')
+    more = (_more_line(n - len(phone), "m-phone", hidden=False)
+            + _more_line(n - len(desk), "m-desk", hidden=True))
 
-    more = ""
-    if n > len(with_photos):
-        more = (f'<p style="font:400 14px -apple-system,Segoe UI,Roboto,sans-serif;'
-                f'color:#6e6e73;text-align:center;margin:4px 0 0;">'
-                f'+ {n - len(with_photos)} more on the site</p>')
-
-    return f"""
+    return _document(f"""
 <div style="background:#fbfbfd;padding:32px 16px;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
+  <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
               padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
-    <div style="font:700 13px -apple-system,Segoe UI,Roboto,sans-serif;letter-spacing:.2em;
-                text-transform:uppercase;color:#FF002E;text-align:center;">LUVD NYC</div>
+    {_logo()}
     <h1 style="font:700 27px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
                text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
       {n} new dog{'' if n == 1 else 's'} today</h1>
     <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
               text-align:center;margin:0 0 26px;">Across every NYC rescue we follow.</p>
 
-    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-      {rows}
-    </table>
+    {grid_desk}{grid_phone}
     {more}
 
     <a href="{html.escape(_site_url())}"
@@ -149,12 +451,9 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
               -apple-system,Segoe UI,Roboto,sans-serif;margin-top:24px;">
       See all {n} dog{'' if n == 1 else 's'} →</a>
 
-    <p style="font:400 12px -apple-system,Segoe UI,Roboto,sans-serif;color:#98989d;
-              text-align:center;margin:22px 0 0;">
-      {for_date.strftime('%A, %B %-d, %Y')}<br>
-      You only get this when there are new dogs.{unsub_line}</p>
+    {_footer(unsubscribe_for)}
   </div>
-</div>"""
+</div>""")
 
 
 def _bulk_headers(to_email: str) -> dict:
@@ -176,68 +475,84 @@ def send_digest(to_email: str, dogs: List[Dog], for_date: date = None):
     )
 
 
+def _montage() -> str:
+    """The welcome's polaroid strip, or nothing at all.
+
+    Only ever emitted when the file is really on disk. It is written by the
+    nightly run, so a box that has deployed but not yet run one has no montage
+    — and an <img> pointing at a URL that 404s is worse than a mail without a
+    picture in it. Same bargain the goodbye makes with an unreadable roster.
+
+    The alt text has to stand in for the whole block, because most clients
+    block remote images by default and this one carries no link and no
+    information. It says what the picture is, so it reads as a described image
+    rather than a hole.
+    """
+    try:
+        import montage
+        if not montage.exists():
+            return ""
+        src = f"{_abs('/' + montage.FILENAME)}?v={montage.cache_tag()}"
+    except Exception:
+        return ""
+    return (f'<img src="{html.escape(src)}" width="504" alt="Polaroid '
+            f'snapshots of dogs waiting at New York City rescues" '
+            f'style="width:100%;max-width:504px;height:auto;display:block;'
+            f'margin:24px auto 0;border:0;font:400 14px -apple-system,Segoe UI,'
+            f'Roboto,sans-serif;color:#6e6e73;text-align:center;">')
+
+
 def build_welcome_html(to_email: str) -> str:
     """The one-time signup confirmation.
 
-    Deliberately reads nothing from the database and shows no dogs: this is the
-    first mail an address ever gets, and it must not be able to arrive empty or
-    broken because a scrape came back with nothing.
+    Deliberately reads nothing from the database: this is the first mail an
+    address ever gets, and it must not be able to arrive empty or broken
+    because a scrape came back with nothing. The montage is a file written by
+    last night's run, not a live lookup, and it is omitted if it isn't there.
     """
     site = html.escape(_site_url())
-    return f"""
+    return _document(f"""
 <div style="background:#fbfbfd;padding:32px 16px;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
+  <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
               padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
-    <div style="font:700 13px -apple-system,Segoe UI,Roboto,sans-serif;letter-spacing:.2em;
-                text-transform:uppercase;color:#FF002E;text-align:center;">LUVD NYC</div>
+    {_logo()}
     <h1 style="font:700 27px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
-               text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
-      You're on the list</h1>
-    <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
-              text-align:center;margin:0 0 20px;">Thanks for signing up.</p>
+               text-align:center;letter-spacing:-.02em;margin:16px 0 18px;">
+      You're on the list!</h1>
 
     <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
               margin:0 0 14px;">
-      Every morning we check the NYC rescues we follow. When new dogs are
-      listed, you'll get one short email with their faces and a link to the
-      page.</p>
+      Each day we find dogs from the top rescues in your city and share them
+      with you. Our goal is to help every animal find their forever home.</p>
     <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
               margin:0;">
-      On days when nothing new comes in, you won't hear from us at all. That's
-      the whole thing.</p>
-
+      Thanks for joining!</p>
+{_montage()}
     <a href="{site}"
        style="display:block;background:#FF002E;color:#fff;text-decoration:none;
               text-align:center;padding:15px;border-radius:13px;font:600 16px
               -apple-system,Segoe UI,Roboto,sans-serif;margin-top:26px;">
       See today's dogs →</a>
 
-    <p style="font:400 12px -apple-system,Segoe UI,Roboto,sans-serif;color:#98989d;
-              text-align:center;margin:22px 0 0;">
-      You're getting this because you signed up at {html.escape(_site_host())}.<br>
-      <a href="{html.escape(unsub_url(to_email))}"
-         style="color:#98989d;">Unsubscribe</a></p>
+    {_footer(to_email)}
   </div>
-</div>"""
+</div>""")
 
 
 def build_welcome_text(to_email: str) -> str:
     """Plain-text alternative. A first-contact mail with no text part looks
     materially worse to spam filters than one with it."""
-    return f"""You're on the list.
+    return f"""You're on the list!
 
-Thanks for signing up to LUVD NYC.
+Each day we find dogs from the top rescues in your city and share them with
+you. Our goal is to help every animal find their forever home.
 
-Every morning we check the NYC rescues we follow. When new dogs are listed,
-you'll get one short email with their faces and a link to the page.
-
-On days when nothing new comes in, you won't hear from us at all. That's the
-whole thing.
+Thanks for joining!
 
 See today's dogs: {_site_url()}
 
 --
-You're getting this because you signed up at {_site_host()}.
+LUVD
 Unsubscribe: {unsub_url(to_email)}
 """
 
@@ -251,4 +566,125 @@ def send_welcome(to_email: str):
         html_body=build_welcome_html(to_email),
         text_body=build_welcome_text(to_email),
         headers=_bulk_headers(to_email),
+    )
+
+
+# The dog payload the page renders from, written by page.render().
+_DOGS_JSON = re.compile(r"^const DOGS = (\[.*\]);$", re.M)
+
+
+def roster(limit: int) -> List[Dog]:
+    """Up to `limit` photographed dogs, picked at random from the last page.
+
+    The goodbye goes out from the web process, which never scrapes and holds no
+    dogs of its own. index.html carries the same payload the site renders from
+    and is the only thing on disk that knows photo URLs, so it is the roster.
+
+    Every failure returns an empty list on purpose. The digest can assume dogs
+    exist because it only runs when there are new ones; this runs whenever
+    somebody unsubscribes, which may be the morning the page is missing,
+    half-written or empty — and a goodbye that raises, or that arrives full of
+    broken images, is worse than a goodbye with no photos in it.
+    """
+    try:
+        m = _DOGS_JSON.search((PUBLIC / "index.html").read_text(encoding="utf-8"))
+        if not m:
+            return []
+        pool = [
+            Dog(id=r.get("id") or "", name=r.get("name") or "",
+                source=r.get("source") or "",
+                source_label=r.get("source_label") or "",
+                url=r.get("url") or "", breed=r.get("breed") or "",
+                photos=[p for p in (r.get("photos") or []) if p])
+            for r in json.loads(m.group(1))
+        ]
+        pool = [d for d in pool if d.name and d.photos]
+        return random.sample(pool, min(limit, len(pool)))
+    except Exception:
+        return []
+
+
+def build_goodbye_html(to_email: str, dogs: List[Dog] = None) -> str:
+    """The unsubscribe confirmation. Sent once, when someone actually leaves.
+
+    `dogs` is whatever roster() managed to find; an empty list is a supported
+    outcome, not a degraded one, and simply drops the grid.
+
+    No unsubscribe link and no List-Unsubscribe headers: they have already
+    unsubscribed, and offering it again would suggest it hadn't taken.
+    """
+    dogs = dogs or []
+    site = html.escape(_site_url())
+    grid = ""
+    if dogs:
+        grid = f"""
+    <p style="font:400 13px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
+              text-align:center;margin:26px 0 14px;">
+      A few of the dogs still waiting in NYC.</p>
+    {_grid(dogs[:GOODBYE_COUNT], 3, TILE_DESKTOP, "g-desk", "dk-img", "dk-cell",
+           hidden=True, mso_fallback=False, caption=False)}
+    {_grid(dogs[:GOODBYE_PHONE_COUNT], 2, TILE_PHONE_TINY, "g-phone", "ph-img",
+           "ph-cell", hidden=False, mso_fallback=True, caption=False)}"""
+
+    return _document(f"""
+<div style="background:#fbfbfd;padding:32px 16px;">
+  <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
+              padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
+    {_logo()}
+    <h1 style="font:700 27px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+               text-align:center;letter-spacing:-.02em;margin:16px 0 18px;">
+      Sorry to see you go</h1>
+
+    <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+              margin:0;">
+      We hope you found a dog you love. If you didn't, or you just miss the
+      faces, you can <a href="{site}" style="color:#FF002E;text-decoration:none;
+      font-weight:600;">sign up again</a> any time.</p>
+{grid}
+    <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+              text-align:center;margin:28px 0 0;">
+      This is the last email you'll get from us.</p>
+    {_footer()}
+  </div>
+</div>""")
+
+
+def build_goodbye_text(to_email: str, dogs: List[Dog] = None) -> str:
+    """Plain-text alternative, and the whole message for anyone reading in
+    text — including the closing line, which is the point of the mail.
+
+    The HTML version dropped the names under the photos; this keeps them,
+    because here there are no photos and the name plus link is the only thing
+    left to drop.
+    """
+    dogs = dogs or []
+    faces = ""
+    if dogs:
+        faces = "\nA few of the dogs still waiting in NYC:\n" + "".join(
+            f"  {d.name} · {d.source_label}\n    {_dog_link(d)}\n"
+            for d in dogs[:GOODBYE_COUNT])
+    return f"""Sorry to see you go.
+
+We hope you found a dog you love. If you didn't, or you just miss the faces,
+you can sign up again any time: {_site_url()}
+{faces}
+This is the last email you'll get from us.
+
+--
+LUVD
+"""
+
+
+def send_goodbye(to_email: str):
+    """One transactional goodbye, sent once when an unsubscribe is claimed.
+
+    Deliberately carries no List-Unsubscribe headers: those exist so a client
+    can offer a one-click opt-out, and this address has already taken it.
+    """
+    dogs = roster(GOODBYE_COUNT)
+    return send_email(
+        to_email,
+        "Sorry to see you go — LUVD NYC",
+        html_body=build_goodbye_html(to_email, dogs),
+        text_body=build_goodbye_text(to_email, dogs),
     )
