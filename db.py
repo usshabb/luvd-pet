@@ -4,6 +4,8 @@ import os
 import sqlite3
 from pathlib import Path
 
+import cities
+
 # In production the database lives on a mounted volume — a container's own
 # filesystem is wiped on every deploy, which would reset the whole timeline.
 DB_PATH = Path(os.getenv("LUVD_DB") or (Path(__file__).parent / "dogfinder.db"))
@@ -50,6 +52,26 @@ def init_db():
                 email TEXT PRIMARY KEY,
                 active INTEGER DEFAULT 1,
                 created TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        # Which city lists an address is on. A separate table rather than a
+        # column on subscribers, because someone can legitimately want both New
+        # York and Los Angeles — and because `subscribers` staying one row per
+        # person is what add_subscriber()'s and deactivate_subscriber()'s
+        # claim-by-write both depend on, and what the unsubscribe HMAC (an
+        # address, nothing else) already assumes.
+        #
+        # `subscribers.active` remains the single global consent flag: it says
+        # whether we may mail this person at all. These rows only say which
+        # lists. So a city's digest is `active = 1 AND city = <that city>`, and
+        # unsubscribing zeroes `active` and stops everything, exactly as the
+        # link and the confirmation page have always promised.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS subscriber_cities (
+                email TEXT NOT NULL,
+                city TEXT NOT NULL,
+                created TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (email, city)
             )"""
         )
         # A lifetime tally that only ever increments. Deriving the headline
@@ -122,6 +144,15 @@ def _migrate(conn):
         # active = 1 test on the UPDATE itself, so this column existing or not
         # can never decide whether a goodbye goes out.
         ("subscribers", "unsubscribed", "TEXT"),
+        # Which city's shelters this dog belongs to. This is what makes
+        # forget_missing() safe to scope: it deletes everything it was not just
+        # told about, so one city's nightly run, unscoped, would wipe the other
+        # city's entire timeline — and every one of those dogs would come back
+        # the next morning reading as new, mailing the whole roster to the whole
+        # list. NULL means a row recorded before the column existed, which by
+        # definition means New York; the backfill below settles it, and every
+        # read COALESCEs so a half-migrated file still answers correctly.
+        ("seen_dogs", "city", "TEXT"),
     ):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column in cols:
@@ -131,6 +162,45 @@ def _migrate(conn):
         except sqlite3.OperationalError as e:
             if "duplicate column" not in str(e).lower():
                 raise
+
+    # Anyone with no city at all subscribed before cities existed, which means
+    # they did it when New York was the only city — so that is what they are.
+    #
+    # The NOT EXISTS is load-bearing and it is not the obvious way to write this.
+    # `INSERT OR IGNORE ... SELECT email, 'NYC' FROM subscribers` looks
+    # equivalent, and is idempotent in the sense that it inserts nothing new on a
+    # second run — but it is idempotent about the wrong thing. It would give a
+    # New York row to EVERY subscriber, on every boot, including someone who
+    # signed up for Los Angeles alone. They would then be on the New York list
+    # forever, and receive New York dogs, which is the exact failure this whole
+    # change exists to prevent. Scoping it to "has no city yet" means it can only
+    # ever fill a gap, never contradict a choice.
+    #
+    # It touches only subscriber_cities. `welcomed` is neither read nor written
+    # here, and mail is only ever sent from a live HTTP request in app.py, so
+    # this cannot re-welcome anybody however many times it runs. It is also safe
+    # to lose the race with the other gunicorn worker running it at the same
+    # moment, which is the contract every step above keeps.
+    #
+    # Inactive rows are included deliberately: someone who opted out and later
+    # opts back in should land in the city they came from rather than in none,
+    # and the sheet mirror carries inactive rows too, so they need a city to be
+    # filed under.
+    conn.execute(
+        "INSERT OR IGNORE INTO subscriber_cities(email, city) "
+        "SELECT s.email, ? FROM subscribers s WHERE NOT EXISTS ("
+        "SELECT 1 FROM subscriber_cities c WHERE c.email = s.email)",
+        (cities.DEFAULT_CITY,),
+    )
+    # Every dog recorded before the column existed is a New York dog. Idempotent
+    # by the IS NULL test, and it MUST stay ahead of the first non-New-York
+    # source being registered or it would stamp that city's dogs as New York.
+    conn.execute(
+        "UPDATE seen_dogs SET city = ? WHERE city IS NULL", (cities.DEFAULT_CITY,)
+    )
+    # Every per-city read of seen_dogs — the scoped delete, the floor that
+    # guards it, the count behind it — filters on this.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_dogs_city ON seen_dogs(city)")
 
 
 def get_prefs():
@@ -186,21 +256,57 @@ def record_seen(dogs, today_iso: str) -> dict:
     with connect() as conn:
         conn.executemany(
             "INSERT OR IGNORE INTO seen_dogs(dog_id, source, name, url, matched, "
-            "first_seen) VALUES(?, ?, ?, ?, 1, ?)",
-            [(d.id, d.source, d.name, d.url, today_iso) for d in dogs],
+            "first_seen, city) VALUES(?, ?, ?, ?, 1, ?, ?)",
+            [(d.id, d.source, d.name, d.url, today_iso,
+              getattr(d, "city", "") or cities.DEFAULT_CITY) for d in dogs],
         )
     return first_seen_map(d.id for d in dogs)
 
 
-def forget_missing(current_ids) -> int:
+def count_seen(city: str = None) -> int:
+    """How many dogs we have on record, optionally for one city.
+
+    Read before a scoped delete, to compare what a run just found against what
+    that city already has — see the floor in check.py.
+    """
+    with connect() as conn:
+        if city is None:
+            return conn.execute(
+                "SELECT COUNT(*) AS n FROM seen_dogs"
+            ).fetchone()["n"]
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM seen_dogs WHERE COALESCE(city, ?) = ?",
+            (cities.DEFAULT_CITY, cities.canon(city) or city),
+        ).fetchone()["n"]
+
+
+def forget_missing(current_ids, city: str = None) -> int:
     """Drop dogs no rescue lists any more — they've been adopted or pulled.
 
     Without this the table grows forever and a dog relisted months later would
     be filed under its original date instead of reading as new.
+
+    `city` is the blast radius, and it is not optional in practice. This deletes
+    every row it was NOT just handed, so a Los Angeles run that passed only its
+    own ids would otherwise delete all ~230 New York dogs — losing every
+    first_seen date the page is built around, and then re-inserting the lot
+    tomorrow with tomorrow's date, which mails the entire roster to every
+    subscriber as "new". Scoped, a run can only ever forget its own city.
+
+    A NULL city counts as the default city: those are rows written before the
+    column existed, so New York's run must still be able to prune them, and
+    another city's run must not be able to touch them. The COALESCE says exactly
+    that, and holds even if the backfill has not run yet.
     """
     current = set(current_ids)
     with connect() as conn:
-        rows = conn.execute("SELECT dog_id FROM seen_dogs").fetchall()
+        if city is None:
+            rows = conn.execute("SELECT dog_id FROM seen_dogs").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT dog_id FROM seen_dogs WHERE COALESCE(city, ?) = ?",
+                (cities.DEFAULT_CITY, cities.canon(city) or city),
+            ).fetchall()
         gone = [r["dog_id"] for r in rows if r["dog_id"] not in current]
         for i in range(0, len(gone), 400):
             chunk = gone[i:i + 400]
@@ -358,27 +464,45 @@ def interest_counts():
     return [dict(r) for r in rows]
 
 
-def add_subscriber(email: str) -> bool:
-    """Record a signup. Returns True if this address should get a welcome email.
+def add_subscriber(email: str, city: str = None) -> bool:
+    """Record a signup for one city. Returns True if this should be confirmed.
 
     True for an address we've never seen, and for someone who had unsubscribed
     and is now opting back in — they chose to hear from us again, so confirming
-    it is right. False for an address that is already an active subscriber, so
-    re-submitting the form (or double-clicking it) never sends a second welcome.
+    it is right. False for an address that is already an active subscriber of
+    this same city, so re-submitting the form (or double-clicking it) never
+    sends a second welcome.
 
     The claim is made by the write itself rather than by a read-then-write, so
     two simultaneous posts of the same address can only produce one True: the
     INSERT is ignored for the loser, and the UPDATE's active = 0 test no longer
-    holds once the winner has committed.
+    holds once the winner has committed. Adding cities does not weaken that:
+    `email` is still the primary key of `subscribers`, and the city row is a
+    second, independent claim on `subscriber_cities`' composite key.
+
+    The third case is new. An address that is already active and asks for a city
+    it is NOT yet on is a real change worth confirming — they picked a city and
+    deserve to hear that it worked — so it returns True and `welcomed` widens
+    from "first ever contact" to "when we last confirmed a subscription". With
+    one live city this branch is unreachable: everyone is already on New York.
     """
     email = email.strip().lower()
+    city = cities.canon(city) or cities.DEFAULT_CITY
     with connect() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO subscribers(email, active, welcomed) "
             "VALUES(?, 1, datetime('now'))",
             (email,),
         )
-        if cur.rowcount:
+        fresh = bool(cur.rowcount)
+        # The city row goes in either way, and its own rowcount is what
+        # distinguishes "already on this list" from "adding a list".
+        cur_city = conn.execute(
+            "INSERT OR IGNORE INTO subscriber_cities(email, city) VALUES(?, ?)",
+            (email, city),
+        )
+        new_city = bool(cur_city.rowcount)
+        if fresh:
             return True
         # unsubscribed is cleared on the way back in: it means "when they left",
         # and a live subscriber carrying a leaving date would read as one.
@@ -387,7 +511,16 @@ def add_subscriber(email: str) -> bool:
             "unsubscribed = NULL WHERE email = ? AND active = 0",
             (email,),
         )
-        return bool(cur.rowcount)
+        if cur.rowcount:
+            return True
+        if new_city:
+            conn.execute(
+                "UPDATE subscribers SET welcomed = datetime('now')"
+                " WHERE email = ?",
+                (email,),
+            )
+            return True
+        return False
 
 
 def deactivate_subscriber(email: str) -> bool:
@@ -414,12 +547,53 @@ def deactivate_subscriber(email: str) -> bool:
         return bool(cur.rowcount)
 
 
-def list_subscribers():
+def list_subscribers(city: str = None):
+    """Active subscriber addresses; `city=None` means everyone, on any list.
+
+    None being "everyone" is what keeps every pre-city caller correct — the
+    weekly report's total and the /subscribers endpoint both mean people, not
+    memberships. A city narrows it to that list, and it can only ever narrow:
+    the composite primary key on subscriber_cities means one row per person per
+    city, so nobody can appear twice and be mailed twice.
+
+    An address with no city row at all still shows up in the unscoped answer.
+    That is deliberate: consent lives on `subscribers`, so a missing city row
+    must never look like a missing subscriber.
+    """
+    with connect() as conn:
+        if city is None:
+            rows = conn.execute(
+                "SELECT email FROM subscribers WHERE active = 1 ORDER BY created"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT s.email FROM subscribers s "
+                "JOIN subscriber_cities c ON c.email = s.email "
+                "WHERE s.active = 1 AND c.city = ? ORDER BY s.created",
+                (cities.canon(city) or city,),
+            ).fetchall()
+    return [r["email"] for r in rows]
+
+
+def subscriber_cities(email: str):
+    """Which city lists one address is on."""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT email FROM subscribers WHERE active = 1 ORDER BY created"
+            "SELECT city FROM subscriber_cities WHERE email = ? ORDER BY city",
+            (email.strip().lower(),),
         ).fetchall()
-    return [r["email"] for r in rows]
+    return [r["city"] for r in rows]
+
+
+def subscriber_city_counts() -> dict:
+    """{city: active subscribers} — for the weekly report and quick checks."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT c.city, COUNT(*) AS n FROM subscriber_cities c "
+            "JOIN subscribers s ON s.email = c.email "
+            "WHERE s.active = 1 GROUP BY c.city ORDER BY c.city"
+        ).fetchall()
+    return {r["city"]: r["n"] for r in rows}
 
 
 if __name__ == "__main__":
