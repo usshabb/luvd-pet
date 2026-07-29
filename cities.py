@@ -89,11 +89,7 @@ CITIES = {
              apartment_label="In a NYC apartment"),
         City(code="LA", name="Los Angeles", short="LA", state="CA",
              tz="America/Los_Angeles", lat=34.0522, lon=-118.2437,
-             # Not live until a Los Angeles rescue is registered: live means the
-             # picker links to /la, the sitemap carries it and people can
-             # subscribe, and all three are lies without dogs behind them. The
-             # flag and the scrapers land in the same commit.
-             path="/la", file="la.html", live=False,
+             path="/la", file="la.html", live=True,
              areas=("Downtown", "Hollywood", "Studio City", "Sherman Oaks",
                     "Van Nuys", "Pasadena", "Santa Monica", "Long Beach",
                     "Burbank", "Glendale"),
