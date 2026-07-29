@@ -1784,13 +1784,36 @@ def render(dated, for_date: date = None) -> str:
     .fbar-pills{{flex-wrap:nowrap;justify-content:safe center;overflow-x:auto;
       padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}}
     .fbar-pills::-webkit-scrollbar{{display:none;}}
+    /* The fade that says the row keeps going. A mask, not an overlaid gradient,
+       for two reasons: a mask cannot intercept a touch, so the pills under it
+       stay tappable and the row stays scrollable; and it fades to *transparent*
+       rather than to a colour, so it is correct on whatever background the
+       current theme paints without knowing anything about it. The classes are
+       set by paintPillFade() — the edge only fades when there is something
+       behind it, so the cue disappears at the end of the scroll and never
+       appears at all if the pills happen to fit. */
+    .fbar-pills.fade-r{{-webkit-mask-image:linear-gradient(to right,#000
+      calc(100% - 34px),transparent);mask-image:linear-gradient(to right,#000
+      calc(100% - 34px),transparent);}}
+    .fbar-pills.fade-l{{-webkit-mask-image:linear-gradient(to left,#000
+      calc(100% - 34px),transparent);mask-image:linear-gradient(to left,#000
+      calc(100% - 34px),transparent);}}
+    .fbar-pills.fade-l.fade-r{{-webkit-mask-image:linear-gradient(to right,
+      transparent,#000 34px,#000 calc(100% - 34px),transparent);
+      mask-image:linear-gradient(to right,transparent,#000 34px,#000
+      calc(100% - 34px),transparent);}}
     .fbar-meta{{margin:12px 0 -10px;}}
-    /* The sort keeps its desktop treatment here — full "Sort by:" label, no
-       border, 15px. It was briefly stripped to the bare value on phones because
-       the row also carried "126 of 224 dogs" and a Clear link and there were
-       only 20px of line left; with the count down to "224 dogs" and Clear gone
-       there are 75px spare at 390px. See the 359px query below for where it
-       stops fitting. */
+    /* Back to 13.5px, and desktop stays at 15px. The one-control-scale rule is
+       about hierarchy against the count *within* a breakpoint, and the two
+       breakpoints have no reason to agree: a phone row is width-constrained in
+       a way desktop isn't, and 15px pushed Foster-to-adopt a further 23px out
+       of reach for no gain anyone can see. Reachability beats matching. */
+    .fpill > button,.fpill-t{{font-size:13.5px;}}
+    /* Down with them, so pills and sort are still one size within mobile. Only
+       the size moves: the full "Sort by:" label and the borderless treatment
+       stay, since the label is what makes this read as a control and shrinking
+       the type only buys more room for it. */
+    .fpill.fsort > button{{font-size:13.5px;}}
     /* Anchored to the row, not the pill, so a menu on the last pill can't open
        off the edge of a phone. */
     .fmenu{{position:fixed;left:14px;right:14px;min-width:0;
@@ -1806,22 +1829,25 @@ def render(dated, for_date: date = None) -> str:
   @media (max-width:400px){{
     .tlists ul{{grid-template-columns:1fr;}}
   }}
-  /* Below this the results header runs out of line: at 320px the count and a
-     full-label sort leave exactly the 8px flex gap between them, so one more
-     digit in the count would collide. The old phone treatment survives here and
-     only here — value only, with a border to say it's still a control.
-     Hidden from the eye, kept in the accessibility tree: display:none would
-     leave it announced as a bare "Recently added", which says nothing about
-     what the control does. */
-  @media (max-width:359px){{
-    .fpill.fsort .fs-l{{position:absolute;width:1px;height:1px;margin:-1px;
-      padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}}
-    .fpill.fsort > button{{border-color:var(--hair);padding:8px 12px;
-      font-size:13.5px;}}
-    .fpill.fsort > button:hover{{border-color:var(--hair);}}
-  }}
+  /* Below this the results header runs out of line and the sort drops back to
+     its value alone, with a border to say it's still a control. Re-derived
+     after phones went to 13.5px: the threshold used to be 359px, which was
+     measured against a 15px sort and is far too cautious now. Carrying the
+     label costs 55px, and the slack runs out at about 328px — at 320px it
+     leaves 11.9px, which is the 8px flex gap and almost nothing else, so a
+     four-digit roster would collide. 340px keeps 31.9px, so this rides the
+     grid's existing 339px breakpoint rather than inventing a nearby one.
+     No font-size here any more: 13.5px is the mobile baseline, and restating
+     it left two rules saying the same thing.
+     The label is hidden from the eye and kept in the accessibility tree —
+     display:none would leave the control announced as a bare "Recently added",
+     which says nothing about what it does. */
   @media (max-width:339px){{
     .grid{{grid-template-columns:1fr;}}
+    .fpill.fsort .fs-l{{position:absolute;width:1px;height:1px;margin:-1px;
+      padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}}
+    .fpill.fsort > button{{border-color:var(--hair);padding:8px 12px;}}
+    .fpill.fsort > button:hover{{border-color:var(--hair);}}
   }}
 </style>
 </head>
@@ -3360,6 +3386,41 @@ function paintFilters(pool) {{
   }}
 }}
 
+// Four pills do not fit a phone. At 390px they overrun the row by ~55px at
+// 13.5px type, and nothing short of renaming Foster-to-adopt closes that, so
+// the row scrolls. A row that scrolls with no cue at its edge reads as a row
+// that simply ends — which hides Foster-to-adopt, the one filter here that
+// isn't a generic pet-site facet. These classes drive a mask in the stylesheet.
+const pillRow = document.getElementById('fbar-pills');
+// scrollWidth/clientWidth force layout, so they're read only when something
+// could have changed them: a resize, or a repaint that rewrote the pill labels
+// (Foster-to-adopt's count changes width as you filter). Scrolling itself reads
+// only scrollLeft, which is free.
+let pillSlack = 0;
+function paintPillFade() {{
+  if (!pillRow) return;
+  // A mask paints on the element's own box, so anything a descendant draws
+  // outside that box is masked away — and an open filter menu is fixed,
+  // full-width and far taller than this row, so it vanishes completely. The
+  // cue is pointless while a menu is covering the row anyway, so it stands
+  // down for as long as one is open. Anything else added here that escapes the
+  // row's box needs the same treatment.
+  const menuOpen = !!pillRow.querySelector('.fpill.open');
+  const room = !menuOpen && pillSlack > 1;
+  const x = pillRow.scrollLeft;
+  pillRow.classList.toggle('fade-r', room && x < pillSlack - 1);
+  pillRow.classList.toggle('fade-l', room && x > 1);
+}}
+function measurePillRow() {{
+  if (!pillRow) return;
+  pillSlack = pillRow.scrollWidth - pillRow.clientWidth;
+  paintPillFade();
+}}
+if (pillRow) {{
+  pillRow.addEventListener('scroll', paintPillFade, {{passive: true}});
+  addEventListener('resize', measurePillRow, {{passive: true}});
+}}
+
 function closeFilterMenus() {{
   document.querySelectorAll('.fpill').forEach(p => {{
     p.classList.remove('open');
@@ -3368,6 +3429,7 @@ function closeFilterMenus() {{
     const trigger = p.querySelector('button');
     if (trigger) trigger.setAttribute('aria-expanded', 'false');
   }});
+  paintPillFade();
 }}
 
 function resetFilters() {{
@@ -3473,6 +3535,11 @@ function applyView() {{
   if (savedEmpty) savedEmpty.hidden = !noSaves;
   const filterEmpty = document.getElementById('filter-empty');
   if (filterEmpty) filterEmpty.hidden = !(shown === 0 && !noSaves);
+
+  // paintFilters() has just rewritten the option counts inside the pill labels,
+  // which changes how far the row overruns, so the edge cue is re-derived here
+  // rather than only at load.
+  measurePillRow();
 }}
 
 function toggleSavedView() {{
@@ -3522,7 +3589,10 @@ document.querySelectorAll('.fpill').forEach(pill => {{
     // Fixed on phones, so the top has to be measured rather than inherited.
     menu.style.top = window.matchMedia('(max-width:680px)').matches
       ? (trigger.getBoundingClientRect().bottom + 10) + 'px' : '';
-    requestAnimationFrame(() => pill.classList.add('open'));
+    requestAnimationFrame(() => {{
+      pill.classList.add('open');
+      paintPillFade();          // the mask would otherwise swallow this menu
+    }});
     trigger.setAttribute('aria-expanded', 'true');
   }});
   menu.addEventListener('click', e => {{

@@ -22,7 +22,7 @@ check.py
 
 | Rescue | Priority | How | Status |
 |---|---|---|---|
-| Muddy Paws Rescue | 10 | public JSON API | ✅ 32 dogs |
+| Muddy Paws Rescue | 10 | public JSON API | ✅ 36 dogs |
 | Animal Haven | 11 | server-rendered HTML + detail pages | ✅ 33 dogs |
 | Waggytail Rescue | 12 | Petstablished JSON API (via Wix widget) | ✅ 9 dogs |
 | Sugar Mutts Rescue | 13 | WordPress | ✅ 6 dogs |
@@ -30,7 +30,7 @@ check.py
 | Korean K9 Rescue | 15 | Petstablished org `1956188` | ✅ 29 dogs |
 | NYC Second Chance Rescue | 16 | Petstablished org `83716` | ✅ 113 dogs |
 
-226 dogs as of the last run. These move every day as rescues list and adopt out,
+230 dogs as of the last run. These move every day as rescues list and adopt out,
 so treat the per-rescue numbers as a shape rather than a fact to assert
 elsewhere — a run's own output is the only current count.
 
@@ -132,7 +132,7 @@ line is permanent rather than something a filter conjures up.
 
 ### The results count
 
-"226 dogs" — and "90 dogs" once a filter is on. Same sentence either way, only
+"230 dogs" — and "90 dogs" once a filter is on. Same sentence either way, only
 the number changes. It sits left-aligned directly above the first row of cards,
 at **19px/700 at every width — one size, no breakpoint**. The numeral is at full
 contrast and the unit is grey, the same pairing the date and its "N dogs" had.
@@ -149,7 +149,7 @@ thing on the page that states how many dogs there are, and at control size it
 stops reading as a heading and becomes metadata. 19px closes most of the
 imbalance while still leading the grid.
 
-**It doesn't say "90 of 226".** The pre-filter total was dropped on purpose: the
+**It doesn't say "90 of 230".** The pre-filter total was dropped on purpose: the
 pills go solid accent when a filter is on, and clearing one brings the total
 straight back, so the second number was spending words on something the controls
 were already saying.
@@ -169,17 +169,40 @@ the first card by 0.00px, measured at 1440px and 390px.
 
 Sort sits at the right-hand end of that same line. That row is the page's
 results header: what you're looking at on the left, the control that reorders it
-on the right. The filter pills have the row above to themselves, and both rows
-share one 15px control scale so they read as one set of controls — the sort
-stays the quieter of the two through weight and colour rather than size, and
-never fills with accent, because something is always sorting.
+on the right. The filter pills have the row above to themselves, and within any
+one screen width the pills and the sort share a single control size so they read
+as one set of controls — 15px on desktop, 13.5px on phones. The two widths
+deliberately don't match: a phone row is width-constrained in a way desktop
+isn't, and the larger type pushed the last pill further out of reach for no
+visible gain. The sort stays the quieter of the two through weight and colour
+rather than size, and never fills with accent, because something is always
+sorting.
 
 On phones the sort keeps its full "Sort by:" label. It was briefly cut down to
 the bare value when the row was more crowded, which left it reading as a caption
 rather than a control; the label is the affordance, so it came back as soon as
-the line had room. Below 360px there genuinely isn't room, and only there does
+the line had room. Below 340px there genuinely isn't room, and only there does
 it fall back to the value alone inside a thin border — still announced as "Sort
 by: Recently added" to a screen reader.
+
+### The filter row scrolls on a phone, and says so
+
+Four pills don't fit a 390px screen. They need 412.7px against 358px available,
+and it's one label's doing: "Foster-to-adopt 15" is 158.1px, wider than "Breed"
+and "Age" put together. No amount of tightening closes that gap, so the row
+scrolls sideways.
+
+A row that scrolls with nothing at its edge just looks like a row that ends,
+which would hide the one filter here that isn't a generic pet-site facet. So the
+edge with more pills behind it fades out, and the fade disappears when you reach
+the end — the same cue in reverse appears on the left once you've scrolled away
+from the start. On desktop, where all four fit, it never appears at all.
+
+It's drawn as a mask rather than as a gradient laid over the row, which means it
+can't swallow a tap: every pill stays tappable through it. It also fades to
+transparent rather than to a specific colour, so it's correct in both light and
+dark without knowing which one is in play — and since the theme here follows NYC
+sunrise and sunset rather than the operating system, that matters.
 
 ### There is no Clear button
 
@@ -244,7 +267,7 @@ it worked. It is now extracted per source, through one shared parser in
 | Animal Haven | **nothing** — no date anywhere in the HubSpot/HubDB feed |
 | Muddy Paws | **nothing** — the record carries no date field at all |
 
-That's 154 of 226 dogs with a real listing date today. The other 72 are mostly
+That's 154 of 230 dogs with a real listing date today. The other 76 are mostly
 Animal Haven's and Muddy Paws' rosters, which fall back to `first_seen` — on a
 freshly seeded database that is today, so they sort as the *shortest* waits.
 That is a floor imposed by missing data, not a claim that those dogs just

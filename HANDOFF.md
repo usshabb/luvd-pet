@@ -79,7 +79,7 @@ fetch dogs — every rescue source is a public endpoint.
 
 ## Known state
 
-**Working:** 7 scrapers, 226 dogs. Muddy Paws (JSON API), Animal Haven (HTML +
+**Working:** 7 scrapers, 230 dogs. Muddy Paws (JSON API), Animal Haven (HTML +
 detail pages), Waggytail (Petstablished API), Sugar Mutts (HTML), Sean Casey
 (HTML), Korean K9 (Petstablished org `1956188`, routed by location — see below),
 NYC Second Chance (Petstablished org `83716`, with per-dog trait flags). The dog
@@ -116,11 +116,49 @@ pills, the grid and the first card all move **0.00px** on apply and on clear.
 Measure `offsetTop`, not `getBoundingClientRect().top` — see the Playwright note
 below for why that distinction cost an afternoon.
 
-**Filter pills and the sort share one 15px control scale.** Same size, so the
-two rows read as one set of controls; the sort stays subordinate on weight (500
-vs 600), colour (muted vs full contrast) and chrome (no border, no fill)
-instead. The sort must never fill with accent: filled means "you have narrowed
-the list", and something is always sorting.
+**Filter pills and the sort share one control scale — but only within a
+breakpoint. Desktop is 15px, phones are 13.5px, and that split is deliberate.**
+The point of one scale is hierarchy against the count inside a given layout, and
+the two layouts have no reason to agree. Phones briefly ran at 15px to match
+desktop and it cost 22px of pill-row overflow (55px → 77px) for nothing anyone
+could see, pushing Foster-to-adopt further out of reach. Reachability beats
+cross-breakpoint tidiness. Within each breakpoint the sort stays subordinate on
+weight (500 vs 600), colour (muted vs full contrast) and chrome (no border, no
+fill) rather than on size. The sort must never fill with accent: filled means
+"you have narrowed the list", and something is always sorting.
+
+**Four filter pills do not fit a phone, and no styling change will make them.**
+At 390px the row needs 412.7px against 358px available. It is one label's fault:
+`Foster-to-adopt 15` is **158.1px**, wider than Breed (78.2) and Age (64.9)
+together, and the whole 55px overflow is attributable to it — shortening it to
+"Foster" makes all four fit with room to spare. So the row scrolls, and
+`paintPillFade()` puts a fade at whichever edge still has pills behind it.
+
+Three things about that fade are load-bearing:
+
+- **It is a `mask-image` on the scroller, not a gradient overlaid on top.** A
+  mask cannot intercept a touch, so the pills under it stay tappable and the row
+  stays scrollable with no `pointer-events` juggling. It also fades to
+  *transparent* rather than to a colour, so it is automatically right in both
+  themes — and the theme here follows NYC sunrise/sunset, not the OS, so a
+  gradient hardcoded to a light background would be wrong every night.
+- **A mask paints on the element's own box, so it deletes anything a descendant
+  draws outside that box.** An open filter menu is `position:fixed`, full-width
+  and five times the height of the row, and the first version of this made every
+  filter menu on mobile silently invisible — the menu was in the DOM, correctly
+  sized, and simply not painted. `paintPillFade()` therefore withholds the fade
+  classes entirely while `.fpill.open` exists. **Anything added to this row that
+  escapes its box needs the same treatment**, and the failure mode is invisible
+  rather than noisy, so check it by hand.
+- **The classes are the only thing that turns the mask on**, so a browser with
+  JS disabled gets no mask and therefore cannot hit the bug above. The cue also
+  never appears on desktop, where the row doesn't overflow, because `pillSlack`
+  is 0 there.
+
+`scrollWidth`/`clientWidth` are only read on resize and at the end of
+`applyView()` — the latter because `paintFilters()` rewrites Foster-to-adopt's
+count, which changes the label's width. Scrolling itself reads only
+`scrollLeft`.
 
 **The count is 19px/700 at every width — one rule, no breakpoint.** Do not
 "restore" it to the retired day heading's 23px: it was 23px on desktop, and the
@@ -143,15 +181,21 @@ on its own.
 **The mobile sort carries its full "Sort by:" label again.** It was briefly
 stripped to the bare value because the row also held `126 of 224 dogs` and a
 Clear link, leaving 20.5px of line at 390px; a border was added to keep it
-looking like a control. With the short count and no Clear there are 75.4px
-spare, so the label is back and the border is gone — the affordance is fixed by
-naming the control rather than by drawing a box round it. Below 360px the old
-treatment survives in a `@media (max-width:359px)` block, because at 320px the
-count and a full-label sort leave exactly the 8px flex gap between them and one
-more digit in the count would collide. In that block the label is clipped rather
-than `display:none`, so screen readers still announce "Sort by: Recently added"
-instead of a bare "Recently added", which would say nothing about what the
-control does.
+looking like a control. With the short count, no Clear and 13.5px type there are
+89.9px spare, so the label is back and the border is gone — the affordance is
+fixed by naming the control rather than by drawing a box round it.
+
+The old treatment survives below 340px only. Carrying the label costs 55px, and
+the slack runs out around 328px: at 320px it leaves 11.9px, which is the 8px
+flex gap and almost nothing else, so a four-digit roster would collide. **That
+threshold was re-derived when phones went back to 13.5px** — it used to be
+359px, measured against a 15px sort, and was far too cautious. It now rides the
+grid's existing 339px breakpoint rather than inventing a nearby one, and 340px
+keeps 39.9px of slack. If you change the count's type or the sort's, re-measure
+it; the two rules are coupled and nothing will tell you when it stops holding.
+In that block the label is clipped rather than `display:none`, so screen readers
+still announce "Sort by: Recently added" instead of a bare "Recently added",
+which would say nothing about what the control does.
 
 **Badges are mostly off, on purpose.** `SHOW_WAIT_BADGE_ON_CARDS = False` keeps
 the ⏳ "listed N days" badge off grid cards (it hit 104 of 223 cards, 86 of them
@@ -309,7 +353,7 @@ measurement. Any future check of this row should do both.
 7. **A fresh database renders no NEW markers at all**, and it looks broken. Every
    dog is seen for the first time today, so today's arrivals are 100% of the grid,
    so `NEW_MARK_MAX_SHARE = 0.5` suppresses the marker everywhere. This is the
-   flag doing its job — a marker on all 226 cards marks nothing. Markers come
+   flag doing its job — a marker on all 230 cards marks nothing. Markers come
    back on the first day the roster is a mix. Before debugging the renderer,
    check whether every dog's `first_seen` is today.
 8. **Most of "Longest waiting" depends on scrapers that could stop supplying a
@@ -317,7 +361,7 @@ measurement. Any future check of this row should do both.
    (Petstablished `created_at` for Korean K9, NYC Second Chance and Waggytail;
    the WordPress post date for Sugar Mutts; "Brought to the shelter" for Sean
    Casey). Animal Haven and Muddy Paws expose no date at all, so their dogs fall
-   back to `first_seen` and sort as the shortest waits. 154 of 226 have a real
+   back to `first_seen` and sort as the shortest waits. 154 of 230 have a real
    date today. If that number collapses, the sort goes quietly inert again rather
    than erroring — which is exactly how it went unnoticed the first time, when
    Petfinder's removal left it the only populator and every `waiting_days` was 0.
