@@ -1,8 +1,13 @@
 """Render the LUVD daily page.
 
-One job: show every adoptable dog across NYC rescues, beautifully, and get out
-of the way. Click a dog -> modal with everything we know -> one button out to
+One job: show every adoptable dog across a city's rescues, beautifully, and get
+out of the way. Click a dog -> modal with everything we know -> one button out to
 that rescue's own adopt page.
+
+One page per city, each server-rendered with its own title, description,
+canonical, social tags and structured data, and carrying only its own city's
+dogs. `write()` authors every city in one pass — see the comment on it, because
+doing it once per city would delete the other city's dog pages.
 
 One flat grid, newest arrival first, with a NEW marker on the dogs that landed
 today. Above it, four filter pills and a sort — deliberately the smallest set
@@ -21,10 +26,24 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlsplit
 
+import cities
 from sources.base import Dog
 
 OUT_DIR = Path(__file__).parent / "public"
 CONTACT_EMAIL = "cory@luvd.com"
+
+
+def _city_of(dogs, default: str = None) -> str:
+    """Which city a group of dogs belongs to.
+
+    Used by the per-dog and per-rescue pages, which are handed dogs rather than a
+    city. A rescue's dogs are all one city, so the first stamped one settles it;
+    an unstamped list means a run that predates the stamp, which is New York.
+    """
+    for d in dogs or ():
+        if getattr(d, "city", ""):
+            return d.city
+    return default or cities.DEFAULT_CITY
 
 
 def _terms_html(email: str, for_date) -> str:
@@ -386,6 +405,12 @@ SHOW_WAIT_BADGE_ON_CARDS = False
 # Withhold the NEW marker when today's arrivals are more than this share of the
 # grid. A marker on every card marks nothing — which is exactly what happens on
 # a fresh database, where every dog is seen for the first time today.
+# Cities in the headline picker that LUVD does not cover. Not in cities.py: that
+# registry is what the app runs on, and these are demand signals — a name in a
+# menu, an /interest row, and nothing else. Promoting one means adding it there
+# with its scrapers, at which point it leaves this list.
+SOON_CITIES = (("CHI", "Chicago"), ("BOS", "Boston"), ("SF", "San Francisco"))
+
 NEW_MARK_MAX_SHARE = 0.5
 
 # What that marker says. One string, because it appears on the grid card, in the
@@ -472,14 +497,29 @@ def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
       </a>"""
 
 
-def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
+def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
+                     city: str = None) -> dict:
     """JSON-LD for search and answer engines.
 
     Three graphs: what the site is, the actual list of dogs (so an assistant can
-    answer "what dogs are up for adoption in NYC today" from real data), and the
+    answer "what dogs are up for adoption in LA today" from real data), and the
     questions people actually ask. Facts here mirror the page — nothing is
     asserted that a visitor can't verify on screen.
+
+    The page-level nodes are city-scoped, @id included, so the two cities'
+    CollectionPage and FAQPage entities are distinct things rather than one
+    entity described two contradictory ways. The site-wide WebSite and
+    Organization nodes are shared, and the Organization serves every live city.
     """
+    c = cities.resolve(city)
+    page_url = f"{site}{c.path}" if c.path != "/" else f"{site}/"
+    # Only live cities: an unopened city in areaServed is a claim we can't back
+    # with a single dog.
+    served = [cities.CITIES[k].name for k in cities.live_codes()]
+    if len(served) > 1:
+        served_phrase = ", ".join(served[:-1]) + f" and {served[-1]}"
+    else:
+        served_phrase = served[0] if served else c.name
     items = []
     for i, d in enumerate(flat[:60], 1):        # keep the payload sane
         about = {
@@ -496,20 +536,21 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
         items.append({
             "@type": "ListItem",
             "position": i,
-            "url": f"{site}/#dog/{d.id}",
+            "url": f"{page_url}#dog/{d.id}",
             "item": about,
         })
 
     faq = [
-        ("How do I adopt a dog in NYC?",
+        (f"How do I adopt a dog in {c.short}?",
          "Browse adoptable dogs on LUVD, open the dog you're interested in, "
-         "then use the button to contact that rescue directly. Some NYC rescues "
+         f"then use the button to contact that rescue directly. Some {c.short} "
+         "rescues "
          "take email inquiries; most ask you to submit an adoption application "
          "first. LUVD links you to whichever step that rescue actually requires."),
-        ("Which NYC rescues does LUVD cover?",
+        (f"Which {c.short} rescues does LUVD cover?",
          "LUVD currently follows " + ", ".join(rescues) + ". New arrivals from "
          "every one of them are collected each morning."),
-        ("How much does it cost to adopt a dog in New York City?",
+        (f"How much does it cost to adopt a dog in {c.name}?",
          "Adoption fees are set by each rescue and typically range from about "
          "$150 to $500, which usually covers spay/neuter, vaccinations and "
          "microchipping. The fee for each dog is shown on its page when the "
@@ -544,29 +585,32 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
                 "url": f"{site}/",
                 "logo": f"{site}/apple-touch-icon.png",
                 "email": CONTACT_EMAIL,
-                "areaServed": {"@type": "City", "name": "New York City"},
+                "areaServed": [{"@type": "City", "name": n} for n in served]
+                              if len(served) > 1
+                              else {"@type": "City", "name": served_phrase},
                 "description": "LUVD collects every new adoptable dog across "
-                               "New York City rescues into one page, updated daily.",
+                               f"{served_phrase} rescues into one page, "
+                               "updated daily.",
             },
             {
                 "@type": "CollectionPage",
-                "@id": f"{site}/#page",
-                "url": f"{site}/",
-                "name": "Adopt a dog in NYC",
+                "@id": f"{page_url}#page",
+                "url": page_url,
+                "name": f"Adopt a dog in {c.short}",
                 "description": meta_desc,
                 "isPartOf": {"@id": f"{site}/#website"},
                 "dateModified": for_date.isoformat(),
-                "about": {"@type": "Thing", "name": "Dog adoption in New York City"},
+                "about": {"@type": "Thing", "name": f"Dog adoption in {c.name}"},
                 "mainEntity": {
                     "@type": "ItemList",
-                    "name": "Adoptable dogs in New York City",
+                    "name": f"Adoptable dogs in {c.name}",
                     "numberOfItems": len(flat),
                     "itemListElement": items,
                 },
             },
             {
                 "@type": "FAQPage",
-                "@id": f"{site}/#faq",
+                "@id": f"{page_url}#faq",
                 "mainEntity": [
                     {"@type": "Question", "name": q,
                      "acceptedAnswer": {"@type": "Answer", "text": a}}
@@ -577,8 +621,12 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
     }
 
 
-def render(dated, for_date: date = None) -> str:
+def render(dated, for_date: date = None, city: str = None) -> str:
     """`dated` is [(iso_date, [Dog, ...]), ...], newest day first.
+
+    `city` is which city's page this is; it decides the copy, the canonical URL,
+    the social tags, the structured data and which coordinates dark mode follows
+    the sun over. It defaults to New York, so every pre-city caller is unchanged.
 
     The page itself is one flat grid, but the day grouping still comes in: it's
     how check.py already has the dogs, it's what tells us which cards get the
@@ -590,6 +638,7 @@ def render(dated, for_date: date = None) -> str:
         dated = [(for_date.isoformat(), list(dated))]
 
     flat: List[Dog] = [d for _, group in dated for d in group]
+    c = cities.resolve(city or _city_of(flat))
     # The filter groupings are derived here, not in the browser: the breed
     # patterns and age parsing are fiddly enough to want testing, and the client
     # only needs the answer.
@@ -625,14 +674,49 @@ def render(dated, for_date: date = None) -> str:
 
     site = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
     cache_bust = for_date.isoformat()
+    page_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
     rescues = sorted({d.source_label for d in flat})
     meta_desc = (
-        f"{total} adoptable dogs from {len(rescues)} New York City rescues, "
+        f"{total} adoptable dogs from {len(rescues)} {c.name} rescues, "
         f"updated every morning. Browse today's new arrivals with energy level, "
         f"apartment fit and breed guidance, then contact the rescue directly."
     )
     structured_data = json.dumps(_structured_data(flat, dated, site, for_date,
-                                                  rescues, meta_desc))
+                                                  rescues, meta_desc, c.code))
+    # A city whose scrapers all broke, or that launched before its first dog, must
+    # not be published as an indexable page — a thin page on a real domain is a
+    # lasting SEO liability, and it is not a page anybody should land on from a
+    # search. `follow` so the links out of it still carry value.
+    robots_meta = ("index, follow, max-image-preview:large" if flat
+                   else "noindex, follow")
+
+    # The city picker is plain links: choosing a city is an ordinary page load to
+    # that city's own page. No JavaScript needed, cmd-click and "copy link" work,
+    # and — the part that matters most today — it is a crawlable link, which is
+    # how /la gets discovered at all. An instant client-side switch is a separate
+    # piece of design and deliberately not this.
+    #
+    # Cities we don't cover stay buttons, because there is nowhere to send
+    # anyone; those open the waitlist instead (see ALLOW_SOON below).
+    opts = []
+    for lc in cities.CITIES.values():
+        if lc.live:
+            current = ' aria-current="page"' if lc.code == c.code else ""
+            opts.append(f'<a role="option" href="{lc.path}" data-v="{lc.code}" '
+                        f'data-ok="1"{current}>{html.escape(lc.name)}</a>')
+        else:
+            # In the registry but not opened yet: still worth naming, because
+            # seeing it listed as Soon is what makes the waitlist an answer
+            # rather than a shrug. It becomes a link the day it goes live.
+            opts.append(f'<button role="option" data-v="{lc.code}">'
+                        f'{html.escape(lc.name)}</button>')
+    for code, label in SOON_CITIES:
+        opts.append(f'<button role="option" data-v="{code}">{label}</button>')
+    city_options = "\n          ".join(opts)
+
+    live_shorts = [cities.CITIES[k].short for k in cities.live_codes()]
+    live_phrase = (" and ".join(live_shorts) if len(live_shorts) < 3
+                   else ", ".join(live_shorts[:-1]) + f" and {live_shorts[-1]}")
     # Each rescue's own page targets a real search ("muddy paws rescue dogs"),
     # but nothing on the homepage linked to them — they were reachable only from
     # individual dog pages. Linking them here and in the footer is what gets
@@ -658,13 +742,13 @@ def render(dated, for_date: date = None) -> str:
 <html lang="en">
 <head>
 <script>
-// Dark mode follows the sun over New York, not a fixed clock. A 7pm/7am window
-// is wrong for most of the year: NYC sunrise swings from 5:25am in June to
-// 7:20am in January. Standard NOAA solar position, run before paint so there
-// is no flash of the wrong theme.
+// Dark mode follows the sun over the city this page is for, not a fixed clock.
+// A 7pm/7am window is wrong for most of the year: NYC sunrise swings from
+// 5:25am in June to 7:20am in January. Standard NOAA solar position, run before
+// paint so there is no flash of the wrong theme.
 (function () {{
   try {{
-    var LAT = 40.7128, LON = -74.0060, RAD = Math.PI / 180;
+    var LAT = {c.lat:.4f}, LON = {c.lon:.4f}, RAD = Math.PI / 180;
     var now = new Date();
     var start = Date.UTC(now.getUTCFullYear(), 0, 0);
     var doy = Math.floor((now.getTime() - start) / 86400000);
@@ -696,9 +780,9 @@ def render(dated, for_date: date = None) -> str:
 </script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Adopt a dog in NYC — LUVD</title>
+<title>{c.title}</title>
 <meta name="description" content="{meta_desc}">
-<link rel="canonical" href="{site}/">
+<link rel="canonical" href="{page_url}">
 <link rel="icon" href="/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
@@ -706,19 +790,19 @@ def render(dated, for_date: date = None) -> str:
      so these are absolute. og.png is rebuilt nightly with real dog faces. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="LUVD">
-<meta property="og:url" content="{site}/">
-<meta property="og:title" content="Adopt a dog in NYC — LUVD">
+<meta property="og:url" content="{page_url}">
+<meta property="og:title" content="{c.title}">
 <meta property="og:description" content="{meta_desc}">
 <meta property="og:image" content="{site}/og.png?v={cache_bust}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="LUVD — adoptable dogs across New York City rescues">
+<meta property="og:image:alt" content="LUVD — adoptable dogs across {c.name} rescues">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Adopt a dog in NYC — LUVD">
+<meta name="twitter:title" content="{c.title}">
 <meta name="twitter:description" content="{meta_desc}">
 <meta name="twitter:image" content="{site}/og.png?v={cache_bust}">
 <meta name="theme-color" content="#FF002E">
-<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="robots" content="{robots_meta}">
 
 <!-- Structured data. The ItemList gives search and answer engines the actual
      dogs; the FAQ answers the questions people ask about adopting in NYC. -->
@@ -910,13 +994,21 @@ def render(dated, for_date: date = None) -> str:
     transition:opacity .18s ease,transform .22s cubic-bezier(.2,.8,.25,1);}}
   .pick-menu[hidden]{{display:none;}}
   .pick.open .pick-menu{{opacity:1;transform:translateX(-50%);}}
-  .pick-menu button{{all:unset;cursor:pointer;font-size:16px;font-weight:500;
+  /* A live city is an anchor, not a button: choosing one is an ordinary
+     navigation to that city's own page, so it should behave like a link —
+     middle-click, cmd-click and "copy link" all work, and it needs no
+     JavaScript. The cities we don't cover yet stay buttons, because there is
+     nowhere to send anyone and the click opens the waitlist instead. */
+  .pick-menu button,.pick-menu a{{all:unset;cursor:pointer;font-size:16px;
+    font-weight:500;
     padding:11px 14px;border-radius:10px;text-align:left;color:var(--text);
     display:flex;justify-content:space-between;align-items:center;gap:14px;}}
-  .pick-menu button:hover{{background:var(--hair2);}}
+  .pick-menu button:hover,.pick-menu a:hover{{background:var(--hair2);}}
   .pick-menu button:disabled{{cursor:default;opacity:.45;}}
   .pick-menu button:disabled:hover{{background:transparent;}}
-  .pick-menu button[data-ok]::after{{content:'Live';font-size:11px;
+  .pick-menu [aria-current="page"]{{background:var(--hair2);}}
+  .pick-menu button[data-ok]::after,
+  .pick-menu a[data-ok]::after{{content:'Live';font-size:11px;
     font-weight:700;color:var(--good);letter-spacing:.04em;}}
   .pick-menu button:not([data-ok])::after{{content:'Soon';font-size:11px;
     font-weight:700;color:var(--muted);letter-spacing:.04em;}}
@@ -1907,7 +1999,7 @@ def render(dated, for_date: date = None) -> str:
     .pick-menu{{position:fixed;left:50%;transform:translateX(-50%) translateY(-6px);
       width:calc(100vw - 28px);max-width:330px;min-width:0;}}
     .pick.open .pick-menu{{transform:translateX(-50%);}}
-    .pick-menu button{{padding:13px 15px;font-size:16.5px;}}
+    .pick-menu button,.pick-menu a{{padding:13px 15px;font-size:16.5px;}}
   }}
   @media (max-width:400px){{
     .tlists ul{{grid-template-columns:1fr;}}
@@ -1967,13 +2059,9 @@ def render(dated, for_date: date = None) -> str:
       in
       <span class="pick" data-kind="city">
         <button type="button" id="pick-city" aria-haspopup="listbox"
-                aria-expanded="false">NYC{CHEVRON}</button>
+                aria-expanded="false">{c.short}{CHEVRON}</button>
         <span class="pick-menu" id="menu-city" role="listbox" hidden>
-          <button role="option" data-v="NYC" data-ok="1">New York City</button>
-          <button role="option" data-v="LA">Los Angeles</button>
-          <button role="option" data-v="CHI">Chicago</button>
-          <button role="option" data-v="BOS">Boston</button>
-          <button role="option" data-v="SF">San Francisco</button>
+          {city_options}
         </span>
       </span>
     </h1>
@@ -2102,7 +2190,7 @@ def render(dated, for_date: date = None) -> str:
 
   <section class="sub-sec" id="subscribe">
     <h2>Never miss a good dog</h2>
-    <p>One email each morning with every new dog across NYC rescues.
+    <p>One email each morning with every new dog across {c.short} rescues.
        Nothing on the days there aren't any.</p>
     <form class="sub-form" id="sub-form">
       <input type="email" id="sub-email" placeholder="you@email.com" required
@@ -2113,11 +2201,11 @@ def render(dated, for_date: date = None) -> str:
   </section>
 
   <section class="faq">
-    <h2>Adopting a dog in New York City</h2>
+    <h2>Adopting a dog in {c.name}</h2>
     <details open>
-      <summary>How do I adopt a dog in NYC?</summary>
+      <summary>How do I adopt a dog in {c.short}?</summary>
       <p>Open any dog above and use the button at the bottom of its page. Some
-         NYC rescues take email inquiries; most ask for an adoption application
+         {c.short} rescues take email inquiries; most ask for an adoption application
          first. LUVD sends you to whichever step that rescue actually requires,
          so you don't get bounced.</p>
     </details>
@@ -2127,7 +2215,7 @@ def render(dated, for_date: date = None) -> str:
          new, so you don't have to keep a dozen tabs open.</p>
     </details>
     <details>
-      <summary>What does it cost to adopt in NYC?</summary>
+      <summary>What does it cost to adopt in {c.short}?</summary>
       <p>Fees are set by each rescue and usually run about $150–$500, typically
          covering spay/neuter, vaccinations and microchipping. Where a rescue
          publishes the fee, it's shown on that dog's page.</p>
@@ -2162,6 +2250,10 @@ def render(dated, for_date: date = None) -> str:
 <script>
 const DOGS = {payload};
 const SUBSCRIBE_URL = {json.dumps(subscribe_url)};
+// You subscribe to one city, and it's the city whose page you're on. Baked in at
+// render time rather than read from the URL, so it's right even on a cached copy
+// and cannot be confused by a stray query string.
+const CITY = {json.dumps(c.code)};
 const RESTING_NOTE = {{
   'hero-note': '',
   'sub-note': 'Free. Unsubscribe anytime.',
@@ -2512,7 +2604,7 @@ function sizeAndCost(d) {{
         <div class="tl-hd">💵 Typical monthly cost</div>
         <div class="cost-big">$${{mc.low}}–${{mc.high}}<span>/month</span></div>
         <ul class="cost-list">${{rows}}</ul>
-        <p class="cost-note">A NYC estimate for a dog this size and coat.
+        <p class="cost-note">A {c.short} estimate for a dog this size and coat.
           Excludes the adoption fee and anything unexpected.</p>
       </div>`;
   }}
@@ -2585,7 +2677,7 @@ function tabs(d) {{
       ${{sect('🧠','Temperament','temperament',bi.temperament)}}
       ${{sect('🎾','Exercise','exercise',bi.exercise)}}
       ${{sect('✂️','Grooming','grooming',bi.grooming)}}
-      ${{sect('🏙️','In a NYC apartment','nyc',bi.nyc)}}
+      ${{sect('🏙️','{c.apartment_label}','nyc',bi.nyc)}}
     </div>
     <div class="pane" data-p="1">${{bio}}</div>`;
 }}
@@ -2889,7 +2981,7 @@ const CREED = [
 // pulls the share image from the page's og: tags; on image-first apps we also
 // hand over og.png directly.
 const SHARE_TEXT =
-  'Every new rescue dog in NYC, on one page every morning. Go meet your dog 🐶';
+  'Every new rescue dog in {c.short}, on one page every morning. Go meet your dog 🐶';
 
 async function shareLuvd() {{
   const url = location.origin + location.pathname;
@@ -3089,8 +3181,8 @@ if (location.hash) setTimeout(openFromHash, 0);
   // Flip to true to let people choose an unsupported city/species and join a
   // waitlist. The /interest endpoint and reporting are already built.
   const ALLOW_SOON = false;
-  const state = {{species: 'dog', city: 'NYC', cityFull: 'New York City'}};
-  const LIVE = {{species: 'dog', city: 'NYC'}};
+  const state = {{species: 'dog', city: '{c.code}', cityFull: '{c.name}'}};
+  const LIVE = {{species: 'dog', city: '{c.code}'}};
   const LABEL = {{dog: 'dog', cat: 'cat'}};
 
   const soon = document.getElementById('soon');
@@ -3118,9 +3210,9 @@ if (location.hash) setTimeout(openFromHash, 0);
     }}
     const what = state.species === 'cat' ? 'Cats' : 'Dogs';
     soonMsg.innerHTML = `<b>${{esc(what)}} in ${{esc(state.cityFull || state.city)}}</b> isn't live yet — ` +
-      `right now LUVD covers dogs in NYC. Want to know the day it opens?`;
+      `right now LUVD covers dogs in {live_phrase}. Want to know the day it opens?`;
     soon.hidden = false;
-    // Hide the NYC dog grid, so we're never showing dogs that contradict the
+    // Hide the dog grid, so we're never showing dogs that contradict the
     // sentence the visitor just composed. The filter row goes with it — there's
     // nothing left to filter.
     document.querySelectorAll('.grid, .hero-cap, .fbar')
@@ -3827,7 +3919,7 @@ function openSubscribe() {{
     <div class="sub-modal">
       <img class="sub-logo" src="assets/luvd-logo.png" alt="LUVD">
       <h2>Never miss a good dog</h2>
-      <p>One email each morning with every new dog across NYC rescues.
+      <p>One email each morning with every new dog across {c.short} rescues.
          Nothing on the days there aren't any.</p>
       <form class="sub-form" id="m-sub-form">
         <input type="email" id="m-sub-email" placeholder="you@email.com" required
@@ -3872,7 +3964,7 @@ async function handleSubscribe(e, emailId, noteId, formId) {{
     const r = await fetch(SUBSCRIBE_URL, {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{email: email}})
+      body: JSON.stringify({{email: email, city: CITY}})
     }});
     if (!r.ok) throw new Error('bad status');
     // Restore the note to its resting copy — no "you're in" line at all.
@@ -3910,16 +4002,21 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
     fragments. The title leads with rescue and breed — nobody searches a dog's
     name, they search "muddy paws rescue dogs" or "chihuahua adoption nyc".
     """
+    c = cities.resolve(getattr(d, "city", ""))
     facts = " · ".join(x for x in (d.age, d.sex, d.weight, d.location) if x)
     breed = d.breed if d.breed and "unknown" not in d.breed.lower() else "Mixed breed"
-    # "LUVD" alone carries no city, so the title says NYC itself — this is the
-    # page's only geographic signal, and "adoption ... nyc" is what people
-    # search. Rescues whose own name says NYC don't need it twice.
-    label_has_city = any(x in d.source_label.lower() for x in ("nyc", "new york"))
-    where = "" if label_has_city else " in NYC"
+    # "LUVD" alone carries no city, so the title says the city itself — this is
+    # the page's only geographic signal, and "adoption ... nyc" is what people
+    # search. Rescues whose own name says their city don't need it twice.
+    # Whole words only: "LA" as a bare substring hides inside "Lab" and
+    # "Playa", which would quietly strip the city out of a title that needs it.
+    label_has_city = any(
+        re.search(rf"\b{re.escape(alias)}\b", d.source_label.lower())
+        for alias in c.aliases)
+    where = "" if label_has_city else f" in {c.short}"
     title = f"{d.name} — {breed} for adoption at {d.source_label}{where} | LUVD"
     desc = (f"{d.name} is a {breed.lower()} available for adoption from "
-            f"{d.source_label} in New York City."
+            f"{d.source_label} in {c.name}."
             + (f" {facts}." if facts else "")
             + " See photos, temperament and how to apply.")
     photo = d.primary_photo()
@@ -3964,7 +4061,7 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
         body_bits.append(f"<h2>{html.escape(bi.get('name', breed))} temperament</h2>"
                          f"<p>{html.escape(bi['temperament'])}</p>"
                          f"<h2>Exercise</h2><p>{html.escape(bi.get('exercise',''))}</p>"
-                         f"<h2>In a NYC apartment</h2>"
+                         f"<h2>{html.escape(c.apartment_label)}</h2>"
                          f"<p>{html.escape(bi.get('nyc',''))}</p>")
 
     cta_label = (f"Apply to {d.program_label.lower()} {d.name}" if d.program_label
@@ -4006,7 +4103,7 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
     .dp-prog{{{{background:#2a2114;}}}} .dp-prog b{{{{color:#f0b357;}}}}
   }}}}
 </style></head><body>
-<a class="dp-back" href="/">← All adoptable dogs in NYC</a>
+<a class="dp-back" href="{c.path}">← All adoptable dogs in {c.short}</a>
 {''.join(body_bits)}
 <a class="dp-cta" href="{html.escape(d.cta_url())}" target="_blank" rel="noopener">
   {html.escape(cta_label)}</a>
@@ -4015,10 +4112,11 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
 </body></html>"""
 
 
-def _shelter_ld(label: str, source: str, site: str, slug: str) -> dict:
+def _shelter_ld(label: str, source: str, site: str, slug: str,
+                city: str = None) -> dict:
     """The rescue as an entity, not just a page heading.
 
-    AnimalShelter is the closest schema.org type to an NYC foster-based rescue,
+    AnimalShelter is the closest schema.org type to a foster-based rescue,
     and being specific is what lets an answer engine treat these as
     organizations rather than list items. ``url`` points at the rescue's own
     site because that's the canonical home of the entity — our page describes
@@ -4031,7 +4129,7 @@ def _shelter_ld(label: str, source: str, site: str, slug: str) -> dict:
         "@id": f"{site}/rescue/{slug}#rescue",
         "name": label,
         "url": home or f"{site}/rescue/{slug}",
-        "areaServed": {"@type": "City", "name": "New York City"},
+        "areaServed": {"@type": "City", "name": cities.resolve(city).name},
     }
     if home:
         node["sameAs"] = home
@@ -4051,15 +4149,29 @@ def _rescue_structured_data(label: str, source: str, dogs: List[Dog],
         }
         for i, d in enumerate(dogs[:60], 1)
     ]
+    c = cities.resolve(_city_of(dogs))
+    home_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
+    # /rescues is New York's index and only lists New York's rescues, because a
+    # per-city rescue index is a separate piece of design. So it is only a real
+    # ancestor of a New York rescue; for anywhere else the trail is city → rescue,
+    # rather than routing a visitor through another city's list.
+    crumbs = [{"@type": "ListItem", "position": 1,
+               "name": f"Adopt a dog in {c.short}", "item": home_url}]
+    if c.code == cities.DEFAULT_CITY:
+        crumbs.append({"@type": "ListItem", "position": 2,
+                       "name": f"{c.short} dog rescues",
+                       "item": f"{site}/rescues"})
+    crumbs.append({"@type": "ListItem", "position": len(crumbs) + 1,
+                   "name": label})
     return {
         "@context": "https://schema.org",
         "@graph": [
-            _shelter_ld(label, source, site, slug),
+            _shelter_ld(label, source, site, slug, c.code),
             {
                 "@type": "CollectionPage",
                 "@id": f"{site}/rescue/{slug}",
                 "url": f"{site}/rescue/{slug}",
-                "name": f"{label} — adoptable dogs in NYC",
+                "name": f"{label} — adoptable dogs in {c.short}",
                 "description": desc,
                 "isPartOf": {"@id": f"{site}/#website"},
                 "about": {"@id": f"{site}/rescue/{slug}#rescue"},
@@ -4072,13 +4184,7 @@ def _rescue_structured_data(label: str, source: str, dogs: List[Dog],
             },
             {
                 "@type": "BreadcrumbList",
-                "itemListElement": [
-                    {"@type": "ListItem", "position": 1, "name": "Adopt a dog in NYC",
-                     "item": f"{site}/"},
-                    {"@type": "ListItem", "position": 2, "name": "NYC dog rescues",
-                     "item": f"{site}/rescues"},
-                    {"@type": "ListItem", "position": 3, "name": label},
-                ],
+                "itemListElement": crumbs,
             },
         ],
     }
@@ -4088,10 +4194,11 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     """One page per rescue — "muddy paws rescue dogs" is a real search."""
     slug = slugify(label)
     source = dogs[0].source if dogs else ""
-    title = f"{label} — adoptable dogs in NYC | LUVD"
+    c = cities.resolve(_city_of(dogs))
+    title = f"{label} — adoptable dogs in {c.short} | LUVD"
     n = len(dogs)
     desc = (f"All {n} dog{'' if n == 1 else 's'} currently available for "
-            f"adoption from {label} in New York City, updated daily.")
+            f"adoption from {label} in {c.name}, updated daily.")
     rows = "".join(
         f'<li><a href="{html.escape(dog_path(d))}">{html.escape(d.name)}</a>'
         f'<span class="b"> — {html.escape(d.breed or "Mixed breed")}'
@@ -4105,6 +4212,11 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     out = (f'<a class="out" href="{html.escape(home)}" target="_blank"'
            f' rel="noopener">Visit {html.escape(label)}&rsquo;s own site &rarr;</a>'
            if home else "")
+    # Only New York has a rescue index today, so only New York's rescue pages
+    # link to one. Sending an LA visitor to a list of New York rescues would be
+    # worse than not offering the link.
+    rescues_link = (f'<a href="/rescues">All {c.short} rescues on LUVD</a> &middot;'
+                    if c.code == cities.DEFAULT_CITY else "")
     ld = json.dumps(_rescue_structured_data(label, source, dogs, site, slug, desc))
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -4116,14 +4228,14 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
 <link rel="icon" href="/favicon.png" type="image/png">
 <script type="application/ld+json">{ld}</script>
 <style>{_STATIC_PAGE_CSS}</style></head><body>
-<a class="back" href="/">&larr; All adoptable dogs in NYC</a>
+<a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>
 <h1>{html.escape(label)}</h1>
 <p class="lead">{html.escape(desc)}</p>
 {out}
 <ul class="dogs">{rows}</ul>
 <footer>
-  <a href="/rescues">All NYC rescues on LUVD</a> &middot;
-  <a href="/">Today&rsquo;s new dogs</a>
+  {rescues_link}
+  <a href="{c.path}">Today&rsquo;s new dogs</a>
 </footer>
 </body></html>"""
 
@@ -4308,58 +4420,176 @@ def _not_found_page(dogs: List[Dog], site: str) -> str:
 </body></html>"""
 
 
-def write(dated, for_date: date = None) -> Path:
+def _owned_slugs(by_city: dict) -> set:
+    """Every rescue slug belonging to the cities in this pass.
+
+    From the registry rather than from the dogs on hand, so it covers a rescue
+    that returned nothing this morning as well as one that returned fifty.
+    """
+    from sources.registry import sources_for_city
+    slugs = set()
+    for code in by_city:
+        for source in sources_for_city(code):
+            slugs.add(slugify(source.label))
+    # A rescue in the roster that the registry doesn't know about — a source
+    # renamed between runs — would otherwise keep its old pages forever.
+    for dated in by_city.values():
+        for _, group in (dated or ()):
+            for d in group:
+                slugs.add(rescue_slug(d))
+    return slugs
+
+
+def _carried_sitemap_urls(site: str, owned: set, written_paths: set) -> list:
+    """URLs from the previous sitemap that this pass is not responsible for.
+
+    A city left out because its scrapers failed still exists and is still
+    serving, so its URLs have to stay in the sitemap. Dropping them would tell
+    Google that half the site had been removed, on the strength of one bad
+    morning at one rescue.
+    """
+    previous = OUT_DIR / "sitemap.xml"
+    if not previous.exists():
+        return []
+    try:
+        raw = previous.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    keep = []
+    for url in re.findall(r"<loc>(.*?)</loc>", raw):
+        url = html.unescape(url)
+        path = url[len(site):] if url.startswith(site) else url
+        if path in written_paths:
+            continue
+        slug = ""
+        if path.startswith("/dog/"):
+            slug = path.split("/")[2] if len(path.split("/")) > 2 else ""
+        elif path.startswith("/rescue/"):
+            slug = path[len("/rescue/"):]
+        if slug and slug in owned:
+            continue                      # this pass has rewritten it, or dropped it
+        keep.append(url)
+    return keep
+
+
+def write(pages, for_date: date = None) -> Path:
+    """Publish every city in ONE pass. `pages` is {city_code: dated}.
+
+    One pass is not a convenience, it is the requirement. `public/dog/` and
+    `public/rescue/` are trees shared by every city and they are cleared here, so
+    that adopted dogs stop returning 200 with a stale listing. Calling this once
+    per city would therefore have each city delete the previous city's dog pages
+    — and each call would publish a `sitemap.xml` describing only its own half of
+    the site, telling Google the other half had ceased to exist.
+
+    So: the shared work happens exactly once, from the union of every city. The
+    per-city work — the city's own page, its dogs' pages, its rescues' pages —
+    happens per city, after the single clear.
+
+    Only the cities actually passed in are touched. A city whose scrapers all
+    failed is left out by its caller, and then nothing here can delete its pages
+    or drop its URLs from the sitemap — the point being that one city's bad
+    morning must not be able to take the other city's page down with it.
+
+    A bare `dated` list is still accepted and means the default city, so any
+    caller written before cities keeps working.
+    """
     for_date = for_date or date.today()
     site = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
+    if isinstance(pages, dict):
+        by_city = {cities.canon(k) or cities.DEFAULT_CITY: v
+                   for k, v in pages.items()}
+    else:
+        by_city = {cities.DEFAULT_CITY: pages}
     OUT_DIR.mkdir(exist_ok=True)
-    out = OUT_DIR / "index.html"
-    out.write_text(render(dated, for_date), encoding="utf-8")
 
-    flat = [d for _, group in dated for d in group]
-
-    # Static per-dog and per-rescue pages. Real URLs Google can index —
-    # hash fragments cannot be. Stale files are cleared so adopted dogs stop
-    # returning 200 with an out-of-date listing.
-    for sub in ("dog", "rescue"):
-        target = OUT_DIR / sub
-        if target.exists():
-            shutil.rmtree(target)
-
-    for d in flat:
-        path = OUT_DIR / dog_path(d).lstrip("/")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.with_suffix(".html").write_text(_dog_page(d, site, for_date),
-                                             encoding="utf-8")
-
-    by_rescue = {}
-    for d in flat:
-        by_rescue.setdefault(d.source_label, []).append(d)
+    # Clear the stale dog and rescue pages of the cities being written, and only
+    # those. Scoped per rescue rather than by deleting public/dog/ wholesale,
+    # because that tree is shared: wiping it would delete the other city's pages,
+    # and it is exactly the kind of deletion that looks fine until the morning a
+    # city is missing from the site.
+    #
+    # Taken from the registry, not from today's dogs, so a rescue that listed
+    # nothing this morning still has its old pages cleared — that is the original
+    # job of the clear, stopping an adopted dog from answering 200 forever.
+    owned = _owned_slugs(by_city)
+    for slug in owned:
+        d = OUT_DIR / "dog" / slug
+        if d.exists():
+            shutil.rmtree(d)
+        r = OUT_DIR / "rescue" / f"{slug}.html"
+        if r.exists():
+            r.unlink()
     rdir = OUT_DIR / "rescue"
     rdir.mkdir(parents=True, exist_ok=True)
-    for label, dogs in by_rescue.items():
-        (rdir / f"{slugify(label)}.html").write_text(
-            _rescue_page(label, dogs, site), encoding="utf-8")
 
-    # The hub the footer points at, and the page that answers "which rescues?".
-    (OUT_DIR / "rescues.html").write_text(
-        _rescues_page(by_rescue, site, for_date), encoding="utf-8")
+    primary, first_written = None, None
+    all_flat, urls, per_city = [], [], []
+    for code, dated in by_city.items():
+        c = cities.resolve(code)
+        out = OUT_DIR / c.file
+        out.write_text(render(dated, for_date, c.code), encoding="utf-8")
+        first_written = first_written or out
+        if code == cities.DEFAULT_CITY:
+            primary = out
 
-    # Sitemap lists every real URL.
-    urls = [f"{site}/", f"{site}/rescues"] \
-           + [f"{site}/rescue/{slugify(l)}" for l in by_rescue] \
-           + [f"{site}{dog_path(d)}" for d in flat]
+        flat = [d for _, group in dated for d in group]
+        all_flat.extend(flat)
+
+        for d in flat:
+            path = OUT_DIR / dog_path(d).lstrip("/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.with_suffix(".html").write_text(_dog_page(d, site, for_date),
+                                                 encoding="utf-8")
+
+        by_rescue = {}
+        for d in flat:
+            by_rescue.setdefault(d.source_label, []).append(d)
+        for label, dogs in by_rescue.items():
+            (rdir / f"{slugify(label)}.html").write_text(
+                _rescue_page(label, dogs, site), encoding="utf-8")
+
+        # The rescue index is the default city's, and lists only its rescues: a
+        # per-city rescue index is a separate piece of design, and quietly mixing
+        # two cities' rescues into one page titled "NYC dog rescues" would be
+        # worse than waiting for it.
+        # A city with no dogs is rendered noindex, so it must not also be
+        # submitted in the sitemap — that combination asks Google to crawl a page
+        # and then tells it not to keep it.
+        if flat:
+            urls.append(f"{site}/" if c.path == "/" else f"{site}{c.path}")
+        if code == cities.DEFAULT_CITY:
+            (OUT_DIR / "rescues.html").write_text(
+                _rescues_page(by_rescue, site, for_date), encoding="utf-8")
+            urls.append(f"{site}/rescues")
+        urls += [f"{site}/rescue/{slugify(l)}" for l in by_rescue]
+        urls += [f"{site}{dog_path(d)}" for d in flat]
+
+        per_city.append(f"{c.code}: {len(flat)} dogs, {len(by_rescue)} rescues")
+
+    # One sitemap, from the union of every city in this pass plus whatever the
+    # last one published for a city that is not. A per-city sitemap would be a
+    # sitemap announcing that the other city's URLs are gone.
+    written_paths = {u[len(site):] or "/" for u in urls}
+    carried = _carried_sitemap_urls(site, owned, written_paths)
+    if carried:
+        print(f"  sitemap: carrying {len(carried)} URL(s) from the last run "
+              f"for cities not in this pass")
     today_iso = for_date.isoformat()
     body = "".join(
         f"<url><loc>{html.escape(u)}</loc><lastmod>{today_iso}</lastmod>"
-        f"<changefreq>daily</changefreq></url>" for u in urls)
+        f"<changefreq>daily</changefreq></url>" for u in urls + carried)
     (OUT_DIR / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         f"{body}</urlset>", encoding="utf-8")
 
-    (OUT_DIR / "404.html").write_text(_not_found_page(flat, site),
+    # One 404, from every city's dogs: a dead link can be arrived at from
+    # anywhere, and the tiles on it are "here is something else" rather than a
+    # claim about a city.
+    (OUT_DIR / "404.html").write_text(_not_found_page(all_flat, site),
                                       encoding="utf-8")
 
-    print(f"  {len(flat)} dog pages, {len(by_rescue)} rescue pages, "
+    print(f"  {len(all_flat)} dog pages ({'; '.join(per_city)}), "
           f"/rescues, sitemap, 404")
-    return out
+    return primary or first_written

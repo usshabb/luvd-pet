@@ -7,6 +7,7 @@ get it wrong, so it happens once, here, after fetch.
 import re
 from typing import List
 
+import cities
 from sources.base import Dog
 
 # Chips are for *traits of the dog*. Shelter contact details, colors and other
@@ -32,8 +33,10 @@ _AGE_TIDY = [
 ]
 
 # Verbose location strings like "Sean Casey Animal Rescue - Windsor Terrace,
-# Brooklyn" repeat the rescue name we already show. Reduce to a borough/city.
-_BOROUGHS = ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"]
+# Brooklyn" repeat the rescue name we already show. Reduce to a neighbourhood or
+# city, using the dog's own city's list — New York's boroughs are not useful for
+# a dog in Los Angeles, and matching against every city's areas at once would let
+# one city's place name rewrite another's.
 
 
 def _tidy_age(age: str) -> str:
@@ -43,18 +46,19 @@ def _tidy_age(age: str) -> str:
     return a.strip(" ,")
 
 
-def _tidy_location(loc: str, source_label: str) -> str:
+def _tidy_location(loc: str, source_label: str, city: str = None) -> str:
     l = (loc or "").strip()
     if not l:
         return ""
+    c = cities.resolve(city)
     # Strip a leading "<Rescue Name> - " prefix.
     if source_label and l.lower().startswith(source_label.lower()):
         l = l[len(source_label):].lstrip(" -–—,")
-    for b in _BOROUGHS:
-        if b.lower() in l.lower():
-            return f"{b}, NY"
-    if l.lower() in ("new york", "nyc", "new york city"):
-        return "New York, NY"
+    for area in c.areas:
+        if area.lower() in l.lower():
+            return f"{area}, {c.state}"
+    if l.lower() in c.aliases:
+        return c.location
     return l
 
 
@@ -131,7 +135,7 @@ def normalize(dogs: List[Dog]) -> List[Dog]:
         d.sex = (d.sex or "").strip().rstrip(".").capitalize()
         d.breed = re.sub(r"\s+", " ", (d.breed or "")).strip()
         d.weight = _tidy_weight(d.weight)
-        d.location = _tidy_location(d.location, d.source_label)
+        d.location = _tidy_location(d.location, d.source_label, d.city)
         d.attributes = _tidy_chips(d.attributes)
         # Grouped by kind so the colours read as blocks instead of confetti.
         order = {"good": 0, "caution": 1, "info": 2}

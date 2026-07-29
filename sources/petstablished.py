@@ -25,6 +25,8 @@ from typing import List, Optional
 
 import requests
 
+import cities
+
 from .base import Dog, Source, clean_text
 from .dates import listing_date
 
@@ -304,9 +306,14 @@ class PetstablishedSource(Source):
         if status and status not in _ADOPTABLE_STATUSES:
             return None
 
-        city = (rec.get("city") or "").strip()
+        # Petstablished is not one city's platform — rescues in both New York and
+        # Los Angeles list here — so a blank address falls back to the rescue's
+        # own city rather than to New York. Hardcoding it would print
+        # "New York, NY" under a dog sitting in a foster home in Studio City.
+        rec_city = (rec.get("city") or "").strip()
         state = (rec.get("state") or "").strip().upper()
-        location = ", ".join(p for p in (city, state) if p) or "New York, NY"
+        location = (", ".join(p for p in (rec_city, state) if p)
+                    or cities.resolve(self.city).location)
 
         return Dog(
             id=f"{self.name}:{pet_id}",
