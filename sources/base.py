@@ -11,6 +11,8 @@ listings are preferred; Petfinder is the fallback.
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from cities import DEFAULT_CITY
+
 
 @dataclass
 class Dog:
@@ -49,6 +51,18 @@ class Dog:
     program_note: str = ""        # what the adopter is committing to
 
     # --- filled in by the pipeline, not by sources ---
+    # Which city's shelters this dog belongs to, as a cities.py code. Stamped in
+    # check.py's collect() from the source's own `city`, so a scraper only sets
+    # it when one rescue places dogs in more than one city.
+    #
+    # Deliberately NOT Dog.location: that is free-text modal detail and it is
+    # New-York-baked, several sources falling back to "New York, NY" when the
+    # feed has no city (sources/rescues/animalhaven.py, muddypaws.py,
+    # petconnect.py, petstablished.py, waggytail.py) and normalize.py rewriting
+    # anything New-York-shaped into a borough. A Los Angeles rescue on the
+    # Petstablished platform would come out reading "New York, NY", so location
+    # cannot be the thing that decides who gets mailed.
+    city: str = ""
     first_seen: str = ""          # YYYY-MM-DD the dog first appeared on LUVD
     listed_since: str = ""        # YYYY-MM-DD the RESCUE published it, when known
     scores: dict = field(default_factory=dict)      # energy/apartment/experience, 1-5
@@ -105,6 +119,11 @@ class Source:
     label: str = "Unnamed Rescue"
     priority: int = 100           # lower = checked first / preferred
     adopt_url: str = ""           # rescue's general adopt/contact page
+    # Which city this rescue's dogs belong to, as a cities.py code. Every
+    # existing rescue inherits New York, so adding cities changed none of the
+    # seven scrapers; a new city's scraper sets `city = "LA"` on one line beside
+    # `name` and `label`, where its author is already typing.
+    city: str = DEFAULT_CITY
 
     def fetch(self, prefs: dict) -> List[Dog]:
         raise NotImplementedError

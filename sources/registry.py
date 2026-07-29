@@ -56,6 +56,18 @@ def all_sources() -> List[Source]:
     return sorted(sources, key=lambda s: s.priority)
 
 
+def sources_for_city(city: str) -> List[Source]:
+    """The sources whose dogs belong to one city, in the same priority order.
+
+    A nightly run takes this rather than all_sources(), which is what keeps the
+    cities genuinely separate: Los Angeles shelters cannot appear in, or be
+    deduped against, a New York run. Every source above declares its city on
+    itself (`Source.city`, default NYC), so there is no second lookup table to
+    forget to update — the registry stays the one list.
+    """
+    return [s for s in all_sources() if s.city == city]
+
+
 def direct_sources() -> List[Source]:
     """Everything except a broad city-wide search. Currently every source."""
     return [s for s in all_sources() if s.priority < 900]

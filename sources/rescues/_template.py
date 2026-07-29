@@ -3,6 +3,12 @@
 Fill in `name`, `priority` (0..899, lower = more preferred), `LISTING_URL`,
 and the parsing logic in fetch(). The goal: return a list of Dog objects with a
 STABLE id (so 'already seen' dedup works run-to-run) and at least name + url.
+
+Set `city` to this rescue's city code from cities.py if it is not New York. It
+decides which nightly run fetches the rescue, which city's timeline its dogs
+join, and which subscribers ever see them — a wrong or missing value means a
+whole shelter quietly never reaches anybody. Do not rely on Dog.location for
+this; it is free text and several platforms default it to "New York, NY".
 """
 import requests
 from bs4 import BeautifulSoup
@@ -14,6 +20,7 @@ from ..base import Dog, Source
 class TemplateRescueSource(Source):
     name = "example-rescue"
     priority = 100
+    city = "NYC"                  # a cities.py code; inherited if omitted
     LISTING_URL = "https://example-rescue.org/adoptable-dogs"
 
     def enabled(self, prefs: dict) -> bool:
