@@ -157,6 +157,51 @@ fly secrets set SHEET_WEBHOOK_URL='https://script.google.com/macros/s/.../exec'
 Leave it unset and the mirror is skipped; SQLite on the volume is the source of
 truth either way.
 
+`ADMIN_TOKEN` is the same shape of thing and you have to set it, because the
+operator endpoints fail closed without it:
+
+```bash
+fly secrets set ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
+It gates `/subscribers`, `/report` and `/interest-report`, which until now served
+the subscriber list and the business metrics to anyone who typed the URL. Pass it
+as `?token=...` or an `X-Admin-Token` header:
+
+```bash
+curl -s "https://luvd.com/report?token=$ADMIN_TOKEN"
+curl -s "https://luvd.com/subscribers?token=$ADMIN_TOKEN"   # counts, never addresses
+```
+
+**While it is unset those three answer 404 for everyone, including you.** That is
+deliberate: falling open until someone remembers to configure it is the bug being
+fixed. Nothing on the public site depends on them, so an unset token costs you
+the tools and nothing else. A wrong token also gets 404 rather than 403, so the
+endpoints don't confirm they exist. `/subscribers` returns counts even when
+authenticated — the Google Sheet mirror holds the list, so a leaked token still
+can't dump it.
+
+## Opening a new city
+
+Everything a city is lives in `cities.py`. To open one:
+
+1. Add it to `CITIES` with `live=False` — code, name, the short form the copy
+   uses, state, timezone, coordinates, and the path its page publishes at.
+2. Write its scrapers under `sources/rescues/`, each with `city = "<CODE>"`, and
+   register them in `sources/registry.py`. Give each one a `rescue_contacts.json`
+   entry, and populate `listed_since` from the start — the "Longest waiting" sort
+   depends on it and five NYC scrapers had to be retrofitted for it.
+3. Check it fetches: `python check.py --city <CODE> --dry-run`.
+4. Flip `live=True`. That is the switch that puts it in the header picker, in the
+   sitemap and on the list of cities people can subscribe to, and gives it its
+   own 05:30 run in its own timezone. Nothing before this step is visible.
+5. Deploy. `python cities.py --live` and `--next` show what the container will
+   do.
+
+`live=False` is not a soft launch, it is invisible: no page, no link, no signup.
+Don't flip it before the scrapers work, because the picker link would 404 and the
+sitemap would advertise a page with no dogs on it.
+
 Then:
 
 ```bash

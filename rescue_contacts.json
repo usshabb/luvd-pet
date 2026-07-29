@@ -1,4 +1,12 @@
 {
+  "wagmor": {
+    "label": "Wagmor Pets",
+    "method": "application",
+    "apply_url": "https://www.wagmorpets.org/adoption-application/",
+    "contact_url": "https://www.wagmorpets.org/contact-us/",
+    "evidence": "https://www.wagmorpets.org/available-dogs/ - 'View available dogs below, then click the blue button to fill out an adoption application.' https://www.wagmorpets.org/adoption-application/ - 'There are several steps in this form. You must complete all steps to submit your application.' Seven sections, from About You through References. No email address is published anywhere on the site: https://www.wagmorpets.org/contact-us/ is a web form with an 'Adoption Questions' category, alongside a phone number (818-691-3466) and the shelter address, 11939 Ventura Blvd, Studio City CA 91604. Verified 2026-07-29.",
+    "city": "LA"
+  },
   "muddypaws": {
     "label": "Muddy Paws Rescue",
     "method": "application",
