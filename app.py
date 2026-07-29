@@ -104,6 +104,30 @@ def _welcome_in_background(email: str):
                            email, e)
 
 
+def _sheet_sync_in_background():
+    """Mirror the subscribers table to the backup Google Sheet.
+
+    Same shape as the welcome email: the row is already committed to SQLite
+    before this runs, so a failed or skipped sync can never lose a signup —
+    the nightly run re-mirrors the full table and heals any gap.
+    """
+    import sheet_sync
+
+    if not sheet_sync.configured():
+        return
+
+    def run():
+        try:
+            sheet_sync.sync_subscribers()
+        except Exception as e:
+            app.logger.warning("sheet sync failed: %s: %s", type(e).__name__, e)
+
+    try:
+        threading.Thread(target=run, name="sheet-sync", daemon=True).start()
+    except Exception as e:
+        app.logger.warning("could not start sheet sync thread: %s", e)
+
+
 @app.route("/subscribe", methods=["POST"])
 def subscribe():
     data = request.get_json(silent=True) or request.form
@@ -114,6 +138,7 @@ def subscribe():
     # so re-submitting an active address doesn't mail them again.
     if db.add_subscriber(email):
         _welcome_in_background(email)
+        _sheet_sync_in_background()
     return jsonify({"ok": True})
 
 
@@ -128,6 +153,7 @@ def unsubscribe():
     if not email or not _hmac.compare_digest(token, emailer.unsub_token(email)):
         return ("This unsubscribe link isn't valid.", 400)
     db.deactivate_subscriber(email)
+    _sheet_sync_in_background()
     if request.method == "POST":
         return jsonify({"ok": True})
     return f"""<!doctype html><meta charset="utf-8">

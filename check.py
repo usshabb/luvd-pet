@@ -244,4 +244,15 @@ def run(dry_run=False):
 
 
 if __name__ == "__main__":
-    run(dry_run="--dry-run" in sys.argv)
+    dry = "--dry-run" in sys.argv
+    run(dry_run=dry)
+    if not dry:
+        # Nightly re-mirror of the subscriber backup sheet, so a webhook that
+        # failed at signup time heals within a day. Never fails the scrape.
+        import sheet_sync
+        if sheet_sync.configured():
+            try:
+                sheet_sync.sync_subscribers()
+                print("Subscriber sheet mirrored.")
+            except Exception as e:
+                print(f"Sheet sync failed: {type(e).__name__}: {e}")
