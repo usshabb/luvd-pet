@@ -11,6 +11,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+import cities
 import db
 
 PUBLIC = Path(__file__).parent / "public"
@@ -68,6 +69,38 @@ def _not_found():
 @app.errorhandler(404)
 def handle_404(_):
     return _not_found()
+
+
+def _admin_ok() -> bool:
+    """Is this request carrying the operator token?
+
+    `/subscribers`, `/report` and `/interest-report` are operator tools that were
+    reachable by anyone who typed the URL — the subscriber list was public JSON.
+    robots.txt "protected" them with Disallow, which is worse than nothing: it is
+    a public file that advertises the paths.
+
+    Fails closed. No ADMIN_TOKEN set means nobody is an operator, because the
+    alternative — falling open until someone remembers to configure it — is the
+    exact bug being fixed here. compare_digest, not ==, so the check cannot be
+    walked character by character with a timer.
+    """
+    import hmac as _hmac
+    expected = os.getenv("ADMIN_TOKEN") or ""
+    if not expected:
+        return False
+    got = (request.args.get("token") or request.headers.get("X-Admin-Token")
+           or "")
+    return _hmac.compare_digest(got, expected)
+
+
+def _admin_gate():
+    """404 for anyone without the token, or None to proceed.
+
+    404 rather than 403: a 403 confirms the endpoint exists, which tells someone
+    probing exactly where to point a token guesser. As far as the internet is
+    concerned these routes are not here.
+    """
+    return None if _admin_ok() else _not_found()
 
 
 def _in_background(label: str, work):
@@ -141,9 +174,28 @@ def subscribe():
     email = (data.get("email") or "").strip().lower()
     if not EMAIL_RE.match(email):
         return jsonify({"ok": False, "error": "invalid email"}), 400
-    # True only for a new address or someone opting back in after unsubscribing,
-    # so re-submitting an active address doesn't mail them again.
-    if db.add_subscriber(email):
+    # You sign up for one city at a time. The page does not send one yet, so the
+    # absent case is the live path and it has to mean New York — which is both
+    # the status quo and the only answer that can never file someone under a
+    # list that does not exist.
+    raw_city = (data.get("city") or "").strip()
+    city = cities.DEFAULT_CITY if not raw_city else cities.canon(raw_city)
+    # Never store free text. This value becomes a digest segment key and a tab
+    # name in the backup spreadsheet, so an unrecognised one is a group of people
+    # nobody ever mails, and possibly a sync that fails outright.
+    if not city:
+        app.logger.info("subscribe refused unknown city %r", raw_city[:40])
+        return jsonify({"ok": False, "error": "unknown city"}), 400
+    # A registered but not-yet-live city would take the signup and then never
+    # send anything, because nothing scrapes it and no nightly run covers it.
+    # Refusing is the honest answer; `live = True` in cities.py is what opens it.
+    if not cities.is_live(city):
+        app.logger.info("subscribe refused city %s — not live yet", city)
+        return jsonify({"ok": False, "error": "city not open yet"}), 400
+    # True only for a new address, someone opting back in after unsubscribing, or
+    # an existing subscriber adding a city they were not on — so re-submitting an
+    # active address for a city they already have doesn't mail them again.
+    if db.add_subscriber(email, city):
         _mail_in_background("welcome", email)
         _sheet_sync_in_background()
     return jsonify({"ok": True})
@@ -298,7 +350,10 @@ def outbound():
 
 @app.route("/report")
 def report():
-    """The weekly numbers, on demand."""
+    """The weekly numbers, on demand. Operator only."""
+    denied = _admin_gate()
+    if denied:
+        return denied
     return jsonify(db.weekly_report(int(request.args.get("days", 7))))
 
 
@@ -319,14 +374,42 @@ def interest():
 
 @app.route("/interest-report")
 def interest_report():
-    """What people keep asking for — read this before picking city two."""
+    """What people keep asking for — read this before picking city two.
+
+    Aggregates only, no addresses, so this was never the leak — but it is demand
+    data about where the product goes next, and that is not the public's.
+    """
+    denied = _admin_gate()
+    if denied:
+        return denied
     return jsonify(db.interest_counts())
 
 
 @app.route("/subscribers")
 def subscribers():
-    """Quick local check of who's signed up."""
-    return jsonify(db.list_subscribers())
+    """How many people are signed up, per city. Operator only.
+
+    Counts, never addresses — not even with a valid token. This used to return
+    every active subscriber's email as public JSON. The offsite copy of the list
+    is the Google Sheet mirror, so nothing needs the addresses here, and keeping
+    them out means a leaked token still cannot dump the list.
+    """
+    denied = _admin_gate()
+    if denied:
+        return denied
+    return jsonify({"total": len(db.list_subscribers()),
+                    "by_city": db.subscriber_city_counts()})
+
+
+@app.route("/cities")
+def cities_endpoint():
+    """What the server thinks the cities are, and which ones are open.
+
+    The only way to see from outside whether a city is live, which is the switch
+    that decides what a nightly run covers and what /subscribe accepts.
+    """
+    return jsonify([{"code": c.code, "name": c.name, "tz": c.tz, "live": c.live}
+                    for c in cities.CITIES.values()])
 
 
 if __name__ == "__main__":
