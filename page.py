@@ -549,7 +549,8 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
          "first. LUVD links you to whichever step that rescue actually requires."),
         (f"Which {c.short} rescues does LUVD cover?",
          "LUVD currently follows " + ", ".join(rescues) + ". New arrivals from "
-         "every one of them are collected each morning."),
+         + ("every one of them are" if len(rescues) > 1 else "them are")
+         + " collected each morning."),
         (f"How much does it cost to adopt a dog in {c.name}?",
          "Adoption fees are set by each rescue and typically range from about "
          "$150 to $500, which usually covers spay/neuter, vaccinations and "
@@ -677,7 +678,8 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     page_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
     rescues = sorted({d.source_label for d in flat})
     meta_desc = (
-        f"{total} adoptable dogs from {len(rescues)} {c.name} rescues, "
+        f"{total} adoptable dogs from {len(rescues)} {c.name} "
+        f"rescue{'' if len(rescues) == 1 else 's'}, "
         f"updated every morning. Browse today's new arrivals with energy level, "
         f"apartment fit and breed guidance, then contact the rescue directly."
     )
