@@ -120,6 +120,18 @@ ALERT_EMAIL=you@example.com
 LUVD_DB=/data/dogfinder.db
 ```
 
+`SHEET_WEBHOOK_URL` is optional and deliberately left out of the file above: it
+mirrors the subscribers table to a Google Sheet (see `sheet_webhook.gs`), and
+the URL is itself the credential, so on Fly set it as a secret rather than
+putting it in `.env`:
+
+```bash
+fly secrets set SHEET_WEBHOOK_URL='https://script.google.com/macros/s/.../exec'
+```
+
+Leave it unset and the mirror is skipped; SQLite on the volume is the source of
+truth either way.
+
 Then:
 
 ```bash

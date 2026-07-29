@@ -63,6 +63,7 @@ Fill in `.env`:
 - `MANDRILL_API_KEY` — Mandrill (Mailchimp Transactional); without it nothing is sent
 - `SITE_URL` — public URL of the page, used in emails
 - `ANTHROPIC_API_KEY` — optional; unlocks LLM-graded scores instead of heuristics
+- `SHEET_WEBHOOK_URL` — optional; mirrors subscribers to a Google Sheet (see below)
 
 ## Run
 
@@ -84,6 +85,27 @@ The real morning run: rebuilds the page, records what was shown, emails subscrib
 
 Serves the page at http://127.0.0.1:8000 and accepts subscribe POSTs.
 `GET /subscribers` lists signups.
+
+## The subscriber list, and its backup
+
+SQLite on the Fly volume is the source of truth for `subscribers`. `sheet_sync.py`
+additionally mirrors the table to a Google Sheet as an offsite backup, so the
+list survives losing the volume.
+
+The mirror is a mirror, never a store. Every sync POSTs the *whole* table to the
+Apps Script webhook in `sheet_webhook.gs`, which rewrites the sheet from scratch
+— so a missed webhook needs no append/dedup bookkeeping, it just heals on the
+next sync. It runs on signup, on unsubscribe, and again nightly at the end of
+`check.py`, which is the sweep that closes any gap left by a failed call.
+
+Unset `SHEET_WEBHOOK_URL` and the mirror is skipped entirely; nothing else
+changes. The URL is the only credential, so it lives in Fly secrets.
+
+Signup and unsubscribe each have two side effects — the transactional email and
+this mirror — and both run on `app.py`'s one background-thread helper
+(`_in_background`). Neither can hold a gunicorn worker, and neither can fail the
+request or suppress the other: the database write is already committed before
+either starts.
 
 ## The three emails
 

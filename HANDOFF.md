@@ -28,6 +28,7 @@ failed certificate attempts.
 | `og_image.py` | Rebuilds the 1200×630 social card nightly. |
 | `montage.py` | Rebuilds the welcome email's four-polaroid montage nightly. |
 | `imaging.py` | The Pillow helpers those two share — font, fetch, crop-to-fill. |
+| `sheet_sync.py` | Mirrors the `subscribers` table to a Google Sheet as an offsite backup. Never a store. |
 | `db.py` | SQLite. **The only stateful thing here.** |
 
 Three containers: `web` (gunicorn), `cron` (sleeps until 05:30 ET), `caddy` (TLS).
@@ -48,6 +49,12 @@ docker run --rm -v luvd_luvd-data:/d -v $PWD:/b alpine \
   tar czf /b/luvd-backup-$(date +%F).tgz -C /d .
 ```
 
+`subscribers` is the one table with a second copy: `sheet_sync.py` mirrors it to
+a Google Sheet on every signup, every unsubscribe, and again at the end of the
+nightly run. That covers the list, and only the list — `first_seen` and
+`dog_views` still live nowhere but the volume, so the tarball above is still the
+backup that matters.
+
 ## Environment
 
 Copy `.env.example` → `.env`. Required to be fully live:
@@ -59,6 +66,7 @@ Copy `.env.example` → `.env`. Required to be fully live:
 | `MANDRILL_API_KEY` | **No email sends at all** (signups still captured) |
 | `ALERT_EMAIL` | Scraper failures are silent |
 | `ANTHROPIC_API_KEY` | Optional — upgrades breed-guide text |
+| `SHEET_WEBHOOK_URL` | Optional — no subscriber sheet mirror; SQLite is unaffected. Set it as a Fly secret, not in `.env`: the URL is the credential |
 
 ## Adding keys after launch
 
@@ -670,6 +678,30 @@ across a dozen headings each announcing "1 dog".
   dates off `America/New_York`.
 - **Dogs are never deleted from the page when they gain a photo or change** —
   only when the rescue stops listing them, which means adopted.
+- **Signup and unsubscribe have two independent side effects, and both go
+  through `app.py`'s one `_in_background()` helper.** The transactional email
+  and the subscriber sheet mirror are separate features that happen to hang off
+  the same two endpoints. They share the helper on purpose: each needs the same
+  two guarantees, and writing them twice is how one eventually loses one. The
+  invariants, in order of how much they cost to break:
+  - **Neither may run on the request thread.** `send_email()` allows itself 30
+    seconds and `sheet_sync` 30 more, against two gunicorn workers. A form post
+    that waits on either can stall the site.
+  - **Neither may fail the request, and neither may suppress the other.** The
+    database write is committed before either starts, so every failure past
+    that point is logged and dropped. This matters most on unsubscribe: leaving
+    is a compliance promise and cannot be made to wait on, or fail because of,
+    a third-party API.
+  - **Both are gated on the database write's return value, not on the
+    request.** `add_subscriber()` returns whether a welcome is owed and
+    `deactivate_subscriber()` whether a row actually went inactive; both claim
+    that in the write itself rather than a read-then-write, so two simultaneous
+    posts can only produce one. That single test is what makes the welcome
+    arrive exactly once *and* keeps the mirror from re-posting a table that
+    didn't change.
+
+  If you add a third side effect here, hang it off the same helper and the same
+  return value. Do not inline it into the handler.
 - **A program's terms sit above the apply button, not in the bio.** Korean K9's
   foster-to-adopt dogs are a 7-day trial on a dog flying in from South Korea. The
   chip alone would read as a feature; the sentence next to the button is what
