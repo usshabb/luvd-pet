@@ -487,17 +487,26 @@ def _montage() -> str:
     block remote images by default and this one carries no link and no
     information. It says what the picture is, so it reads as a described image
     rather than a hole.
+
+    Both dimensions come from montage.DISPLAY_* rather than being written out
+    here, because the canvas carries bleed around the polaroids so their shadows
+    are not clipped: the file is 1080x450 for a 504x210 box, and a width guessed
+    from the old aspect ratio would squash it. Outlook uses the attributes and
+    ignores the CSS, so the attributes have to be right on their own — and the
+    CSS keeps height:auto so a phone narrower than 504px scales it rather than
+    holding a fixed height against a fluid width.
     """
     try:
         import montage
         if not montage.exists():
             return ""
         src = f"{_abs('/' + montage.FILENAME)}?v={montage.cache_tag()}"
+        w, h = montage.DISPLAY_W, montage.DISPLAY_H
     except Exception:
         return ""
-    return (f'<img src="{html.escape(src)}" width="504" alt="Polaroid '
-            f'snapshots of dogs waiting at New York City rescues" '
-            f'style="width:100%;max-width:504px;height:auto;display:block;'
+    return (f'<img src="{html.escape(src)}" width="{w}" height="{h}" '
+            f'alt="Polaroid snapshots of dogs waiting at New York City rescues" '
+            f'style="width:100%;max-width:{w}px;height:auto;display:block;'
             f'margin:24px auto 0;border:0;font:400 14px -apple-system,Segoe UI,'
             f'Roboto,sans-serif;color:#6e6e73;text-align:center;">')
 

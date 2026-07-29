@@ -128,19 +128,57 @@ left, not the lock — it could be dropped and the guarantee would still hold.
 
 **The welcome's montage is a pre-rendered image, and the email checks it
 exists before naming it.** `montage.py` composites four dog photos into
-`public/welcome-montage.jpg` — 1000×392, ~73KB, tilted polaroid frames with
+`public/welcome-montage.jpg` — 1080×450, ~82KB, tilted polaroid frames with
 each dog's name in the bottom edge — and `check.py` rebuilds it every night
 beside the share card, from dogs currently listed, so somebody subscribing
 today sees dogs actually waiting. Like the share card it is **never fatal**: a
 failure leaves last night's file in place and the run carries on.
+
+**The canvas is deliberately bigger than the polaroids, and it has to stay that
+way.** It was 1000×392, which is roughly what the four cards measure, and the
+result was that every drop shadow was sliced off square by the edge of the JPEG
+— visible as a flat grey line across the top and bottom of the picture in a real
+send. Two things put ink outside the upright frame and both are easy to
+under-count. Rotating a 282×327 card by 5.5° swings its bounding box out to
+314×353. The shadow then adds its blur's reach on every side of *that*, plus its
+7px downward offset at the bottom. Together that is 29px past the left and right
+of the old canvas, 21px past the top and 14px past the bottom.
+
+`montage.py` now measures this instead of allowing for it by hand: `_ink_box()`
+walks the rotated cards and returns the box they and their shadows really cover,
+and `build()` centres that in the canvas, so nudging `LAYOUT` cannot push a
+shadow off the edge again. The blur's reach comes from `_blur_reach()`, which is
+worth knowing about — `ImageFilter.GaussianBlur` is not a convolution but three
+box blurs sized from the sigma, so its kernel has **finite support** and 32px at
+sigma 11 is a hard bound rather than a 3-sigma guess. The shadow is also blurred
+on its own padded canvas now; blurring it at the size of the card clamped the
+filter at the border, so the falloff never happened and each shadow ended in a
+straight line down the side of its polaroid.
+
+*Why it bleeds to `#ffffff` exactly:* a JPEG has no transparency, so whatever
+fills the new margin is what the reader sees. The montage sits inside
+`emailer`'s `.card`, which is `background:#fff`, so `CARD_BG` must be
+`(255, 255, 255)` and nothing near it — the `#fbfbfd` of the body around the
+card is the wrong white, and a montage bleeding to it would show a visible
+rectangle. Verified after a rebuild by checking the outermost pixels: the whole
+20px band on all four sides comes out exactly `#ffffff`, and the first pixel
+that deviates by even 1/255 is 23–24px in.
+
+*Why 1080×450 and not the ink box plus a margin:* the email needs whole numbers
+it can declare. 1080×450 is 12:5, so it displays at exactly 504×210 with nothing
+rounded, and 504 is the card's full content width. `emailer._montage()` imports
+`montage.DISPLAY_W` and `DISPLAY_H` rather than repeating them, because Outlook
+uses the `width`/`height` attributes and ignores the CSS — a stale pair there
+stretches the picture. The CSS keeps `height:auto` so a phone narrower than
+504px scales it instead of holding a fixed height against a fluid width.
 
 *Why an image and not HTML:* email cannot rotate an element or lay text over a
 photo with any reliability — Outlook drops CSS transforms outright — so an HTML
 version would collapse into the stacked photo-and-caption grid the digest
 already has. One flat file renders identically everywhere.
 
-*Why four:* the email displays it at 504px, so each photo lands at about 129px,
-and about 77px on a 300px-wide phone card. Five in one row takes that to 60px.
+*Why four:* the email displays it at 504px, so each photo lands at about 116px,
+and about 69px on a 300px-wide phone card. Five in one row takes that to 55px.
 Two rows of smaller cards was the first attempt and it was worse: the lower row
 sits on the upper row's captions, and clearing them makes the image 740px tall.
 
@@ -154,7 +192,7 @@ with an unreadable roster.
 *Why `?v=<mtime date>` on a stable filename:* Gmail and Outlook.com proxy and
 cache remote images by URL, so a fixed name whose contents change nightly would
 serve subscribers a montage from weeks ago. Dating the filename would beat the
-cache too, but leaves ~73KB per day on the volume forever and makes the email
+cache too, but leaves ~82KB per day on the volume forever and makes the email
 go looking for the current one. The query is derived from the file's own mtime,
 not today's date, so if a run fails the tag stays put and the proxy keeps
 serving the copy it already has — which is the right answer. `page.py` already
