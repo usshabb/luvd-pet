@@ -117,6 +117,11 @@ def _migrate(conn):
         # before welcome mail existed; they are treated as already welcomed so
         # the change can never mail the back catalogue.
         ("subscribers", "welcomed", "TEXT"),
+        # When they left, and NULL while they are subscribed. A record, not the
+        # lock — deactivate_subscriber() claims the unsubscribe with the
+        # active = 1 test on the UPDATE itself, so this column existing or not
+        # can never decide whether a goodbye goes out.
+        ("subscribers", "unsubscribed", "TEXT"),
     ):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column in cols:
@@ -375,20 +380,38 @@ def add_subscriber(email: str) -> bool:
         )
         if cur.rowcount:
             return True
+        # unsubscribed is cleared on the way back in: it means "when they left",
+        # and a live subscriber carrying a leaving date would read as one.
         cur = conn.execute(
-            "UPDATE subscribers SET active = 1, welcomed = datetime('now') "
-            "WHERE email = ? AND active = 0",
+            "UPDATE subscribers SET active = 1, welcomed = datetime('now'), "
+            "unsubscribed = NULL WHERE email = ? AND active = 0",
             (email,),
         )
         return bool(cur.rowcount)
 
 
-def deactivate_subscriber(email: str):
+def deactivate_subscriber(email: str) -> bool:
+    """Unsubscribe an address. Returns True if this call is the one that took
+    them off the list — i.e. the row was active until now.
+
+    That return is what makes the goodbye email arrive exactly once. Same shape
+    as add_subscriber(): the claim is the write. The active = 1 test lives in
+    the UPDATE, so of two clicks on the same link — or a client firing the
+    one-click endpoint after the reader already used the footer link — only the
+    first can come back with a row changed. A read-then-write would leave a gap
+    between the check and the update wide enough for both to pass.
+
+    False for an address that was already unsubscribed, and for one we have
+    never seen. Both are unsubscribed by the time we answer, which is all the
+    caller promised.
+    """
     with connect() as conn:
-        conn.execute(
-            "UPDATE subscribers SET active = 0 WHERE email = ?",
+        cur = conn.execute(
+            "UPDATE subscribers SET active = 0, unsubscribed = datetime('now') "
+            "WHERE email = ? AND active = 1",
             (email.strip().lower(),),
         )
+        return bool(cur.rowcount)
 
 
 def list_subscribers():
