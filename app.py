@@ -1,4 +1,4 @@
-"""Serves the LUVD NYC page and collects subscribers."""
+"""Serves the LUVD page and collects subscribers."""
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -172,13 +172,13 @@ def unsubscribe():
         return jsonify({"ok": True})
     return f"""<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Unsubscribed — LUVD NYC</title>
+<title>Unsubscribed — LUVD</title>
 <body style="background:#fbfbfd;margin:0;padding:48px 16px;
              font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
   <div style="max-width:440px;margin:0 auto;background:#fff;border-radius:20px;
               padding:36px 28px;text-align:center;">
     <div style="font:700 13px inherit;letter-spacing:.2em;text-transform:uppercase;
-                color:#FF002E;">LUVD NYC</div>
+                color:#FF002E;">LUVD</div>
     <h1 style="font:700 24px inherit;color:#1d1d1f;margin:16px 0 8px;">
       You're unsubscribed</h1>
     <p style="font:400 15px inherit;color:#6e6e73;margin:0;">
@@ -270,7 +270,7 @@ def img():
         return ("not allowed", 403)
     try:
         r = requests.get(raw, timeout=20, stream=True,
-                         headers={"User-Agent": "Mozilla/5.0 (LUVD NYC)"})
+                         headers={"User-Agent": "Mozilla/5.0 (LUVD)"})
         r.raise_for_status()
     except Exception as e:
         app.logger.warning("/img upstream failed for %s: %s", raw, e)

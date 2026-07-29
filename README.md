@@ -1,4 +1,4 @@
-# 🐶 LUVD NYC
+# 🐶 LUVD
 
 **Every new adoptable dog across NYC rescues, on one page, every morning.**
 

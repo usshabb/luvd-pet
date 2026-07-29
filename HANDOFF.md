@@ -1,4 +1,4 @@
-# LUVD NYC — handoff
+# LUVD — handoff
 
 A daily-updating page of every adoptable dog across NYC rescues.
 Python + Flask + SQLite, containerised. `DEPLOY.md` is the step-by-step.

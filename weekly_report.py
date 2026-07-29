@@ -80,7 +80,7 @@ def build(days: int = 7) -> tuple:
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:18px;
        padding:30px 26px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
     <div style="font:700 12px -apple-system;letter-spacing:.18em;
-         text-transform:uppercase;color:#FF002E;">LUVD NYC · Weekly</div>
+         text-transform:uppercase;color:#FF002E;">LUVD · Weekly</div>
     <h1 style="font:700 24px -apple-system;color:#1d1d1f;margin:12px 0 4px;">
       {total_clicks} rescue contact{'s' if total_clicks != 1 else ''} this week</h1>
     <p style="font:400 14px -apple-system;color:#6e6e73;margin:0 0 22px;">

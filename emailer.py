@@ -1,4 +1,4 @@
-"""Morning email via Mandrill — a short nudge that links to the day's LUVD NYC page.
+"""Morning email via Mandrill — a short nudge that links to the day's LUVD page.
 
 Deliberately NOT a full catalog: a few faces, a count, one button. The page is
 where you actually browse.
@@ -180,7 +180,7 @@ def _photo_candidates(url: str):
 def _serves_image(url: str) -> bool:
     try:
         r = requests.head(url, timeout=6, allow_redirects=True,
-                          headers={"User-Agent": "Mozilla/5.0 (LUVD NYC)"})
+                          headers={"User-Agent": "Mozilla/5.0 (LUVD)"})
     except requests.RequestException:
         return False
     return (r.status_code == 200
@@ -325,7 +325,7 @@ def _footer(unsubscribe_for: str = None) -> str:
 
 
 def _logo() -> str:
-    """The wordmark, in place of the old 'LUVD NYC' text eyebrow.
+    """The wordmark, in place of the old text eyebrow.
 
     Most clients block remote images by default and this is now the only thing
     naming the sender, so the alt text is styled to read as the wordmark: red,

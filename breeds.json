@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "note": "Breed reference for LUVD NYC. Scores are 1-5 general breed tendencies, NOT claims about an individual dog. energy: 1=couch potato, 5=needs a job. apartment: 1=poor fit, 5=great fit. experience: 1=great first dog, 5=needs an experienced owner. alone: 1=needs company most of the day, 5=comfortable through a workday. adult_lbs: typical adult weight range, used to project growth and scale food cost.",
+    "note": "Breed reference for LUVD. Scores are 1-5 general breed tendencies, NOT claims about an individual dog. energy: 1=couch potato, 5=needs a job. apartment: 1=poor fit, 5=great fit. experience: 1=great first dog, 5=needs an experienced owner. alone: 1=needs company most of the day, 5=comfortable through a workday. adult_lbs: typical adult weight range, used to project growth and scale food cost.",
     "source": "General breed-typical guidance. Always defer to the rescue's own assessment of the individual animal."
   },
   "_default": {

@@ -1,4 +1,4 @@
-"""Common Dog model and Source interface for LUVD NYC.
+"""Common Dog model and Source interface for LUVD.
 
 Every source (a direct rescue scraper, Petfinder, etc.) returns a list of Dog
 objects in ONE normalized shape. The UI renders the same modal regardless of

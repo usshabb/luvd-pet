@@ -1,4 +1,4 @@
-# Fly.io config for LUVD NYC. One machine, one volume: web + nightly scrape
+# Fly.io config for LUVD. One machine, one volume: web + nightly scrape
 # share it (see fly-start.sh). Caddy from docker-compose is not needed — Fly
 # terminates TLS at its edge.
 app = "luvd-nyc"

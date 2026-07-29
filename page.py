@@ -1,4 +1,4 @@
-"""Render the LUVD NYC daily page.
+"""Render the LUVD daily page.
 
 One job: show every adoptable dog across NYC rescues, beautifully, and get out
 of the way. Click a dog -> modal with everything we know -> one button out to
@@ -502,7 +502,7 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
 
     faq = [
         ("How do I adopt a dog in NYC?",
-         "Browse adoptable dogs on LUVD NYC, open the dog you're interested in, "
+         "Browse adoptable dogs on LUVD, open the dog you're interested in, "
          "then use the button to contact that rescue directly. Some NYC rescues "
          "take email inquiries; most ask you to submit an adoption application "
          "first. LUVD links you to whichever step that rescue actually requires."),
@@ -532,7 +532,7 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
                 "@type": "WebSite",
                 "@id": f"{site}/#website",
                 "url": f"{site}/",
-                "name": "LUVD NYC",
+                "name": "LUVD",
                 "description": meta_desc,
                 "inLanguage": "en-US",
                 "publisher": {"@id": f"{site}/#org"},
@@ -540,12 +540,12 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
             {
                 "@type": "Organization",
                 "@id": f"{site}/#org",
-                "name": "LUVD NYC",
+                "name": "LUVD",
                 "url": f"{site}/",
                 "logo": f"{site}/apple-touch-icon.png",
                 "email": CONTACT_EMAIL,
                 "areaServed": {"@type": "City", "name": "New York City"},
-                "description": "LUVD NYC collects every new adoptable dog across "
+                "description": "LUVD collects every new adoptable dog across "
                                "New York City rescues into one page, updated daily.",
             },
             {
@@ -705,14 +705,14 @@ def render(dated, for_date: date = None) -> str:
 <!-- Social scrapers (iMessage, Slack, Twitter) reject relative image paths,
      so these are absolute. og.png is rebuilt nightly with real dog faces. -->
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="LUVD NYC">
+<meta property="og:site_name" content="LUVD">
 <meta property="og:url" content="{site}/">
 <meta property="og:title" content="Adopt a dog in NYC — LUVD">
 <meta property="og:description" content="{meta_desc}">
 <meta property="og:image" content="{site}/og.png?v={cache_bust}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="LUVD NYC — adoptable dogs across New York City rescues">
+<meta property="og:image:alt" content="LUVD — adoptable dogs across New York City rescues">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Adopt a dog in NYC — LUVD">
 <meta name="twitter:description" content="{meta_desc}">
@@ -1941,7 +1941,7 @@ def render(dated, for_date: date = None) -> str:
         <span class="nc-dot"></span><b id="nc-n">0</b>
         <span class="nc-l">dogs viewed</span>
       </div>
-      <a class="nav-logo" id="nav-logo" href="#" aria-label="LUVD NYC">
+      <a class="nav-logo" id="nav-logo" href="#" aria-label="LUVD">
         <img src="assets/luvd-logo.png" alt="LUVD" width="1400" height="607">
       </a>
     </div>
@@ -2148,7 +2148,7 @@ def render(dated, for_date: date = None) -> str:
       {footer_rescues} &middot; <a class="foot-all" href="/rescues">All rescues &rarr;</a>
     </nav>
     <div style="margin-top:6px;">
-      LUVD · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD%20NYC">Contact</a>
+      LUVD · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD">Contact</a>
       · <button class="foot-link" id="terms-link" type="button">Terms</button>
       · <button class="foot-link" id="privacy-link" type="button">Privacy</button>
     </div>
@@ -2727,7 +2727,7 @@ function contactAction(d) {{
     const body =
       `Hi ${{d.source_label}},\n\n` +
       `I'd like to adopt ${{d.name}}${{d.age ? ` (${{d.age}}` +
-        (d.sex ? `, ${{d.sex}}` : '') + ')' : ''}}, who I found through LUVD NYC.\n\n` +
+        (d.sex ? `, ${{d.sex}}` : '') + ')' : ''}}, who I found through LUVD.\n\n` +
       `Your listing: ${{d.url}}\n` +
       `LUVD page: ${{url}}\n\n` +
       `A bit about me:\n` +
@@ -2901,15 +2901,15 @@ async function shareLuvd() {{
     try {{
       const resp = await fetch(location.origin + '/og.png');
       const blob = await resp.blob();
-      const file = new File([blob], 'luvd-nyc.png', {{type: 'image/png'}});
+      const file = new File([blob], 'luvd.png', {{type: 'image/png'}});
       if (navigator.canShare && navigator.canShare({{files: [file]}})) {{
         await navigator.share(
-          {{files: [file], text: SHARE_TEXT + ' ' + url, title: 'LUVD NYC'}});
+          {{files: [file], text: SHARE_TEXT + ' ' + url, title: 'LUVD'}});
         return;
       }}
     }} catch (e) {{}}
     try {{
-      await navigator.share({{title: 'LUVD NYC', text: SHARE_TEXT, url}});
+      await navigator.share({{title: 'LUVD', text: SHARE_TEXT, url}});
       return;
     }} catch (e) {{ if (e && e.name === 'AbortError') return; }}
   }}
@@ -3887,7 +3887,7 @@ async function handleSubscribe(e, emailId, noteId, formId) {{
     // Static hosting with no backend reachable — fall back to email.
     note.className = note.id === 'hero-note' ? 'hero-note' : 'sub-note';
     note.innerHTML = "Couldn't reach the server. " +
-      '<a href="mailto:' + CONTACT + '?subject=Subscribe%20to%20LUVD%20NYC&body=' +
+      '<a href="mailto:' + CONTACT + '?subject=Subscribe%20to%20LUVD&body=' +
       encodeURIComponent(email) + '">Email us to subscribe →</a>';
   }}
 }}
@@ -3912,7 +3912,12 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
     """
     facts = " · ".join(x for x in (d.age, d.sex, d.weight, d.location) if x)
     breed = d.breed if d.breed and "unknown" not in d.breed.lower() else "Mixed breed"
-    title = f"{d.name} — {breed} for adoption at {d.source_label} | LUVD NYC"
+    # "LUVD" alone carries no city, so the title says NYC itself — this is the
+    # page's only geographic signal, and "adoption ... nyc" is what people
+    # search. Rescues whose own name says NYC don't need it twice.
+    label_has_city = any(x in d.source_label.lower() for x in ("nyc", "new york"))
+    where = "" if label_has_city else " in NYC"
+    title = f"{d.name} — {breed} for adoption at {d.source_label}{where} | LUVD"
     desc = (f"{d.name} is a {breed.lower()} available for adoption from "
             f"{d.source_label} in New York City."
             + (f" {facts}." if facts else "")
@@ -4238,7 +4243,7 @@ def _not_found_page(dogs: List[Dog], site: str) -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>This dog has moved on — LUVD NYC</title>
+<title>This dog has moved on — LUVD</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="/favicon.png" type="image/png">
 <style>

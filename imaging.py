@@ -44,7 +44,7 @@ def font(size: int, bold: bool = True):
 def fetch_photo(url: str, timeout=12) -> Image.Image:
     """One dog photo as RGB. Raises — callers decide what a miss costs."""
     r = requests.get(url, timeout=timeout,
-                     headers={"User-Agent": "Mozilla/5.0 (LUVD NYC)"})
+                     headers={"User-Agent": "Mozilla/5.0 (LUVD)"})
     r.raise_for_status()
     return Image.open(io.BytesIO(r.content)).convert("RGB")
 

@@ -1,4 +1,4 @@
-# Deploying LUVD NYC
+# Deploying LUVD
 
 ## Read this first: `main` deploys itself
 

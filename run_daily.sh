@@ -1,5 +1,5 @@
 #!/bin/bash
-# Overnight run for LUVD NYC. Invoked by launchd (see com.luvdnyc.daily.plist).
+# Overnight run for LUVD. Invoked by launchd (see com.luvdnyc.daily.plist).
 set -uo pipefail
 
 cd "$(dirname "$0")" || exit 1
