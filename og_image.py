@@ -4,50 +4,15 @@ This is what shows up when the link is pasted into iMessage, Slack, Twitter or
 a group chat — so it leads with dog faces rather than a bare logo. Rebuilt on
 every run so the collage reflects who's actually available.
 """
-import io
-import os
 from pathlib import Path
 
-import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from imaging import cover, fetch_photo, font
 
 OUT = Path(__file__).parent / "public" / "og.png"
 LOGO = Path(__file__).parent / "public" / "assets" / "luvd-logo.png"
 W, H = 1200, 630
-
-# macOS first (local runs), then the Debian font we install in the image.
-_FONTS = [
-    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-]
-
-
-def _font(size: int):
-    for p in _FONTS:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
-
-
-def _fetch(url: str, timeout=12):
-    r = requests.get(url, timeout=timeout,
-                     headers={"User-Agent": "Mozilla/5.0 (LUVD NYC)"})
-    r.raise_for_status()
-    return Image.open(io.BytesIO(r.content)).convert("RGB")
-
-
-def _cover(im: Image.Image, w: int, h: int) -> Image.Image:
-    """Crop-to-fill, centred — no squashed dogs."""
-    r = max(w / im.width, h / im.height)
-    im = im.resize((max(1, int(im.width * r)), max(1, int(im.height * r))),
-                   Image.LANCZOS)
-    x, y = (im.width - w) // 2, (im.height - h) // 2
-    return im.crop((x, y, x + w, y + h))
 
 
 def build(dogs, total: int = None) -> Path:
@@ -61,7 +26,7 @@ def build(dogs, total: int = None) -> Path:
         cw = W // len(picks)
         for i, d in enumerate(picks):
             try:
-                tile = _cover(_fetch(d.photos[0]), cw + 2, H)
+                tile = cover(fetch_photo(d.photos[0]), cw + 2, H)
                 canvas.paste(tile, (i * cw, 0))
             except Exception:
                 continue
@@ -80,8 +45,8 @@ def build(dogs, total: int = None) -> Path:
         canvas.paste(lg, ((W - lw) // 2, (H - lh) // 2), lg)
     else:
         d = ImageDraw.Draw(canvas)
-        f = _font(150)
-        d.text((W // 2, H // 2), "LUVD", font=f, fill=(255, 0, 46), anchor="mm")
+        d.text((W // 2, H // 2), "LUVD", font=font(150), fill=(255, 0, 46),
+               anchor="mm")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(OUT, "PNG", optimize=True)
