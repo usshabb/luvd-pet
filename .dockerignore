@@ -5,7 +5,9 @@ logs/
 .DS_Store
 .env
 public/index.html
+public/la.html
 public/404.html
+public/rescues.html
 public/og.png
 public/welcome-montage.jpg
 public/dog/
