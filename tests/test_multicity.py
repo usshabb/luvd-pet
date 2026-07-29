@@ -1,0 +1,630 @@
+"""Two cities, simulated end to end, against the things that can actually hurt.
+
+Run it:
+
+    .venv/bin/python tests/test_multicity.py
+
+No pytest, no new dependency — plain asserts and a runner at the bottom, because
+the value here is that it runs before a deploy without anyone installing
+anything.
+
+What it is guarding, in order of how much damage it prevents:
+
+1. `forget_missing()` deletes every row it was not just handed. One city's
+   nightly run must not be able to delete the other city's history — and, worse
+   than the deletion, the deleted dogs come back the next morning with the next
+   morning's date, so `new_today` becomes the whole roster and every subscriber
+   is mailed a digest announcing ~230 "new" dogs. So: row counts and specific
+   ids before and after, and `first_seen` dates asserted explicitly.
+2. The digest must be city-scoped on both sides — the dogs in it and the people
+   it goes to.
+3. The migration must be idempotent, must run against the schema that is in
+   production right now rather than a fresh one, and must not touch `welcomed`.
+4. Subscribing with no city must still work and land in New York; an unknown
+   city must be refused rather than stored.
+5. With one live city the nightly schedule must compute exactly what the old
+   single-city shell loop computed.
+
+The Los Angeles source here is a fake defined in this file. It is never
+registered in `sources/registry.py`, so nothing in production can reach it.
+"""
+import os
+import sqlite3
+import sys
+import tempfile
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import cities                                                  # noqa: E402
+import db                                                      # noqa: E402
+from sources.base import Dog, Source                            # noqa: E402
+
+FAILURES = []
+TMP = Path(tempfile.mkdtemp(prefix="luvd-multicity-"))
+
+# check.run() rebuilds the share card and the welcome montage, which write into
+# the real public/ directory. A test must not touch the published site, so they
+# are stubbed here rather than in each test — check.py imports them inside the
+# function, so replacing the attribute is enough.
+import montage                                                 # noqa: E402
+import og_image                                                # noqa: E402
+
+og_image.build = lambda *a, **k: "(share card stubbed by the test)"
+montage.build = lambda *a, **k: "(montage stubbed by the test)"
+
+
+# --------------------------------------------------------------------- helpers
+
+
+def fresh_db(name="t.db"):
+    """A database created by init_db(), i.e. the current schema."""
+    path = TMP / name
+    if path.exists():
+        path.unlink()
+    db.DB_PATH = path
+    db.init_db()
+    return path
+
+
+def legacy_db(name="legacy.db"):
+    """A database with the schema as it stands in production, pre-cities.
+
+    Built with raw SQL rather than by calling init_db(), because the whole point
+    is to migrate a file that does NOT already have the new table and column.
+    `welcomed` and `unsubscribed` are here as ALTER-added columns, which is how
+    they exist on the Fly volume.
+    """
+    path = TMP / name
+    if path.exists():
+        path.unlink()
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE seen_dogs (
+            dog_id TEXT PRIMARY KEY, source TEXT NOT NULL, name TEXT, url TEXT,
+            matched INTEGER DEFAULT 0,
+            first_seen TEXT DEFAULT (datetime('now')),
+            had_photo INTEGER DEFAULT 0);
+        CREATE TABLE subscribers (
+            email TEXT PRIMARY KEY, active INTEGER DEFAULT 1,
+            created TEXT DEFAULT (datetime('now')));
+        CREATE TABLE counters (key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE dog_views (dog_id TEXT PRIMARY KEY,
+            views INTEGER NOT NULL DEFAULT 0,
+            updated TEXT DEFAULT (datetime('now')));
+        CREATE TABLE interest (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            species TEXT NOT NULL, city TEXT NOT NULL, email TEXT,
+            created TEXT DEFAULT (datetime('now')));
+        CREATE TABLE outbound (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dog_id TEXT NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL,
+            created TEXT DEFAULT (datetime('now')));
+        ALTER TABLE subscribers ADD COLUMN welcomed TEXT;
+        ALTER TABLE subscribers ADD COLUMN unsubscribed TEXT;
+        """
+    )
+    conn.commit()
+    conn.close()
+    db.DB_PATH = path
+    return path
+
+
+def dog(source, ident, name, city=""):
+    d = Dog(id=f"{source}:{ident}", name=name, source=source,
+            source_label=f"{source.title()} Rescue",
+            url=f"https://example.org/{source}/{ident}")
+    d.photos = [f"https://example.org/{ident}.jpg"]
+    d.breed = "Mixed Breed"
+    d.city = city
+    return d
+
+
+NYC_DOGS = [dog("muddypaws", 1, "Aria", "NYC"),
+            dog("muddypaws", 2, "Bo", "NYC"),
+            dog("animalhaven", 3, "Cleo", "NYC")]
+LA_DOGS = [dog("wagmor", 10, "Duke", "LA"),
+           dog("wagmor", 11, "Ember", "LA")]
+
+
+class FakeLASource(Source):
+    """A Los Angeles rescue that exists only in this test file.
+
+    Deliberately not in sources/registry.py: production must have no way to
+    reach it, and a test that registered it would be testing a different app.
+    """
+
+    name = "wagmor"
+    label = "Wagmor Rescue"
+    priority = 20
+    city = "LA"
+
+    def __init__(self, dogs):
+        self._dogs = dogs
+
+    def fetch(self, prefs):
+        return [d for d in self._dogs]
+
+
+class FakeNYCSource(FakeLASource):
+    name = "muddypaws"
+    label = "Muddypaws Rescue"
+    priority = 10
+    city = "NYC"
+
+
+def seed(dogs, city, when):
+    """Record `dogs` for `city` with a known first_seen date."""
+    db.record_seen(dogs, when)
+    with db.connect() as conn:
+        conn.execute("UPDATE seen_dogs SET first_seen = ? WHERE city = ?",
+                     (when, city))
+
+
+def rows(city=None):
+    with db.connect() as conn:
+        if city is None:
+            r = conn.execute("SELECT dog_id, city, date(first_seen) d "
+                             "FROM seen_dogs ORDER BY dog_id").fetchall()
+        else:
+            r = conn.execute("SELECT dog_id, city, date(first_seen) d "
+                             "FROM seen_dogs WHERE city = ? ORDER BY dog_id",
+                             (city,)).fetchall()
+    return {x["dog_id"]: x["d"] for x in r}
+
+
+def eq(label, got, want):
+    if got == want:
+        print(f"PASS  {label}")
+    else:
+        print(f"FAIL  {label}\n        got  {got!r}\n        want {want!r}")
+        FAILURES.append(label)
+
+
+# ----------------------------------------------------------------------- tests
+
+
+def test_forget_missing_is_city_scoped():
+    """An LA run must not delete NYC's rows, and vice versa."""
+    fresh_db("forget.db")
+    seed(NYC_DOGS, "NYC", "2026-07-01")
+    seed(LA_DOGS, "LA", "2026-07-02")
+
+    before = rows()
+    eq("both cities recorded", len(before), 5)
+    eq("NYC ids recorded", sorted(rows("NYC")),
+       ["animalhaven:3", "muddypaws:1", "muddypaws:2"])
+    eq("LA ids recorded", sorted(rows("LA")), ["wagmor:10", "wagmor:11"])
+
+    # An LA run: it only knows about LA dogs, and one of them has gone.
+    deleted = db.forget_missing([LA_DOGS[0].id], city="LA")
+    eq("LA run deleted exactly its own missing dog", deleted, 1)
+    eq("NYC rows untouched by the LA run", rows("NYC"),
+       {"muddypaws:1": "2026-07-01", "muddypaws:2": "2026-07-01",
+        "animalhaven:3": "2026-07-01"})
+    eq("NYC row count untouched", len(rows("NYC")), 3)
+    eq("LA now holds only the listed dog", sorted(rows("LA")), ["wagmor:10"])
+
+    # And the other direction: an NYC run must not touch what's left of LA.
+    deleted = db.forget_missing([d.id for d in NYC_DOGS[:2]], city="NYC")
+    eq("NYC run deleted exactly its own missing dog", deleted, 1)
+    eq("LA rows untouched by the NYC run", rows("LA"),
+       {"wagmor:10": "2026-07-02"})
+
+
+def test_first_seen_survives_the_other_citys_run():
+    """The mass-mailing trigger: NYC's dates must not move when LA runs."""
+    fresh_db("dates.db")
+    seed(NYC_DOGS, "NYC", "2026-06-15")
+    seed(LA_DOGS, "LA", "2026-07-20")
+    nyc_before = rows("NYC")
+
+    # A full LA run, twice, with LA's roster changing underneath it.
+    db.record_seen(LA_DOGS, "2026-07-29")
+    db.forget_missing([d.id for d in LA_DOGS], city="LA")
+    db.record_seen([LA_DOGS[0]], "2026-07-29")
+    db.forget_missing([LA_DOGS[0].id], city="LA")
+
+    eq("NYC first_seen dates unchanged after two LA runs", rows("NYC"),
+       nyc_before)
+    eq("NYC dates are still June", sorted(set(rows("NYC").values())),
+       ["2026-06-15"])
+    # The specific failure this prevents: if NYC's rows had been deleted, the
+    # next NYC run would re-insert them with today's date and mail the lot.
+    seen = db.record_seen(NYC_DOGS, "2026-07-29")
+    eq("a later NYC run does not re-date its dogs",
+       sorted(set(seen.values())), ["2026-06-15"])
+
+
+def test_record_seen_stamps_the_city():
+    fresh_db("stamp.db")
+    db.record_seen(NYC_DOGS + LA_DOGS, "2026-07-29")
+    eq("cities stored per dog",
+       {k: v for k, v in
+        sorted((d["dog_id"], d["city"]) for d in _all_rows())},
+       {"muddypaws:1": "NYC", "muddypaws:2": "NYC", "animalhaven:3": "NYC",
+        "wagmor:10": "LA", "wagmor:11": "LA"})
+    eq("count_seen is per city", (db.count_seen("NYC"), db.count_seen("LA"),
+                                 db.count_seen()), (3, 2, 5))
+    # A dog nobody stamped is New York, because everything that predates cities
+    # is New York.
+    db.record_seen([dog("mystery", 99, "Nobody")], "2026-07-29")
+    eq("an unstamped dog defaults to NYC", db.count_seen("NYC"), 4)
+
+
+def _all_rows():
+    with db.connect() as conn:
+        return [dict(r) for r in
+                conn.execute("SELECT dog_id, city FROM seen_dogs")]
+
+
+def test_collect_stamps_from_the_source():
+    """No scraper sets a city; collect() does it from the source's own value."""
+    import check
+    fresh_db("collect.db")
+    original = check.sources_for_city
+    try:
+        plain_la = [dog("wagmor", 10, "Duke"), dog("wagmor", 11, "Ember")]
+        check.sources_for_city = lambda c: (
+            [FakeLASource(plain_la)] if c == "LA" else [])
+        dogs, failures = check.collect({}, "LA", verbose=False)
+        eq("LA source's dogs come back", len(dogs), 2)
+        eq("every dog stamped LA", sorted({d.city for d in dogs}), ["LA"])
+        eq("no failures", failures, [])
+    finally:
+        check.sources_for_city = original
+
+    eq("Source defaults to the default city", Source.city, cities.DEFAULT_CITY)
+    from sources.registry import sources_for_city
+    eq("no registered source claims a city that isn't live",
+       sorted({s.city for s in sources_for_city("NYC")}), ["NYC"])
+
+
+def test_digest_is_city_scoped():
+    """NYC subscribers get only NYC dogs; LA subscribers only LA dogs."""
+    import check
+    import emailer
+    fresh_db("digest.db")
+
+    db.add_subscriber("nyc-only@example.com", "NYC")
+    db.add_subscriber("la-only@example.com", "LA")
+    db.add_subscriber("both@example.com", "NYC")
+    db.add_subscriber("both@example.com", "LA")
+
+    sent = []
+    saved = (check.sources_for_city, emailer.send_digest, check.page.write,
+             check.normalize, check.enrich, check._alert)
+    try:
+        check.sources_for_city = lambda c: (
+            [FakeLASource(LA_DOGS)] if c == "LA" else [FakeNYCSource(NYC_DOGS)])
+        emailer.send_digest = lambda addr, dogs, *a, **k: sent.append(
+            (addr, sorted(d.id for d in dogs)))
+        check.page.write = lambda pages, for_date=None: Path("/dev/null")
+        check.normalize = lambda dogs: dogs
+        check.enrich = lambda dogs: dogs
+        check._alert = lambda *a, **k: None
+
+        check.run(city="NYC")
+        nyc_sent = sorted(sent)
+        sent.clear()
+        check.run(city="LA")
+        la_sent = sorted(sent)
+    finally:
+        (check.sources_for_city, emailer.send_digest, check.page.write,
+         check.normalize, check.enrich, check._alert) = saved
+
+    eq("NYC digest went to NYC subscribers only",
+       [a for a, _ in nyc_sent], ["both@example.com", "nyc-only@example.com"])
+    eq("NYC digest carried only NYC dogs",
+       sorted({tuple(d) for _, d in nyc_sent}),
+       [("animalhaven:3", "muddypaws:1", "muddypaws:2")])
+    eq("LA digest went to LA subscribers only",
+       [a for a, _ in la_sent], ["both@example.com", "la-only@example.com"])
+    eq("LA digest carried only LA dogs",
+       sorted({tuple(d) for _, d in la_sent}),
+       [("wagmor:10", "wagmor:11")])
+    eq("both cities' dogs survived both runs",
+       (db.count_seen("NYC"), db.count_seen("LA")), (3, 2))
+
+
+def test_a_full_la_run_leaves_nyc_alone():
+    """The integration case: run both cities for real and diff the NYC rows."""
+    import check
+    import emailer
+    fresh_db("integration.db")
+
+    saved = (check.sources_for_city, emailer.send_digest, check.page.write,
+             check.normalize, check.enrich, check._alert)
+    try:
+        check.sources_for_city = lambda c: (
+            [FakeLASource(LA_DOGS)] if c == "LA" else [FakeNYCSource(NYC_DOGS)])
+        emailer.send_digest = lambda *a, **k: None
+        check.page.write = lambda pages, for_date=None: Path("/dev/null")
+        check.normalize = lambda dogs: dogs
+        check.enrich = lambda dogs: dogs
+        check._alert = lambda *a, **k: None
+
+        check.run(city="NYC")
+        with db.connect() as conn:
+            conn.execute("UPDATE seen_dogs SET first_seen = '2026-05-01' "
+                         "WHERE city = 'NYC'")
+        nyc_before = rows("NYC")
+
+        check.run(city="LA")
+        eq("NYC rows identical after a full LA run", rows("NYC"), nyc_before)
+
+        # An LA rescue loses a dog. NYC still must not move.
+        check.sources_for_city = lambda c: (
+            [FakeLASource(LA_DOGS[:1])] if c == "LA"
+            else [FakeNYCSource(NYC_DOGS)])
+        check.run(city="LA")
+        eq("NYC rows identical after LA loses a dog", rows("NYC"), nyc_before)
+        eq("LA pruned to what it listed", sorted(rows("LA")), ["wagmor:10"])
+    finally:
+        (check.sources_for_city, emailer.send_digest, check.page.write,
+         check.normalize, check.enrich, check._alert) = saved
+
+
+def test_forget_floor_blocks_a_mass_prune():
+    """Most of a city vanishing is a broken scraper, not 200 adoptions."""
+    import check
+    import emailer
+    fresh_db("floor.db")
+    many = [dog("muddypaws", i, f"Dog{i}", "NYC") for i in range(20)]
+
+    alerts = []
+    saved = (check.sources_for_city, emailer.send_digest, check.page.write,
+             check.normalize, check.enrich, check._alert)
+    try:
+        check.sources_for_city = lambda c: (
+            [FakeNYCSource(many)] if c == "NYC" else [])
+        emailer.send_digest = lambda *a, **k: None
+        check.page.write = lambda pages, for_date=None: Path("/dev/null")
+        check.normalize = lambda dogs: dogs
+        check.enrich = lambda dogs: dogs
+        check._alert = lambda subject, body: alerts.append(subject)
+
+        check.run(city="NYC")
+        eq("20 dogs recorded", db.count_seen("NYC"), 20)
+
+        # Now the scraper breaks and returns 3 of 20.
+        check.sources_for_city = lambda c: (
+            [FakeNYCSource(many[:3])] if c == "NYC" else [])
+        check.run(city="NYC")
+        eq("the prune was refused", db.count_seen("NYC"), 20)
+        eq("and it alerted", [a for a in alerts if "prune skipped" in a],
+           ["LUVD NYC: prune skipped, sources look broken"])
+
+        # A normal night — 18 of 20 — still prunes.
+        check.sources_for_city = lambda c: (
+            [FakeNYCSource(many[:18])] if c == "NYC" else [])
+        check.run(city="NYC")
+        eq("a normal night still prunes", db.count_seen("NYC"), 18)
+    finally:
+        (check.sources_for_city, emailer.send_digest, check.page.write,
+         check.normalize, check.enrich, check._alert) = saved
+
+
+def test_migration_is_idempotent_on_the_current_schema():
+    """Three runs against a production-shaped file, and `welcomed` untouched."""
+    legacy_db()
+    with db.connect() as conn:
+        conn.execute("INSERT INTO subscribers(email, active, created, welcomed) "
+                     "VALUES('old@example.com', 1, '2026-01-01', "
+                     "'2026-01-01 09:00:00')")
+        # welcomed NULL is the real state of some production rows, and is
+        # treated as "already welcomed" by design.
+        conn.execute("INSERT INTO subscribers(email, active, created) "
+                     "VALUES('nullwelcome@example.com', 1, '2026-02-02')")
+        conn.execute("INSERT INTO subscribers(email, active, created, "
+                     "unsubscribed) VALUES('gone@example.com', 0, "
+                     "'2026-03-03', '2026-04-04')")
+        for i, src in enumerate(("muddypaws", "animalhaven", "waggytail")):
+            conn.execute("INSERT INTO seen_dogs(dog_id, source, name, url, "
+                         "first_seen) VALUES(?, ?, ?, ?, ?)",
+                         (f"{src}:{i}", src, f"Dog{i}",
+                          f"https://example.org/{i}", "2026-05-05"))
+
+    def snapshot():
+        with db.connect() as conn:
+            subs = [dict(r) for r in conn.execute(
+                "SELECT email, active, created, welcomed, unsubscribed "
+                "FROM subscribers ORDER BY email")]
+            pairs = [(r["email"], r["city"]) for r in conn.execute(
+                "SELECT email, city FROM subscriber_cities "
+                "ORDER BY email, city")]
+            dogs = [(r["dog_id"], r["city"], r["first_seen"]) for r in
+                    conn.execute("SELECT dog_id, city, first_seen "
+                                 "FROM seen_dogs ORDER BY dog_id")]
+        return subs, pairs, dogs
+
+    with db.connect() as conn:
+        welcomed_before = [dict(r) for r in conn.execute(
+            "SELECT email, welcomed FROM subscribers ORDER BY email")]
+        eq("no city column before the migration",
+           "city" in {c["name"] for c in
+                      conn.execute("PRAGMA table_info(seen_dogs)")}, False)
+
+    db.init_db()
+    first = snapshot()
+    db.init_db()
+    second = snapshot()
+    db.init_db()
+    third = snapshot()
+
+    eq("every existing subscriber assigned to NYC", first[1],
+       [("gone@example.com", "NYC"), ("nullwelcome@example.com", "NYC"),
+        ("old@example.com", "NYC")])
+    eq("including the inactive one",
+       ("gone@example.com", "NYC") in first[1], True)
+    eq("every existing dog backfilled to NYC",
+       sorted({c for _, c, _ in first[2]}), ["NYC"])
+    eq("first_seen dates untouched by the migration",
+       sorted({d for _, _, d in first[2]}), ["2026-05-05"])
+    eq("run 2 identical to run 1", second, first)
+    eq("run 3 identical to run 1", third, first)
+    eq("no duplicate city rows after three runs", len(third[1]), 3)
+
+    with db.connect() as conn:
+        welcomed_after = [dict(r) for r in conn.execute(
+            "SELECT email, welcomed FROM subscribers ORDER BY email")]
+    eq("welcomed untouched by three migrations", welcomed_after,
+       welcomed_before)
+    eq("nobody gained a welcomed timestamp",
+       sum(1 for r in welcomed_after if r["welcomed"]), 1)
+
+    # The backfill must fill gaps, never overrule a choice. Someone who signed up
+    # for Los Angeles alone must not be handed a New York row by the next boot:
+    # they would then receive New York's digest, which is the failure this whole
+    # change exists to prevent. init_db() runs on import in every gunicorn
+    # worker, so "the next boot" means within the hour.
+    db.add_subscriber("la-only@example.com", "LA")
+    db.init_db()
+    db.init_db()
+    eq("an LA-only subscriber is not backfilled into NYC",
+       db.subscriber_cities("la-only@example.com"), ["LA"])
+    eq("and so never appears on the NYC list",
+       "la-only@example.com" in db.list_subscribers("NYC"), False)
+    eq("while a genuinely city-less row still gets New York",
+       db.subscriber_cities("old@example.com"), ["NYC"])
+
+
+def test_subscribe_defaults_and_rejects():
+    fresh_db("subscribe.db")
+    eq("no city lands in NYC",
+       (db.add_subscriber("a@example.com"), db.subscriber_cities("a@example.com")),
+       (True, ["NYC"]))
+    eq("an explicit city is honoured",
+       (db.add_subscriber("b@example.com", "LA"),
+        db.subscriber_cities("b@example.com")), (True, ["LA"]))
+    eq("case is canonicalised",
+       (db.add_subscriber("c@example.com", "  la  "),
+        db.subscriber_cities("c@example.com")), (True, ["LA"]))
+    eq("re-subscribing the same city sends no second welcome",
+       db.add_subscriber("a@example.com", "NYC"), False)
+    eq("adding a second city is worth confirming",
+       db.add_subscriber("a@example.com", "LA"), True)
+    eq("and both cities are kept", db.subscriber_cities("a@example.com"),
+       ["LA", "NYC"])
+    eq("one email is still one row",
+       len(db.list_subscribers()), 3)
+    eq("an unknown city cannot create a phantom list",
+       (db.add_subscriber("d@example.com", "Atlantis"),
+        db.subscriber_cities("d@example.com")), (True, ["NYC"]))
+
+    # Unsubscribe is global, and stays global: it zeroes the one consent flag
+    # rather than removing city rows, so it stops every city at once and the
+    # HMAC over the bare address keeps working untouched.
+    eq("unsubscribe takes them off everything",
+       (db.deactivate_subscriber("a@example.com"),
+        db.list_subscribers("NYC"), db.list_subscribers("LA")),
+       (True, ["d@example.com"], ["b@example.com", "c@example.com"]))
+    eq("the city rows survive an unsubscribe",
+       db.subscriber_cities("a@example.com"), ["LA", "NYC"])
+    eq("a second unsubscribe sends no second goodbye",
+       db.deactivate_subscriber("a@example.com"), False)
+
+
+def test_schedule_matches_the_old_single_city_loop():
+    """With one live city, the next run must be exactly what the shell computed.
+
+    The old loop was `date -d "today 05:30"` in the container's fixed timezone,
+    pushed a day if it had passed. This reproduces that and compares.
+    """
+    nyc = ZoneInfo("America/New_York")
+
+    def shell_equivalent(now_epoch):
+        local = datetime.fromtimestamp(now_epoch, nyc)
+        target = datetime.combine(local.date(), time(5, 30), nyc)
+        if target.timestamp() <= now_epoch:
+            target = datetime.combine(local.date() + timedelta(days=1),
+                                      time(5, 30), nyc)
+        return int(target.timestamp()) - int(now_epoch)
+
+    saved = cities.CITIES
+    try:
+        cities.CITIES = {"NYC": saved["NYC"],
+                         "LA": cities.City(**{**saved["LA"].__dict__,
+                                              "live": False})}
+        probes = [
+            datetime(2026, 7, 29, 15, 10, tzinfo=nyc),      # this afternoon
+            datetime(2026, 7, 29, 5, 30, tzinfo=nyc),       # exactly 05:30
+            datetime(2026, 7, 29, 5, 29, 59, tzinfo=nyc),   # a second before
+            datetime(2026, 7, 30, 2, 0, tzinfo=nyc),        # small hours
+            datetime(2026, 3, 8, 1, 0, tzinfo=nyc),         # spring forward
+            datetime(2026, 11, 1, 1, 0, tzinfo=nyc),        # fall back
+            datetime(2026, 12, 31, 23, 59, tzinfo=nyc),     # year end
+        ]
+        for p in probes:
+            now = p.timestamp()
+            wait, codes = cities.next_run(now)
+            eq(f"schedule matches the old loop at {p:%Y-%m-%d %H:%M %Z}",
+               (wait, codes), (shell_equivalent(now), ["NYC"]))
+    finally:
+        cities.CITIES = saved
+
+
+def test_schedule_runs_each_city_on_its_own_clock():
+    """Two live cities: two runs a day, each at 05:30 where it actually is.
+
+    Both cities are forced live here rather than read from the registry, so this
+    keeps testing the two-city schedule regardless of which cities are currently
+    open — the arithmetic is what's under test, not today's roster.
+    """
+    nyc = ZoneInfo("America/New_York")
+    la = ZoneInfo("America/Los_Angeles")
+    now = datetime(2026, 7, 29, 15, 10, tzinfo=nyc).timestamp()
+
+    saved = cities.CITIES
+    try:
+        cities.CITIES = {
+            code: cities.City(**{**c.__dict__, "live": True})
+            for code, c in saved.items()
+        }
+        wait, codes = cities.next_run(now)
+        when = datetime.fromtimestamp(now + wait, nyc)
+        eq("the soonest run is New York's", codes, ["NYC"])
+        eq("and it is 05:30 in New York", when.strftime("%H:%M %Z"), "05:30 EDT")
+
+        # Step just past it and the next one due is Los Angeles, same morning.
+        wait2, codes2 = cities.next_run(now + wait + 1)
+        la_when = datetime.fromtimestamp(now + wait + 1 + wait2, la)
+        eq("the next run after that is Los Angeles", codes2, ["LA"])
+        eq("and it is 05:30 in Los Angeles", la_when.strftime("%H:%M %Z"),
+           "05:30 PDT")
+        eq("the two are three hours apart", round(wait2 / 3600, 2), 3.0)
+        eq("neither ever sleeps zero seconds", min(wait, wait2) > 0, True)
+    finally:
+        cities.CITIES = saved
+
+
+def test_sources_are_partitioned_by_city():
+    from sources.registry import all_sources, sources_for_city
+    every = {s.name for s in all_sources()}
+    per_city = set()
+    for code in cities.all_codes():
+        per_city |= {s.name for s in sources_for_city(code)}
+    eq("every registered source belongs to exactly one known city",
+       per_city, every)
+    eq("no source is in two cities",
+       sum(len(sources_for_city(c)) for c in cities.all_codes()), len(every))
+
+
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+if __name__ == "__main__":
+    real_db = db.DB_PATH
+    try:
+        for t in TESTS:
+            print(f"\n=== {t.__name__} ===")
+            t()
+    finally:
+        db.DB_PATH = real_db
+        import shutil
+        shutil.rmtree(TMP, ignore_errors=True)
+    print("\n" + ("ALL PASS" if not FAILURES
+                  else f"{len(FAILURES)} FAILURE(S): {FAILURES}"))
+    sys.exit(1 if FAILURES else 0)
