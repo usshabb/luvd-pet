@@ -3,8 +3,8 @@
 Deliberately NOT a full catalog: a few faces, a count, one button. The page is
 where you actually browse.
 
-All outbound mail (daily digest, scraper alerts, weekly report) goes through
-send_email() so there is exactly one place that knows the provider.
+All outbound mail (signup welcome, daily digest, scraper alerts, weekly report)
+goes through send_email() so there is exactly one place that knows the provider.
 """
 import hashlib
 import hmac
@@ -100,6 +100,12 @@ def _site_url() -> str:
     return os.getenv("SITE_URL", "http://localhost:8000")
 
 
+def _site_host() -> str:
+    """Bare hostname, for reading aloud in body copy rather than linking."""
+    host = _site_url().split("//", 1)[-1].strip("/")
+    return host.split("/", 1)[0] or "luvd.com"
+
+
 def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None) -> str:
     for_date = for_date or date.today()
     n = len(dogs)
@@ -151,16 +157,98 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
 </div>"""
 
 
+def _bulk_headers(to_email: str) -> dict:
+    """One-click unsubscribe headers — Gmail/Yahoo require these for bulk
+    senders, and they keep spam-report rates from hurting deliverability."""
+    return {
+        "List-Unsubscribe": f"<{unsub_url(to_email)}>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
+
+
 def send_digest(to_email: str, dogs: List[Dog], for_date: date = None):
     n = len(dogs)
     return send_email(
         to_email,
         f"🐶 {n} new dog{'' if n == 1 else 's'} in NYC today",
         html_body=build_html(dogs, for_date, unsubscribe_for=to_email),
-        # One-click unsubscribe headers — Gmail/Yahoo require these for bulk
-        # senders, and they keep spam-report rates from hurting deliverability.
-        headers={
-            "List-Unsubscribe": f"<{unsub_url(to_email)}>",
-            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-        },
+        headers=_bulk_headers(to_email),
+    )
+
+
+def build_welcome_html(to_email: str) -> str:
+    """The one-time signup confirmation.
+
+    Deliberately reads nothing from the database and shows no dogs: this is the
+    first mail an address ever gets, and it must not be able to arrive empty or
+    broken because a scrape came back with nothing.
+    """
+    site = html.escape(_site_url())
+    return f"""
+<div style="background:#fbfbfd;padding:32px 16px;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
+              padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
+    <div style="font:700 13px -apple-system,Segoe UI,Roboto,sans-serif;letter-spacing:.2em;
+                text-transform:uppercase;color:#FF002E;text-align:center;">LUVD NYC</div>
+    <h1 style="font:700 27px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+               text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
+      You're on the list</h1>
+    <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
+              text-align:center;margin:0 0 20px;">Thanks for signing up.</p>
+
+    <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+              margin:0 0 14px;">
+      Every morning we check the NYC rescues we follow. When new dogs are
+      listed, you'll get one short email with their faces and a link to the
+      page.</p>
+    <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+              margin:0;">
+      On days when nothing new comes in, you won't hear from us at all. That's
+      the whole thing.</p>
+
+    <a href="{site}"
+       style="display:block;background:#FF002E;color:#fff;text-decoration:none;
+              text-align:center;padding:15px;border-radius:13px;font:600 16px
+              -apple-system,Segoe UI,Roboto,sans-serif;margin-top:26px;">
+      See today's dogs →</a>
+
+    <p style="font:400 12px -apple-system,Segoe UI,Roboto,sans-serif;color:#98989d;
+              text-align:center;margin:22px 0 0;">
+      You're getting this because you signed up at {html.escape(_site_host())}.<br>
+      <a href="{html.escape(unsub_url(to_email))}"
+         style="color:#98989d;">Unsubscribe</a></p>
+  </div>
+</div>"""
+
+
+def build_welcome_text(to_email: str) -> str:
+    """Plain-text alternative. A first-contact mail with no text part looks
+    materially worse to spam filters than one with it."""
+    return f"""You're on the list.
+
+Thanks for signing up to LUVD NYC.
+
+Every morning we check the NYC rescues we follow. When new dogs are listed,
+you'll get one short email with their faces and a link to the page.
+
+On days when nothing new comes in, you won't hear from us at all. That's the
+whole thing.
+
+See today's dogs: {_site_url()}
+
+--
+You're getting this because you signed up at {_site_host()}.
+Unsubscribe: {unsub_url(to_email)}
+"""
+
+
+def send_welcome(to_email: str):
+    """One-time confirmation that someone is subscribed. Sent at signup only —
+    the cadence after this is still 'nothing unless there are new dogs'."""
+    return send_email(
+        to_email,
+        "You're on the list — LUVD NYC",
+        html_body=build_welcome_html(to_email),
+        text_body=build_welcome_text(to_email),
+        headers=_bulk_headers(to_email),
     )

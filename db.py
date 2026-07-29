@@ -95,11 +95,37 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_outbound_created "
             "ON outbound(created)"
         )
+        _migrate(conn)
         # seed defaults if empty
         cur = conn.execute("SELECT COUNT(*) AS n FROM prefs")
         if cur.fetchone()["n"] == 0:
             for k, v in DEFAULT_PREFS.items():
                 conn.execute("INSERT INTO prefs(key, value) VALUES(?, ?)", (k, json.dumps(v)))
+
+
+def _migrate(conn):
+    """Additive column adds for databases created before the column existed.
+
+    CREATE TABLE IF NOT EXISTS above only ever helps a fresh file — the
+    production database on the Fly volume predates anything added here, so new
+    columns need an explicit ALTER. Every step must be safe to run on every
+    boot, and safe to lose a race with the other gunicorn worker doing the same
+    thing, hence the duplicate-column tolerance.
+    """
+    for table, column, decl in (
+        # When the signup confirmation was sent. NULL for anyone who subscribed
+        # before welcome mail existed; they are treated as already welcomed so
+        # the change can never mail the back catalogue.
+        ("subscribers", "welcomed", "TEXT"),
+    ):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
 
 
 def get_prefs():
@@ -327,13 +353,34 @@ def interest_counts():
     return [dict(r) for r in rows]
 
 
-def add_subscriber(email: str):
+def add_subscriber(email: str) -> bool:
+    """Record a signup. Returns True if this address should get a welcome email.
+
+    True for an address we've never seen, and for someone who had unsubscribed
+    and is now opting back in — they chose to hear from us again, so confirming
+    it is right. False for an address that is already an active subscriber, so
+    re-submitting the form (or double-clicking it) never sends a second welcome.
+
+    The claim is made by the write itself rather than by a read-then-write, so
+    two simultaneous posts of the same address can only produce one True: the
+    INSERT is ignored for the loser, and the UPDATE's active = 0 test no longer
+    holds once the winner has committed.
+    """
+    email = email.strip().lower()
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO subscribers(email) VALUES(?) "
-            "ON CONFLICT(email) DO UPDATE SET active = 1",
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO subscribers(email, active, welcomed) "
+            "VALUES(?, 1, datetime('now'))",
             (email,),
         )
+        if cur.rowcount:
+            return True
+        cur = conn.execute(
+            "UPDATE subscribers SET active = 1, welcomed = datetime('now') "
+            "WHERE email = ? AND active = 0",
+            (email,),
+        )
+        return bool(cur.rowcount)
 
 
 def deactivate_subscriber(email: str):

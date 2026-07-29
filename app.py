@@ -2,8 +2,10 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
 import os
 import re
+import threading
 from html import escape as html_escape
 from pathlib import Path
 
@@ -15,6 +17,21 @@ PUBLIC = Path(__file__).parent / "public"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
 
 app = Flask(__name__, static_folder=None)
+
+# Gunicorn leaves the app logger at WARNING, which would hide whether a signup's
+# welcome email actually went out. Nothing else here logs below WARNING, so this
+# costs a line per subscriber.
+app.logger.setLevel(logging.INFO)
+
+# Under gunicorn nothing else opens the database first, so schema work has to
+# happen here or a column added by a deploy wouldn't exist until the 05:30
+# scrape ran. init_db() is idempotent. It is wrapped because a database problem
+# should degrade the endpoints that need it, not stop the site from booting.
+try:
+    db.init_db()
+except Exception as e:                                # pragma: no cover
+    app.logger.error("db.init_db() failed at startup: %s: %s",
+                     type(e).__name__, e)
 
 
 @app.route("/")
@@ -53,13 +70,50 @@ def handle_404(_):
     return _not_found()
 
 
+def _welcome_in_background(email: str):
+    """Send the signup confirmation without the visitor waiting on Mandrill.
+
+    send_email() allows itself 30 seconds, and there are only two gunicorn
+    workers — holding one of them for that long on a form post would be enough
+    to stall the site. The thread is a daemon because it must never keep the
+    machine from shutting down; the send takes seconds and the worker lives for
+    the life of the deploy, so it has time to finish.
+
+    Nothing here can fail the signup: the subscriber is already recorded before
+    this is called, and a failed send is logged and dropped.
+    """
+    import emailer
+
+    if not emailer.email_configured():
+        app.logger.info("welcome email skipped for %s — MANDRILL_API_KEY unset",
+                        email)
+        return
+
+    def run():
+        try:
+            emailer.send_welcome(email)
+            app.logger.info("welcome email sent to %s", email)
+        except Exception as e:
+            app.logger.warning("welcome email to %s failed: %s: %s",
+                               email, type(e).__name__, e)
+
+    try:
+        threading.Thread(target=run, name="welcome-email", daemon=True).start()
+    except Exception as e:
+        app.logger.warning("could not start welcome email thread for %s: %s",
+                           email, e)
+
+
 @app.route("/subscribe", methods=["POST"])
 def subscribe():
     data = request.get_json(silent=True) or request.form
     email = (data.get("email") or "").strip().lower()
     if not EMAIL_RE.match(email):
         return jsonify({"ok": False, "error": "invalid email"}), 400
-    db.add_subscriber(email)
+    # True only for a new address or someone opting back in after unsubscribing,
+    # so re-submitting an active address doesn't mail them again.
+    if db.add_subscriber(email):
+        _welcome_in_background(email)
     return jsonify({"ok": True})
 
 
@@ -236,5 +290,4 @@ def subscribers():
 
 
 if __name__ == "__main__":
-    db.init_db()
     app.run(host="127.0.0.1", port=8000, debug=True)
