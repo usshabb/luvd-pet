@@ -246,8 +246,8 @@ senders. Offering one more to somebody who has just unsubscribed suggests it
 didn't take.
 
 **The emails load their own copy of the logo.** `emailer.LOGO_FILE` points at
-`/assets/luvd-logo-email.png` — 300×130 and 3,836 bytes, against the site
-logo's 1400×607 and 274,990, which is **271KB off every single send**. It is
+`/assets/luvd-logo-email.png` — 300×130 and 5,725 bytes, against the site
+logo's 1400×607 and 274,990, which is **269KB off every single send**. It is
 displayed in a 150×65 box, so 300 is exactly 2× for a retina screen. 150×65 is
 30:13, the source ratio to within 0.05%, which is why both numbers are whole:
 change the display size and the asset has to be regenerated at twice it, or the
@@ -262,17 +262,57 @@ to `/assets/luvd-logo.png` first**, and every image URL in the message should
 be fetched for a real 200 before it goes out. Sending one with a missing logo
 is exactly the mistake this paragraph exists to prevent.
 
-Regenerating it: premultiply the alpha before resampling (`convert('RGBa')` →
-resize → `convert('RGBA')`), because the source stores near-black RGB under its
-transparent pixels and a straight RGBA resize averages that into the edges. The
-white sticker keyline is what keeps the red wordmark visible on a dark
-background, so check it against black as well as white. Then **save it as a
-palette PNG** — `quantize(colors=64, method=FASTOCTREE)` and save the `P`-mode
-image directly. A wordmark is two flat colours and some antialiasing, so 64
-colours costs a worst-case 15/255 on one edge pixel and takes the file from
-19,687 bytes to 3,836. Quantising and converting back to `RGBA` before saving
-throws the whole win away. `luvd-logo.png` is what the site itself uses and
-must not be touched.
+Regenerating it from the site logo: premultiply the alpha before resampling
+(`convert('RGBa')` → resize → `convert('RGBA')`), because the source stores
+near-black RGB under its transparent pixels and a straight RGBA resize averages
+that into the edges. The white sticker keyline is what keeps the red wordmark
+visible on a dark background, so check it against black as well as white. Then
+**save it as a palette PNG** — `quantize(colors=64, method=FASTOCTREE)` and save
+the `P`-mode image directly. A wordmark is two flat colours and some
+antialiasing, so 64 colours costs a worst-case 15/255 on one edge pixel and
+takes the file from 19,687 bytes to 3,836. Quantising and converting back to
+`RGBA` before saving throws the whole win away. `luvd-logo.png` is what the site
+itself uses and must not be touched.
+
+**The shadow under the wordmark is baked into the PNG, not CSS.** Outlook
+ignores `box-shadow` and several clients strip `filter: drop-shadow`, so a CSS
+version would appear in some inboxes and not others. It is a fifth-opacity black,
+2px down with a 3px blur at the size the mark is displayed — a lift, not an
+effect anybody should notice.
+
+*It cost no dimensions.* The asset stays 300×130 in a 150×65 box, so
+`emailer.LOGO_W/LOGO_H` did not move and the mark renders at exactly the size it
+always did. That works because the file already carried about 25px of
+transparent margin on every side, and the shadow's blur reaches 17px plus its
+4px offset — so it fits inside what was already there. Confirmed by rebuilding
+the shadow on an oversized canvas and measuring: nothing is cut, the outermost
+row and column are alpha 0, and the shadow's last nonzero pixel is 9–17px inside
+each edge. If the shadow is ever made larger than that, the canvas has to grow
+and both the `<img>` attributes and the 2× rule have to follow.
+
+*It needs a hand-built palette, which is the surprising part.* `FASTOCTREE` is
+the only quantiser Pillow will run on RGBA and it **cannot represent a drop
+shadow**: every shadow pixel is `(0,0,0,alpha)` with identical RGB, so the whole
+ramp collapses into one octree leaf and comes back as a single averaged entry at
+alpha 4 — a flat 1.6% smudge with no gradient in it, which is to say no shadow.
+Asking for more colours does not help and nor does nudging the shadow's RGB to
+spread the levels apart. What works is to keep the wordmark's existing 54 palette
+entries untouched, round the shadow's alpha to multiples of 6 so it needs only 10
+rungs, and add one more entry for each distinct blend of the mark's antialiased
+fringe over each rung. That is 218 of the available 256 slots and every pixel
+lands on its exact colour: the mark's opaque pixels come out byte-identical and
+the whole image is within 4/255 of an unquantised reference, for 5,725 bytes.
+
+Two Pillow traps to know if you touch this: a `P`-mode PNG only gets per-index
+alpha written if `transparency=<bytes>` is passed to `save()`, and `optimize=True`
+**reorders the palette on the way out** — so check the result by reloading the
+saved file and comparing resolved RGBA, never by reasoning about indices.
+
+*Dark mode:* the shadow is pure black rather than grey, deliberately. Black at
+20% over a dark card is invisible, where a grey would read as a halo. Clients
+that force-invert recolour CSS and leave image pixels alone, so the baked shadow
+stays black either way. Checked against `#1c1c1e`: the difference from having no
+shadow at all is at most 1/255.
 
 **The footers are the wordmark and, on the two bulk mails, an unsubscribe link
 — nothing else.** The digest's date and "you only get this when there are new
