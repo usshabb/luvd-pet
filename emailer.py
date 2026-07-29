@@ -402,6 +402,21 @@ def _document(body: str) -> str:
 </html>"""
 
 
+def _preheader(text: str) -> str:
+    """The line clients show next to the subject, before anything is opened.
+
+    Hidden in the body itself: there is no header for it, so the preview is
+    simply the first text a client finds, which without this is whatever the
+    opening paragraph happens to start with. The trailing zero-width joiners
+    are padding — a client takes as much text as it wants for the preview, and
+    without them it runs past this line and into the paragraph below.
+    """
+    pad = "&#847;&zwnj;&nbsp;" * 60
+    return (f'<div style="display:none;font-size:1px;line-height:1px;'
+            f'max-height:0;max-width:0;opacity:0;overflow:hidden;'
+            f'mso-hide:all;">{html.escape(text)}{pad}</div>')
+
+
 def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None) -> str:
     # for_date is unused since the footer stopped printing the date. It stays
     # in the signature because check.py passes it and a digest is still a thing
@@ -431,7 +446,11 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
     more = (_more_line(n - len(phone), "m-phone", hidden=False)
             + _more_line(n - len(desk), "m-desk", hidden=True))
 
-    return _document(f"""
+    # The count moved out of the subject, so the preview carries it. A reader
+    # deciding whether to open still gets the number, and the subject stays
+    # short enough to survive a phone's truncation.
+    face = "face" if n == 1 else "faces"
+    return _document(f"""{_preheader(f"{n} new {face}, all looking for a couch to call home")}
 <div style="background:#fbfbfd;padding:32px 16px;">
   <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
               padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
@@ -469,7 +488,7 @@ def send_digest(to_email: str, dogs: List[Dog], for_date: date = None):
     n = len(dogs)
     return send_email(
         to_email,
-        f"🐶 {n} new dog{'' if n == 1 else 's'} in NYC today",
+        "A new dog just dropped 🐶" if n == 1 else "New dogs just dropped 🐶",
         html_body=build_html(dogs, for_date, unsubscribe_for=to_email),
         headers=_bulk_headers(to_email),
     )
@@ -520,7 +539,7 @@ def build_welcome_html(to_email: str) -> str:
     last night's run, not a live lookup, and it is omitted if it isn't there.
     """
     site = html.escape(_site_url())
-    return _document(f"""
+    return _document(f"""{_preheader("Let's find you a friend")}
 <div style="background:#fbfbfd;padding:32px 16px;">
   <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
               padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
@@ -571,7 +590,7 @@ def send_welcome(to_email: str):
     the cadence after this is still 'nothing unless there are new dogs'."""
     return send_email(
         to_email,
-        "You're on the list — LUVD NYC",
+        "You're on the list! 🐶",
         html_body=build_welcome_html(to_email),
         text_body=build_welcome_text(to_email),
         headers=_bulk_headers(to_email),
@@ -693,7 +712,7 @@ def send_goodbye(to_email: str):
     dogs = roster(GOODBYE_COUNT)
     return send_email(
         to_email,
-        "Sorry to see you go — LUVD NYC",
+        "Sorry to see you go 🥹",
         html_body=build_goodbye_html(to_email, dogs),
         text_body=build_goodbye_text(to_email, dogs),
     )
