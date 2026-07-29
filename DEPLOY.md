@@ -114,8 +114,8 @@ no keys; every rescue source is a public endpoint:
 ```
 LUVD_DOMAIN=yourdomain.com
 SITE_URL=https://yourdomain.com
-RESEND_API_KEY=
-FROM_EMAIL=LUVD NYC <hello@yourdomain.com>
+MANDRILL_API_KEY=
+FROM_EMAIL=LUVD <cory@luvd.com>
 ALERT_EMAIL=you@example.com
 LUVD_DB=/data/dogfinder.db
 ```
@@ -173,6 +173,8 @@ launchctl unload ~/Library/LaunchAgents/com.luvdnyc.web.plist
 
 ## Sending from your own domain
 
-Resend's `onboarding@resend.dev` works for testing but lands in spam at scale.
-In Resend → Domains → Add, then add the TXT/CNAME records it gives you to
-GoDaddy DNS. Once verified, set `FROM_EMAIL=LUVD NYC <hello@yourdomain.com>`.
+Mandrill will only sign mail for a domain you have verified. In Mandrill →
+Settings → Domains, add `luvd.com`, then put the SPF and DKIM records it gives
+you into GoDaddy DNS. Once both show as verified, set
+`FROM_EMAIL=LUVD <cory@luvd.com>` — an address on an unverified domain is
+rejected outright rather than merely landing in spam.

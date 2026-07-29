@@ -23,8 +23,11 @@ failed certificate attempts.
 | `normalize.py` | Forces every source into one shape so the UI is consistent. |
 | `enrich.py` | The four ratings + breed guide, from the rescue's text and `breeds.json`. |
 | `page.py` | Renders everything in `public/` — the daily page, `/rescues`, and a page per rescue and per dog. No framework, no build step. |
-| `app.py` | Serves the page + `/subscribe`, `/view`, `/img`, `/sitemap.xml`. |
+| `app.py` | Serves the page + `/subscribe`, `/unsubscribe`, `/view`, `/img`, `/sitemap.xml`. |
+| `emailer.py` | Every outbound message, and the only place that knows Mandrill. |
 | `og_image.py` | Rebuilds the 1200×630 social card nightly. |
+| `montage.py` | Rebuilds the welcome email's four-polaroid montage nightly. |
+| `imaging.py` | The Pillow helpers those two share — font, fetch, crop-to-fill. |
 | `db.py` | SQLite. **The only stateful thing here.** |
 
 Three containers: `web` (gunicorn), `cron` (sleeps until 05:30 ET), `caddy` (TLS).
@@ -53,13 +56,13 @@ Copy `.env.example` → `.env`. Required to be fully live:
 |---|---|
 | `LUVD_DOMAIN` | Caddy won't start |
 | `SITE_URL` | Emails and OG tags point at localhost |
-| `RESEND_API_KEY` | **No email sends at all** (signups still captured) |
+| `MANDRILL_API_KEY` | **No email sends at all** (signups still captured) |
 | `ALERT_EMAIL` | Scraper failures are silent |
 | `ANTHROPIC_API_KEY` | Optional — upgrades breed-guide text |
 
 ## Adding keys after launch
 
-Resend is optional at deploy time and can be added any day after. No rebuild —
+Mandrill is optional at deploy time and can be added any day after. No rebuild —
 `env_file` is read when the container starts:
 
 ```bash
@@ -68,14 +71,175 @@ docker compose up -d         # recreates containers with the new env
 docker compose run --rm cron python check.py   # optional: apply immediately
 ```
 
-**Until Resend is added:** signups are still captured to the database — they
+**Until Mandrill is added:** signups are still captured to the database — they
 just don't receive anything yet. Whoever subscribes on day one gets their first
-email the morning after the key lands. Nothing is lost. Scraper failure alerts
-are also silent until then.
+email the morning after the key lands. Nothing is lost. Unsubscribes still work
+and still take effect immediately; they just go out quietly. Scraper failure
+alerts are also silent until then.
 
 Verified: a full nightly run with **no keys at all** exits 0, builds the page
 and the share card, and only logs that email couldn't send. No key is needed to
 fetch dogs — every rescue source is a public endpoint.
+
+## The three emails
+
+All three live in `emailer.py` and share one header, one card and one grid.
+
+| Email | Trigger | Sender |
+|---|---|---|
+| Welcome — "You're on the list" | `POST /subscribe`, only when `db.add_subscriber()` says the address wasn't already active | `send_welcome()` |
+| New dogs — "N new dogs in NYC today" | the 05:30 run, only when dogs nobody has been shown turn up | `send_digest()`, from `check.py` |
+| Goodbye — "Sorry to see you go" | `GET` or one-click `POST /unsubscribe`, only when `db.deactivate_subscriber()` says this call is the one that took them off | `send_goodbye()` |
+
+**Both one-offs go out on a daemon thread** (`_mail_in_background()` in
+`app.py`). `send_email()` allows itself 30 seconds and there are two gunicorn
+workers, so a synchronous send on a form post would be enough to stall the
+site. Every failure — no key, Mandrill down, a rejected address, the thread
+refusing to start — is logged and dropped. That matters most on the
+unsubscribe: leaving is a compliance promise and cannot be made to wait on an
+email provider, so the row is already committed and the confirmation already
+owed before any of this runs.
+
+**Exactly one goodbye, and the claim is the write.** `deactivate_subscriber()`
+returns whether its `UPDATE ... WHERE email = ? AND active = 1` changed a row,
+the same shape `add_subscriber()` uses. Two clicks on the same link, or a mail
+client firing the one-click endpoint after the reader already used the footer
+link, can only produce one changed row and so one email. A read-then-write
+would leave a window between the check and the update that both could pass
+through. The `unsubscribed` column added alongside it is a record of when they
+left, not the lock — it could be dropped and the guarantee would still hold.
+
+**The welcome's montage is a pre-rendered image, and the email checks it
+exists before naming it.** `montage.py` composites four dog photos into
+`public/welcome-montage.jpg` — 1000×392, ~73KB, tilted polaroid frames with
+each dog's name in the bottom edge — and `check.py` rebuilds it every night
+beside the share card, from dogs currently listed, so somebody subscribing
+today sees dogs actually waiting. Like the share card it is **never fatal**: a
+failure leaves last night's file in place and the run carries on.
+
+*Why an image and not HTML:* email cannot rotate an element or lay text over a
+photo with any reliability — Outlook drops CSS transforms outright — so an HTML
+version would collapse into the stacked photo-and-caption grid the digest
+already has. One flat file renders identically everywhere.
+
+*Why four:* the email displays it at 504px, so each photo lands at about 129px,
+and about 77px on a 300px-wide phone card. Five in one row takes that to 60px.
+Two rows of smaller cards was the first attempt and it was worse: the lower row
+sits on the upper row's captions, and clearing them makes the image 740px tall.
+
+*Why the existence check:* the file is gitignored, like `og.png`, so a box that
+has deployed but not yet run `check.py` has no montage. `emailer._montage()`
+returns an empty string unless the file is really on disk — an `<img>` pointing
+at a 404 is worse than a mail with no picture in it, and the no-montage welcome
+is a tight, deliberate-looking three blocks. Same bargain the goodbye makes
+with an unreadable roster.
+
+*Why `?v=<mtime date>` on a stable filename:* Gmail and Outlook.com proxy and
+cache remote images by URL, so a fixed name whose contents change nightly would
+serve subscribers a montage from weeks ago. Dating the filename would beat the
+cache too, but leaves ~73KB per day on the volume forever and makes the email
+go looking for the current one. The query is derived from the file's own mtime,
+not today's date, so if a run fails the tag stays put and the proxy keeps
+serving the copy it already has — which is the right answer. `page.py` already
+busts `og.png` this way.
+
+*Shared code:* `imaging.py` holds the three helpers both compositors need —
+font loading with an on-disk fallback list, photo fetch, crop-to-fill. They
+were `og_image.py`'s private functions; they moved rather than having
+`montage.py` import from a module named for a different output.
+
+**The goodbye is the only email that reads the roster at send time.** The web
+process never scrapes, so `roster()` pulls the dog payload out of
+`public/index.html`, the same JSON the site renders from and the only thing on
+disk that knows photo URLs. Every failure returns an empty list and the mail
+goes out with no grid: missing file, no `const DOGS`, malformed JSON, empty
+roster, nothing photographed. The digest can assume dogs exist because it only
+runs when there are new ones; this one runs whenever somebody leaves, which may
+be the morning the page is half-written. Three faces and two, not six and four
+— fewer than the digest so it reads as a wave rather than one last pitch, and
+the largest counts that fill a single complete row in each layout instead of
+ending on an orphan tile.
+
+**The phone grid is the base layout and the desktop grid is the enhancement.**
+That is the reverse of the obvious way round, and it is deliberate: the widest
+grid is the one that can overflow, so it must be the one behind the media
+query, not the one every client falls back to. `.g-phone` renders by default;
+`.g-desk` carries `display:none;mso-hide:all` and is revealed by
+`@media (min-width:601px)`. Two clients never apply that query — Outlook on
+Windows, which ignores media queries, and the Gmail app signed into a non-Gmail
+account, which strips the `<style>` element outright. Both used to get the
+three-across grid, which measures 548px of content inside a 390px screen, so
+the third column was cut off. Both now get two-across, which fits. **The cost,
+accepted:** Outlook on Windows shows the phone layout on a wide screen — four
+dogs two across in a 560px card. Sparse, not broken. The `mso-hide:all` and the
+Outlook `object-fit` fallback both belong on whichever table Outlook actually
+sees, so they moved with the inversion: the fallback is on the phone tiles now,
+and the phone table must never carry `mso-hide:all` or Outlook shows no grid at
+all. `+ N more on the site` inverted with it — the phone count is the base.
+
+**Two across never ends on a lone tile.** `build_html()` drops the last dog
+from the phone selection when it would be odd, so three new dogs show two and
+say "+ 1 more on the site" rather than stranding the third on its own row,
+where it reads as an image that failed. Three new dogs in a day is common, so
+this fires often. One dog is exempt: that is a single row, not an orphaned one.
+Desktop has its own version of the rule in `_grid()` — four dogs go 2×2 rather
+than three-then-one — and is otherwise untouched.
+
+**No `List-Unsubscribe` headers and no unsubscribe link on the goodbye.** Both
+of the other two carry them, because Gmail and Yahoo require them of bulk
+senders. Offering one more to somebody who has just unsubscribed suggests it
+didn't take.
+
+**The emails load their own copy of the logo.** `emailer.LOGO_FILE` points at
+`/assets/luvd-logo-email.png` — 300×130 and 3,836 bytes, against the site
+logo's 1400×607 and 274,990, which is **271KB off every single send**. It is
+displayed in a 150×65 box, so 300 is exactly 2× for a retina screen. 150×65 is
+30:13, the source ratio to within 0.05%, which is why both numbers are whole:
+change the display size and the asset has to be regenerated at twice it, or the
+mark goes soft.
+
+**It has to ship in the same deploy as the code that names it.** The file lives
+in `public/assets/`, which is tracked, so a normal commit carries both and
+there is no window where deployed code asks for a file the domain doesn't have.
+Until that deploy lands, `https://luvd.com/assets/luvd-logo-email.png` returns
+404 — so **a sample send from a developer machine has to override `LOGO_FILE`
+to `/assets/luvd-logo.png` first**, and every image URL in the message should
+be fetched for a real 200 before it goes out. Sending one with a missing logo
+is exactly the mistake this paragraph exists to prevent.
+
+Regenerating it: premultiply the alpha before resampling (`convert('RGBa')` →
+resize → `convert('RGBA')`), because the source stores near-black RGB under its
+transparent pixels and a straight RGBA resize averages that into the edges. The
+white sticker keyline is what keeps the red wordmark visible on a dark
+background, so check it against black as well as white. Then **save it as a
+palette PNG** — `quantize(colors=64, method=FASTOCTREE)` and save the `P`-mode
+image directly. A wordmark is two flat colours and some antialiasing, so 64
+colours costs a worst-case 15/255 on one edge pixel and takes the file from
+19,687 bytes to 3,836. Quantising and converting back to `RGBA` before saving
+throws the whole win away. `luvd-logo.png` is what the site itself uses and
+must not be touched.
+
+**The footers are the wordmark and, on the two bulk mails, an unsubscribe link
+— nothing else.** The digest's date and "you only get this when there are new
+dogs", the welcome's "you're getting this because you signed up at luvd.com"
+and the goodbye's "sent because … unsubscribed at luvd.com" were all removed at
+the owner's request; `_footer()` is the one place they lived. Two consequences
+worth knowing: the grey is `#6e6e73` rather than the `#98989d` these lines used
+to be, because #98989d on white is 2.5:1 and fails WCAG AA where #6e6e73 is
+5.1:1 — and, more seriously, **with no reason-for-receipt line and no postal
+address these mails no longer carry the sender identification CAN-SPAM expects
+of commercial bulk mail.** The `List-Unsubscribe` headers are still there and
+still required, but they are not the same thing. This was a deliberate call
+about how the mail should read, recorded here rather than lost.
+
+**The goodbye's photos have no captions; the digest's do.** In the digest
+somebody is choosing which dog to open, so the name and rescue are the point.
+In the goodbye nobody is choosing and the faces are decoration, so `_tile()` is
+called with `caption=False`, which also drops the cell's bottom padding from
+14px to the 9px gutter so the grid doesn't float above a gap where text used to
+be. The name still rides in the img `alt`, so a blocked-image render and a
+screen reader both keep it, and the plain-text goodbye still lists names and
+links because there are no photos there to carry them.
 
 ## Known state
 
