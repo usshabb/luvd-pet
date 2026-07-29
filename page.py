@@ -388,6 +388,20 @@ SHOW_WAIT_BADGE_ON_CARDS = False
 # a fresh database, where every dog is seen for the first time today.
 NEW_MARK_MAX_SHARE = 0.5
 
+# What that marker says. One string, because it appears on the grid card, in the
+# modal and on the dog's own page, and three copies would drift.
+NEW_MARK_LABEL = "New here"
+
+# The "this opens a menu" chevron, on the two headline pickers, the three filter
+# pills and the sort. Drawn, not the character ▾: that glyph is small for its
+# font size, differently proportioned in every platform font, and — being text —
+# it sat inside each button's accessible name, so a screen reader could announce
+# "black down-pointing small triangle" after the label. One constant because six
+# copies of a path drift. The viewBox is cropped to the ink so em sizing controls
+# the chevron itself rather than the whitespace around it.
+CHEVRON = ('<svg class="cv" viewBox="0 0 12 8" aria-hidden="true" '
+           'focusable="false"><path d="m1 1.6 5 5 5-5"/></svg>')
+
 
 def waiting_days(dog: Dog, today: date):
     """Days listed. Prefers the rescue's own publish date over our first sight.
@@ -433,8 +447,8 @@ def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
     # It sits on the photo, in the corner the wait badge vacated. render() only
     # passes is_new when today's arrivals are a minority of the grid, so this
     # marks the exception rather than repeating itself down the whole page.
-    new_chip = ('<span class="new-chip" title="New on LUVD today">New</span>'
-                if is_new else "")
+    new_chip = (f'<span class="new-chip" title="New on LUVD today">'
+                f'{html.escape(NEW_MARK_LABEL)}</span>' if is_new else "")
 
     # A real href so crawlers can reach every dog; JS intercepts the click and
     # opens the modal instead of navigating.
@@ -867,8 +881,24 @@ def render(dated, for_date: date = None) -> str:
   .pick > button:hover{{border-bottom-color:var(--accent);}}
   .pick > button:focus-visible{{outline:3px solid var(--accent);
     outline-offset:3px;border-radius:4px;}}
-  .cv{{font-style:normal;font-size:.42em;margin-left:.2em;vertical-align:.24em;
+  /* Drawn, in the same idiom as the heart and the share icon: no fill, a
+     currentColor stroke, round joins. See CHEVRON in page.py for why it stopped
+     being a text character.
+     Sized in em against whatever control holds it, so one declaration keeps the
+     filter pills' chevrons in proportion across both breakpoints: 10.8px at the
+     desktop 15px, 9.72px at the phone's 13.5px. Three hardcoded pixel sizes is
+     what was here before, and they had already drifted: 9px on the pills
+     against 13px on the sort. The two headline pickers and the sort each carry
+     their own ratio against this one — see .pick .cv and .fpill.fsort .cv. */
+  .cv{{width:.72em;height:.48em;flex:none;fill:none;stroke:currentColor;
+    stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;
     color:var(--muted);display:inline-block;transition:transform .2s;}}
+  /* The headline is up to 38px, where .72em would be a 27px chevron shouting at
+     the word it belongs to. It takes its own ratio, which lands it at roughly
+     the sort control's size — a chevron is a chevron whatever it hangs off.
+     These two also sit inline in a sentence rather than in a flex button, so
+     they need lifting off the baseline by hand. */
+  .pick .cv{{width:.24em;height:.16em;margin-left:.14em;vertical-align:.14em;}}
   .pick.open .cv{{transform:rotate(180deg);}}
   .pick-menu{{position:absolute;top:calc(100% + 12px);left:50%;
     transform:translateX(-50%) translateY(-6px);z-index:48;
@@ -1032,6 +1062,22 @@ def render(dated, for_date: date = None) -> str:
       height:14px;background:#fff;border-radius:0 0 0 3px;
       transform:rotate(45deg);box-shadow:-3px 3px 6px rgba(0,0,0,.06);}}
     .card:hover .quip{{opacity:1;transform:translateY(0) scale(1);}}
+    /* The bubble lands on top of the badge, and "NEW HERE" is wide enough that
+       its red ends stick out past both sides of the white — which reads as a
+       rendering fault rather than two things overlapping. So the badge leaves
+       while the bubble is up.
+       Hidden rather than nudged out of the way: quips are per-dog strings of
+       different lengths and some wrap to two lines, so any geometry that clears
+       today's longest quip stops clearing it the next time the bubble grows or
+       the card narrows. Nothing is lost — the bubble is what you're reading
+       while you hover, and the badge is back the moment you leave.
+       Inside this media query on purpose: on a phone there is no bubble, so
+       there is nothing to hide behind and the badge must stay put. It fades on
+       the bubble's own opacity curve so the two read as one move; the badge
+       never transforms, so the reduced-motion block below has nothing to
+       undo here. */
+    .new-chip{{transition:opacity .22s ease;}}
+    .card:hover .new-chip{{opacity:0;}}
   }}
   :root[data-theme="dark"] .quip{{background:#2b2b2e;color:#f2f2f2;}}
   :root[data-theme="dark"] .quip::after{{background:#2b2b2e;}}
@@ -1205,14 +1251,14 @@ def render(dated, for_date: date = None) -> str:
      not from the row, if you retune this. */
   .fbar-meta{{display:flex;align-items:center;justify-content:flex-start;
     gap:8px;margin:14px 0 -19px;}}
-  /* 19px at every width — one size, no breakpoint. This is a step down from the
-     retired day heading's 23px desktop size and exactly its phone size. It has
-     that heading's job now the grid is flat, but it also shares a row with the
-     15px sort across ~790px, and at 23px the two ends read as unrelated things
-     rather than one header. Matching the sort at 15px was tried and rejected:
-     this is the page's only statement of how many dogs there are, and at
-     control size it stops reading as a heading and becomes metadata. Numeral at
-     full contrast, unit greyed: the same pairing the date and its "N dogs"
+  /* 19px on desktop, 17px on phones — the phone step-down and its reason are in
+     the mobile block. Desktop 19px is a step down from the retired day heading's
+     23px: the count has that heading's job now the grid is flat, but at 23px it
+     and the sort at the other end of the row read as two unrelated things rather
+     than one header. Matching the filter pills' 15px control scale was tried and
+     rejected: this is the page's only statement of how many dogs there are, and
+     at control size it stops reading as a heading and becomes metadata. Numeral
+     at full contrast, unit greyed: the same pairing the date and its "N dogs"
      had. */
   .fbar-n{{font-size:19px;font-weight:700;letter-spacing:-.022em;
     color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;}}
@@ -1246,32 +1292,49 @@ def render(dated, for_date: date = None) -> str:
   .fpill.on .cv{{color:rgba(255,255,255,.75);}}
   .fpill-t b{{font-weight:700;opacity:.6;font-variant-numeric:tabular-nums;}}
   .fpill-t.on b{{opacity:.8;}}
-  .fpill .cv{{font-size:9px;vertical-align:0;margin:0;}}
+  /* No size of its own: the em ratio on .cv already scales it with each pill,
+     and the flex button centres it without a vertical-align nudge. */
   .fpill.open .cv{{transform:rotate(180deg);}}
   /* Sort is not a filter, so it deliberately looks unlike one: no pill, and a
-     "Sort by:" label. It never fills either — something is always sorting, so a
+     "Sort by" label that names the control instead of mirroring its value the
+     way the filter pills do. It never fills either — something is always sorting, so a
      filled control here would claim you'd narrowed the list, and the pill row's
      filled state is how the page reports exactly that. The hairline divider it
      used to sit behind is gone with the move to its own row: a row apart is
      already a stronger separation than a 1px rule. */
-  /* Same 15px as the filter pills — one control scale — but lighter in every
-     other respect: no fill, no border, 500 against their 600, muted against
-     their full-contrast text. It reorders the list, it never narrows it, so it
-     must never look like something you've switched on. */
-  /* min-height, not padding: this is the row's only 44px touch target, and now
-     also the thing that sets the results header's height. Padding alone left it
-     at 40px, and the row used to borrow its floor from the Clear link that no
-     longer exists. */
+  /* 17px, one value at every width — the only thing in the filter bar that
+     doesn't step across the breakpoint, because it is a control and not type in
+     a ladder. It spent a while at the count's 19px, on the theory that the two
+     ends of the row should agree on size, and that made the least-used control
+     on the page the loudest thing in its own row and louder than the filter
+     pills above it, which is backwards. 17px still sits above the pills'
+     control scale, so it reads as belonging to the heading row rather than to
+     them, without shouting; it keeps the count's tracking for the same reason.
+     Lighter than the count on everything else: weight 600 against 700, --muted
+     against --text, no fill and no border. It reorders the list, it never
+     narrows it, so it must never look like something you've switched on.
+     min-height, not padding: this is the row's only touch target and the thing
+     that sets the results header's height, so the row is 44px because this
+     button is. The line-height is holding that up. At the body's 1.47 a 19px
+     label measured 27.9px, which with padding and border came to 45.9 and took
+     the height off min-height and onto the type — the row grew 2px and the
+     floor stopped meaning anything. 1.2 keeps the floor in charge, with more
+     room to spare at 17px than there ever was at 19. Nothing is clipped: the
+     button centres its label in the full 44. */
   .fpill.fsort > button{{background:none;border-color:transparent;padding:8px;
-    min-height:44px;font-size:15px;font-weight:500;color:var(--muted);}}
+    min-height:44px;font-size:17px;line-height:1.2;font-weight:600;
+    letter-spacing:-.022em;color:var(--muted);}}
   .fpill.fsort > button:hover{{border-color:transparent;color:var(--text);}}
-  .fpill.fsort .fp-t{{color:var(--text);font-weight:600;}}
-  /* Bigger than the filter pills' 9px. At 9px the chevron reads as a stray
-     interpunct rather than a menu, which matters most on the sub-360px layout
-     where the label is hidden and this glyph is the only thing saying the
-     control is a control. It still rotates on open, which is why it stays a
-     chevron rather than becoming a sort-arrow pair. */
-  .fpill.fsort .cv{{font-size:11px;}}
+  /* Its own ratio, not the shared .72em, and deliberately not in proportion to
+     its label. The arrow is the least informative mark in the row — it says
+     "this opens", which you already know from everything else about the
+     control — so it is the first thing that should give up size, and it should
+     not swing every time the sort's type is retuned. .66em of 17px is 11.2px,
+     which is a step down from the 13.7px it drew at the old 19px and only just
+     above the pills' 10.8px: a hair larger, because the sort's label is larger,
+     without the two reading as different icons. Height is two thirds of width,
+     the viewBox's own ratio. */
+  .fpill.fsort .cv{{width:.66em;height:.44em;}}
   /* Right-anchored: it's the last control in the row, so a left-anchored menu
      would hang off the edge on narrow screens. */
   .fpill.fsort .fmenu{{left:auto;right:0;}}
@@ -1803,17 +1866,37 @@ def render(dated, for_date: date = None) -> str:
       mask-image:linear-gradient(to right,transparent,#000 34px,#000
       calc(100% - 34px),transparent);}}
     .fbar-meta{{margin:12px 0 -10px;}}
+    /* 17px here, against 19px on desktop. 19px is exactly the phone size of the
+       card dog names (.nm, 19px/700), so the count sat at the size and weight of
+       the very thing it is a heading for: measured at 390px it stopped reading as
+       a heading over the grid and competed with the names instead. Desktop keeps
+       19px, where .nm is 23px and the count is already a step below it. 19 to 17
+       is the same step the rest of the page's type takes across this breakpoint
+       — card names 23 to 19, pills 15 to 13.5 — so the count moves with the
+       ladder rather than against it. Size is the only thing that moves: the bold,
+       the tracking and the left flush all stay, and the <b> carries no size of
+       its own so the numeral comes down with the line. */
+    .fbar-n{{font-size:17px;}}
+    /* No sort override here on purpose: it is 17px at every width from its base
+       declaration, so this breakpoint is where the count comes down to meet it
+       rather than where the sort moves. */
     /* Back to 13.5px, and desktop stays at 15px. The one-control-scale rule is
        about hierarchy against the count *within* a breakpoint, and the two
        breakpoints have no reason to agree: a phone row is width-constrained in
-       a way desktop isn't, and 15px pushed Foster-to-adopt a further 23px out
-       of reach for no gain anyone can see. Reachability beats matching. */
-    .fpill > button,.fpill-t{{font-size:13.5px;}}
-    /* Down with them, so pills and sort are still one size within mobile. Only
-       the size moves: the full "Sort by:" label and the borderless treatment
-       stay, since the label is what makes this read as a control and shrinking
-       the type only buys more room for it. */
-    .fpill.fsort > button{{font-size:13.5px;}}
+       a way desktop isn't, and 15px cost 22px of overflow for no gain anyone
+       could see. Still true with the shorter Foster label — it decides whether
+       the row fits at all on the narrower phones. */
+    /* 12px of side padding, not the desktop 14. The drawn chevrons are ~5px
+       wider each than the text glyph they replaced, which put 15.7px back onto
+       a row that had 8.7px of room — enough to reintroduce the overflow the
+       "Foster" rename had just removed. Padding is the cheapest place to find
+       it back: 2px a side across four pills returns 16px, the pills still look
+       generously spaced at this size, and neither the chevron nor the label had
+       to shrink to pay for it. */
+    .fpill > button,.fpill-t{{font-size:13.5px;padding:8px 12px;}}
+    /* The sort deliberately does NOT come down to 13.5px with them: it is 17px
+       at every width, and it is now short enough that the width that costs is
+       no longer the problem it was when it read "Sort by: Recently added". */
     /* Anchored to the row, not the pill, so a menu on the last pill can't open
        off the edge of a phone. */
     .fmenu{{position:fixed;left:14px;right:14px;min-width:0;
@@ -1829,25 +1912,15 @@ def render(dated, for_date: date = None) -> str:
   @media (max-width:400px){{
     .tlists ul{{grid-template-columns:1fr;}}
   }}
-  /* Below this the results header runs out of line and the sort drops back to
-     its value alone, with a border to say it's still a control. Re-derived
-     after phones went to 13.5px: the threshold used to be 359px, which was
-     measured against a 15px sort and is far too cautious now. Carrying the
-     label costs 55px, and the slack runs out at about 328px — at 320px it
-     leaves 11.9px, which is the 8px flex gap and almost nothing else, so a
-     four-digit roster would collide. 340px keeps 31.9px, so this rides the
-     grid's existing 339px breakpoint rather than inventing a nearby one.
-     No font-size here any more: 13.5px is the mobile baseline, and restating
-     it left two rules saying the same thing.
-     The label is hidden from the eye and kept in the accessibility tree —
-     display:none would leave the control announced as a bare "Recently added",
-     which says nothing about what it does. */
+  /* This used to also strip the sort back to its value alone, with a border, on
+     the grounds that "Sort by: Recently added" ran the results row out of line
+     below about 340px. The trigger is now "Sort by" and that whole problem is
+     gone: measured at 320px, the narrowest phone worth serving, the count and
+     the sort leave 123px of slack between them. There is nothing left here to
+     fall back to, so the fallback went rather than sitting in the file being
+     read as still-needed. One column is all this breakpoint still does. */
   @media (max-width:339px){{
     .grid{{grid-template-columns:1fr;}}
-    .fpill.fsort .fs-l{{position:absolute;width:1px;height:1px;margin:-1px;
-      padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}}
-    .fpill.fsort > button{{border-color:var(--hair);padding:8px 12px;}}
-    .fpill.fsort > button:hover{{border-color:var(--hair);}}
   }}
 </style>
 </head>
@@ -1885,7 +1958,7 @@ def render(dated, for_date: date = None) -> str:
     <h1 class="pick-h1">Adopt a
       <span class="pick" data-kind="species">
         <button type="button" id="pick-species" aria-haspopup="listbox"
-                aria-expanded="false">dog<i class="cv">▾</i></button>
+                aria-expanded="false">dog{CHEVRON}</button>
         <span class="pick-menu" id="menu-species" role="listbox" hidden>
           <button role="option" data-v="dog" data-ok="1">Dogs</button>
           <button role="option" data-v="cat">Cats</button>
@@ -1894,7 +1967,7 @@ def render(dated, for_date: date = None) -> str:
       in
       <span class="pick" data-kind="city">
         <button type="button" id="pick-city" aria-haspopup="listbox"
-                aria-expanded="false">NYC<i class="cv">▾</i></button>
+                aria-expanded="false">NYC{CHEVRON}</button>
         <span class="pick-menu" id="menu-city" role="listbox" hidden>
           <button role="option" data-v="NYC" data-ok="1">New York City</button>
           <button role="option" data-v="LA">Los Angeles</button>
@@ -1950,37 +2023,46 @@ def render(dated, for_date: date = None) -> str:
     <div class="fbar-pills" id="fbar-pills">
       <span class="fpill" data-kind="breed">
         <button type="button" aria-haspopup="listbox" aria-expanded="false">
-          <span class="fp-t">Breed</span><i class="cv">▾</i></button>
+          <span class="fp-t">Breed</span>{CHEVRON}</button>
         <span class="fmenu" role="listbox" aria-label="Filter by breed" hidden></span>
       </span>
       <span class="fpill" data-kind="sex">
         <button type="button" aria-haspopup="listbox" aria-expanded="false">
-          <span class="fp-t">Gender</span><i class="cv">▾</i></button>
+          <span class="fp-t">Gender</span>{CHEVRON}</button>
         <span class="fmenu" role="listbox" aria-label="Filter by gender" hidden></span>
       </span>
       <span class="fpill" data-kind="age">
         <button type="button" aria-haspopup="listbox" aria-expanded="false">
-          <span class="fp-t">Age</span><i class="cv">▾</i></button>
+          <span class="fp-t">Age</span>{CHEVRON}</button>
         <span class="fmenu" role="listbox" aria-label="Filter by age" hidden></span>
       </span>
+      <!-- "Foster", not "Foster-to-adopt". The long form was 158.1px on a phone,
+           wider than Breed and Age together and the entire reason the row
+           overflowed. Only the pill label is short: the card chip, the modal
+           chip and the note above the apply button all still say
+           "Foster-to-adopt", and so does the accessible name here, which
+           paintFilters() keeps in step with the count. Nothing reads this text
+           to decide what the program is — that comes from each dog's
+           program_label, set by the scraper. -->
       <button class="fpill-t" id="f-program" type="button" aria-pressed="false"
-              hidden>Foster-to-adopt <b></b></button>
+              aria-label="Foster-to-adopt" hidden>Foster <b></b></button>
     </div>
     <!-- The results header, sitting directly on the grid: the count reads as the
-         grid's heading on the left, the sort control on the right.
-         Permanent. Only the separator and Clear come and go, and they sit after
-         the count so their arrival can't move it.
+         grid's heading on the left, the sort control on the right. Both are
+         permanent, so nothing in this row can arrive and shove the other end.
          Sort is not a filter: it reorders rather than narrows, and something is
-         always sorting. So it stays off the pill row, names itself "Sort by:"
+         always sorting. So it stays off the pill row, names itself "Sort by"
          and wears no pill, to stop it reading as a fifth filter. Off that row
          also means the phone's horizontal pill scroll can't swallow it — in
-         there it sat entirely off-screen. -->
+         there it sat entirely off-screen.
+         The label is written into the markup for the no-JS case; paintSort()
+         owns it after that, and owns the aria-label in both states. -->
     <div class="fbar-meta" id="fbar-meta">
       <span class="fbar-n" id="fbar-n" aria-live="polite"></span>
       <span class="fpill fsort" data-sort="1">
-        <button type="button" aria-haspopup="listbox" aria-expanded="false">
-          <span class="fs-l">Sort by:</span>
-          <span class="fp-t">Recently added</span><i class="cv">▾</i></button>
+        <button type="button" aria-haspopup="listbox" aria-expanded="false"
+                aria-label="Sort by: Recently added">
+          <span class="fp-t">Sort by</span>{CHEVRON}</button>
         <span class="fmenu" role="listbox" aria-label="Sort dogs" hidden>
           <button type="button" role="option" data-v="new"
                   aria-selected="true"><span>Recently added</span></button>
@@ -3380,22 +3462,29 @@ function paintFilters(pool) {{
     const n = pool.filter(d => fMatch(d, 'foster')
       && d.program === 'foster-to-adopt').length;
     prog.querySelector('b').textContent = n;
+    // The eye gets "Foster 15", the screen reader gets the program's real name
+    // and the same count. Rebuilt here rather than left static so the count
+    // doesn't fall out of the accessible name as the other filters change it.
+    prog.setAttribute('aria-label', `Foster-to-adopt ${{n}}`);
     prog.classList.toggle('on', fosterOnly);
     prog.setAttribute('aria-pressed', fosterOnly ? 'true' : 'false');
     prog.disabled = !n && !fosterOnly;
   }}
 }}
 
-// Four pills do not fit a phone. At 390px they overrun the row by ~55px at
-// 13.5px type, and nothing short of renaming Foster-to-adopt closes that, so
-// the row scrolls. A row that scrolls with no cue at its edge reads as a row
-// that simply ends — which hides Foster-to-adopt, the one filter here that
-// isn't a generic pet-site facet. These classes drive a mask in the stylesheet.
+// The four pills fit a 390px phone, but only just, and they stop fitting on a
+// narrower one. A row that scrolls with no cue at its edge reads as a row that
+// simply ends — which would hide Foster, the one filter here that isn't a
+// generic pet-site facet. These classes drive a mask in the stylesheet, and
+// nothing below asks how wide the screen is: the fade is keyed on whether this
+// row actually overruns, so it shows itself at 320px and stays away at 390px
+// without a breakpoint deciding for it. Renaming the pill didn't make this
+// dead code; it moved the width where it starts to matter.
 const pillRow = document.getElementById('fbar-pills');
 // scrollWidth/clientWidth force layout, so they're read only when something
 // could have changed them: a resize, or a repaint that rewrote the pill labels
-// (Foster-to-adopt's count changes width as you filter). Scrolling itself reads
-// only scrollLeft, which is free.
+// (Foster's count changes width as you filter). Scrolling itself reads only
+// scrollLeft, which is free.
 let pillSlack = 0;
 function paintPillFade() {{
   if (!pillRow) return;
@@ -3487,10 +3576,22 @@ function applySort() {{
 function paintSort() {{
   const pill = document.querySelector('.fpill[data-sort]');
   if (!pill) return;
-  const tag = pill.querySelector('.fp-t');
-  if (tag) tag.textContent = SORT_LABEL[sortBy] || SORT_LABEL.new;
+  const value = SORT_LABEL[sortBy] || SORT_LABEL.new;
+  // The trigger says "Sort by" and nothing else, in both states — the markup
+  // already says so, and this function deliberately doesn't touch it. It names
+  // the control rather than mirroring the value, which is the opposite of the
+  // filter pills, where the gender pill reads "Female" once you pick it. The
+  // difference is that there are two orders and one of them is the default, so
+  // the value is worth little and costs the widest label in the row. The menu
+  // is where the selection lives.
+  const btn = pill.querySelector('button');
+  // Which makes this the only thing carrying the answer for anyone who can't
+  // open the menu and look, so it is never conditional and never omitted.
+  if (btn) btn.setAttribute('aria-label', 'Sort by: ' + value);
   // Never filled, unlike the filter pills: something is always sorting, so a
-  // filled control here would read as "you've narrowed the list".
+  // filled control here would read as "you've narrowed the list". The menu
+  // carries the selection instead, in the accent colour the filter menus
+  // already use for theirs.
   pill.querySelectorAll('.fmenu button').forEach(opt =>
     opt.setAttribute('aria-selected', opt.dataset.v === sortBy ? 'true' : 'false'));
 }}

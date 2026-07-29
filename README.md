@@ -124,7 +124,17 @@ heading on each. That stopped working the moment filters arrived: the database
 accumulates a section per day and only sheds one when a rescue delists a dog, so
 within a few weeks a narrow filter scattered its handful of matches across a
 dozen headings that each announced "1 dog". The arrival date didn't go anywhere —
-it is the default sort, and today's dogs carry a NEW marker.
+it is the default sort, and today's dogs carry a NEW HERE marker.
+
+A gentler version was tried and rejected too: keep the flat grid but give
+today's arrivals a lead heading, with a second heading for everything else.
+Exactly two groups, so they couldn't multiply the way per-day sections did. It
+worked, and it still didn't earn its space — two headings stacked under a count
+line that already said "230 dogs" put three headings between you and the first
+dog, to say something the badge on each new card says where it's actually
+useful. It also had to vanish entirely under "Longest waiting", since grouping by
+arrival date while ordering by wait length contradicts itself. HANDOFF.md has the
+full reasoning; the code is in git history.
 
 What did go with the headings is any stated total. **Nothing on the page says how
 many dogs there are except the results count above the grid**, which is why that
@@ -134,20 +144,42 @@ line is permanent rather than something a filter conjures up.
 
 "230 dogs" — and "90 dogs" once a filter is on. Same sentence either way, only
 the number changes. It sits left-aligned directly above the first row of cards,
-at **19px/700 at every width — one size, no breakpoint**. The numeral is at full
+at **19px/700 on desktop and 17px/700 on phones**. The numeral is at full
 contrast and the unit is grey, the same pairing the date and its "N dogs" had.
 
 That 19px is deliberately one step *down* from the retired date headings, which
-were 23px on desktop; it is exactly the size those headings dropped to on
-phones. The count inherited their job when the grid was flattened, but not their
-row: it now shares a line with the 15px sort trigger across some 790px of gap,
-and at 23px the two ends read as unrelated things that happen to share a line
-rather than as one results header.
+were 23px on desktop. The count inherited their job when the grid was flattened,
+but not their row: it now shares a line with the sort trigger across some 790px
+of gap, and at 23px the two ends read as unrelated things that happen to share a
+line rather than as one results header.
 
-Matching the sort exactly at 15px was tried and rejected. The count is the only
-thing on the page that states how many dogs there are, and at control size it
-stops reading as a heading and becomes metadata. 19px closes most of the
-imbalance while still leading the grid.
+**Phones take 17px, in step with the rest of the ladder.** Every size on the page
+drops across this breakpoint — card names 23 to 19, filter pills 15 to 13.5 — and
+the count goes 19 to 17 with them. It has to: 19px is exactly `h3.nm`'s phone
+size, so at 19px the count was set in the very type it is a heading for and
+competed with the dog names instead of ranking above them. Measured at 390px.
+Desktop keeps 19px, where the names are 23px and the count already sits a step
+below them.
+
+Shrinking the count to the control size was tried and rejected — it is the only
+thing on the page that states how many dogs there are, and at 15px it stops
+reading as a heading and becomes metadata.
+
+**The sort trigger is 17px at every width, and does not follow the count.** It
+spent a while at the count's 19px, on the theory that the two ends of the results
+header should agree. That made the least-used control on the page the loudest
+thing in its row, and louder than the four filter pills above it — which are the
+controls people actually reach for. The count is the only heading here, so it is
+the only thing that moves with the type ladder; the sort is a control and takes
+one value at both breakpoints. 17px still sits above the pills' control scale
+(15px desktop, 13.5px phones), so it reads as part of the results header rather
+than as a fifth filter.
+
+**Its chevron carries its own ratio, deliberately.** The shared `.cv` ratio is
+`.72em`; the sort overrides it to `.66em`, drawing an 11.2px arrow against the
+pills' 10.8px. The arrow is the least informative mark in the row, so it is the
+first thing to give up size — and owning its own ratio means retuning the sort's
+type never swings the arrow with it.
 
 **It doesn't say "90 of 230".** The pre-filter total was dropped on purpose: the
 pills go solid accent when a filter is on, and clearing one brings the total
@@ -167,36 +199,46 @@ Clear is gone (see below) and the count and the sort are both permanent, so the
 row is a constant 44px by construction. Filtering moves the pills, the grid and
 the first card by 0.00px, measured at 1440px and 390px.
 
+### Sort by
+
 Sort sits at the right-hand end of that same line. That row is the page's
 results header: what you're looking at on the left, the control that reorders it
-on the right. The filter pills have the row above to themselves, and within any
-one screen width the pills and the sort share a single control size so they read
-as one set of controls — 15px on desktop, 13.5px on phones. The two widths
-deliberately don't match: a phone row is width-constrained in a way desktop
-isn't, and the larger type pushed the last pill further out of reach for no
-visible gain. The sort stays the quieter of the two through weight and colour
-rather than size, and never fills with accent, because something is always
-sorting.
+on the right. It never fills with accent the way a filter pill does, because
+something is always sorting and a filled control would claim you'd narrowed the
+list.
 
-On phones the sort keeps its full "Sort by:" label. It was briefly cut down to
-the bare value when the row was more crowded, which left it reading as a caption
-rather than a control; the label is the affordance, so it came back as soon as
-the line had room. Below 340px there genuinely isn't room, and only there does
-it fall back to the value alone inside a thin border — still announced as "Sort
-by: Recently added" to a screen reader.
+**It reads "Sort by" and does not show which order is selected** — not even
+after you change it. That's unusual, and it's the opposite of the filter pills,
+where the gender pill reads "Female" once you pick it. The difference is that
+there are two orders and one of them is what you get without touching anything,
+so displaying the value spends the widest label in the row to tell you nothing
+happened. The menu marks the current order in the accent colour instead. A
+conditional version — name the control on the default, name the value once
+changed — was built and rejected: a label that changes shape is its own kind of
+confusing.
 
-### The filter row scrolls on a phone, and says so
+The one thing that is never conditional is the accessible name. The button
+always announces "Sort by: Recently added" or "Sort by: Longest waiting". A
+sighted person can open the menu and look; a screen reader user can't be left
+with a control that only ever says "Sort by".
 
-Four pills don't fit a 390px screen. They need 412.7px against 358px available,
-and it's one label's doing: "Foster-to-adopt 15" is 158.1px, wider than "Breed"
-and "Age" put together. No amount of tightening closes that gap, so the row
-scrolls sideways.
+### The filter row fits a phone now, and says so when it doesn't
 
+For a long time it didn't. Four pills needed 412.7px against the 358px a 390px
+phone has, and it was one label's doing: "Foster-to-adopt 15" measured 158.1px,
+wider than "Breed" and "Age" put together. **The pill was shortened to
+"Foster"**, and all four now fit with the row scrolling nowhere. See "Filters"
+below for why only the pill was shortened.
+
+Narrower phones still overflow — 320px is 61px short — so the scroll cue stayed.
 A row that scrolls with nothing at its edge just looks like a row that ends,
 which would hide the one filter here that isn't a generic pet-site facet. So the
 edge with more pills behind it fades out, and the fade disappears when you reach
-the end — the same cue in reverse appears on the left once you've scrolled away
-from the start. On desktop, where all four fit, it never appears at all.
+the end; the same cue in reverse appears on the left once you've scrolled away
+from the start. It's keyed on whether the row actually overruns rather than on a
+screen width, so it shows up at 320px, stays away at 390px, and would come back
+by itself if some future label pushed the row over again. On desktop it never
+appears.
 
 It's drawn as a mask rather than as a gradient laid over the row, which means it
 can't swallow a tap: every pill stays tappable through it. It also fades to
@@ -209,8 +251,8 @@ sunrise and sunset rather than the operating system, that matters.
 Removing it is deliberate. Clear used to sit beside the count, where an
 underlined link next to a heading read as a footnote rather than a control.
 Nothing became unreachable: every pill menu opens with "Any breed" / "Any
-gender" / "Any age", and Foster-to-adopt is a toggle, so each filter is undone
-where it was set.
+gender" / "Any age", and Foster is a toggle, so each filter is undone where it
+was set.
 
 The one bulk reset that remains is **"Show all dogs"**, inside the "No dogs
 match those filters" panel — the only place you can be genuinely stuck, because
@@ -221,10 +263,20 @@ route.
 
 ### Filters
 
-Four pills — Breed, Gender, Age, and a Foster-to-adopt toggle. `breed_group` and
+Four pills — Breed, Gender, Age, and a Foster toggle. `breed_group` and
 `age_bucket` are derived **server-side** in `page.py` (`breed_group()`,
 `age_months()`, `age_bucket()`) and shipped on every dog, so the browser filters
 against one fixed vocabulary instead of re-reading "approx 6 1/2 years" in JS.
+
+**Only that pill says "Foster". Everywhere else the program keeps its full name,
+"Foster-to-adopt"** — on the dog's card, in the modal, and in the sentence above
+the apply button. The short label is on the pill because the long one was the
+entire reason the filter row didn't fit a phone, and it's the pill's visible text
+only: its accessible name is still "Foster-to-adopt", so a screen reader gets
+the unambiguous version. The trade is worth stating plainly, because it is a
+real one: "Foster" on its own can be read as fostering temporarily, which is a
+different arrangement from fostering with intent to adopt. The chip on each card
+is what prevents that reading, so the two can't be separated.
 
 Every option carries a live count, computed against the other active filters but
 deliberately not against its own pill, so the numbers in an open menu are
@@ -285,7 +337,7 @@ record long predates the listing you're looking at.
 
 ### Badges
 
-Two module-level flags in `page.py` decide what appears on a card:
+Two module-level flags and one string in `page.py` decide what appears on a card:
 
 - **`SHOW_WAIT_BADGE_ON_CARDS = False`.** The hourglass "⏳ Listed N days" badge
   is off on grid cards. Once the scrapers started supplying real listing dates,
@@ -299,6 +351,12 @@ Two module-level flags in `page.py` decide what appears on a card:
 - **`NEW_MARK_MAX_SHARE = 0.5`.** The NEW marker is suppressed *entirely* when
   more than half the grid arrived today, because a marker on nearly every card
   marks nothing.
+- **`NEW_MARK_LABEL = "New here"`.** What that marker says, rendered uppercase.
+  It reads as the dog saying it, which matches the voice of the quip bubbles, and
+  it is one constant rather than a string copied into three templates — the
+  runners-up were "Just in" and "New face". If you swap it, check the width: at
+  390px "NEW HERE" already takes 39% of a card, and a longer string will not fit
+  without wrapping.
 
 **The consequence of that second flag will confuse you at some point:** on a
 freshly seeded database every dog is seen for the first time today, so no NEW
@@ -308,7 +366,14 @@ finding none, check whether every dog's `first_seen` is today before you go
 hunting in the rendering code.
 
 The NEW marker sits on the photo itself, bottom-right — the corner the wait badge
-vacated — rather than beside the dog's name.
+vacated — rather than beside the dog's name. On desktop it disappears while you
+hover the card, because the quip bubble that slides up occupies the same corner
+and isn't quite wide enough to cover the badge, so its red ends showed on either
+side of the white and read as a rendering fault. Hiding the badge rather than
+moving it is deliberate: quips are per-dog strings of different lengths and some
+wrap to three lines, so any nudge tuned to today's longest quip stops working on
+tomorrow's. The rule lives inside the same hover-capable media query as the
+bubble, so on a phone — where there is no bubble — the badge never disappears.
 
 ## Saved dogs
 
