@@ -29,6 +29,7 @@ The Los Angeles source here is a fake defined in this file. It is never
 registered in `sources/registry.py`, so nothing in production can reach it.
 """
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -599,6 +600,80 @@ def test_schedule_runs_each_city_on_its_own_clock():
         eq("neither ever sleeps zero seconds", min(wait, wait2) > 0, True)
     finally:
         cities.CITIES = saved
+
+
+def test_a_city_dropping_out_keeps_its_pages():
+    """page.write() must never delete a city it wasn't handed.
+
+    This is the shape of the original bug. public/dog/ and sitemap.xml are shared
+    between cities, so the naive fix — call write() once per city — had each city
+    delete the other's dog pages and publish a sitemap covering half the site.
+    check.py leaves a city out when its sources return nothing, so "not in this
+    pass" is a thing that will really happen, on a morning when a rescue's site is
+    down rather than never.
+    """
+    import page
+    out = TMP / "pages"
+    saved_out = page.OUT_DIR
+    try:
+        page.OUT_DIR = out
+        os.environ["SITE_URL"] = "https://luvd.com"
+        today = date(2026, 7, 29)
+        iso = today.isoformat()
+        for d in NYC_DOGS + LA_DOGS:
+            d.first_seen = iso
+
+        def sitemap():
+            return re.findall(r"<loc>(.*?)</loc>",
+                              (out / "sitemap.xml").read_text())
+
+        page.write({"NYC": [(iso, NYC_DOGS)], "LA": [(iso, LA_DOGS)]}, today)
+        both = sitemap()
+        la_page = (out / "la.html").read_text()
+        la_urls = sorted(u for u in both if "wagmor" in u)
+        eq("both cities published", (out / "la.html").exists()
+           and (out / "index.html").exists(), True)
+        eq("LA's dog pages exist",
+           len(list((out / "dog" / "wagmor-rescue").iterdir())), 2)
+        eq("sitemap covers both", ("https://luvd.com/" in both,
+                                   "https://luvd.com/la" in both), (True, True))
+
+        # LA's scrapers fail: check.py hands over New York alone.
+        page.write({"NYC": [(iso, NYC_DOGS)]}, today)
+        after = sitemap()
+        eq("LA's page survived", (out / "la.html").read_text(), la_page)
+        eq("LA's dog pages survived",
+           len(list((out / "dog" / "wagmor-rescue").iterdir())), 2)
+        eq("LA's sitemap URLs were carried",
+           sorted(u for u in after if "wagmor" in u), la_urls)
+        eq("New York's are all still there",
+           len([u for u in after if "/dog/" in u]), 5)
+        eq("and nothing is listed twice", len(after) - len(set(after)), 0)
+
+        # LA comes back with one dog gone: the stale page and URL must go.
+        page.write({"NYC": [(iso, NYC_DOGS)], "LA": [(iso, LA_DOGS[:1])]}, today)
+        back = sitemap()
+        eq("the adopted dog's page is gone",
+           len(list((out / "dog" / "wagmor-rescue").iterdir())), 1)
+        eq("and its URL with it",
+           len([u for u in back if "/dog/wagmor-rescue/" in u]), 1)
+        eq("no duplicates after the round trip",
+           len(back) - len(set(back)), 0)
+
+        # A sitemap left over from a different SITE_URL must not be republished:
+        # every later run would carry it again, forever.
+        (out / "sitemap.xml").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            "<url><loc>http://localhost:8000/dog/wagmor-rescue/x-1</loc></url>"
+            "</urlset>", encoding="utf-8")
+        page.write({"NYC": [(iso, NYC_DOGS)]}, today)
+        eq("another origin's URLs are not carried",
+           [u for u in sitemap() if "localhost" in u], [])
+    finally:
+        page.OUT_DIR = saved_out
+        import shutil
+        shutil.rmtree(out, ignore_errors=True)
 
 
 def test_sources_are_partitioned_by_city():

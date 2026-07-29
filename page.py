@@ -4460,7 +4460,13 @@ def _carried_sitemap_urls(site: str, owned: set, written_paths: set) -> list:
     keep = []
     for url in re.findall(r"<loc>(.*?)</loc>", raw):
         url = html.unescape(url)
-        path = url[len(site):] if url.startswith(site) else url
+        # Only URLs on this site. Anything else is a leftover from a different
+        # SITE_URL — a local render, a staging host — and republishing it would
+        # put another origin's URLs in this site's sitemap and keep them there
+        # for good, since every later run would carry them again.
+        if not url.startswith(site + "/"):
+            continue
+        path = url[len(site):]
         if path in written_paths:
             continue
         slug = ""
