@@ -3,7 +3,16 @@
 A daily-updating page of every adoptable dog across NYC rescues.
 Python + Flask + SQLite, containerised. `DEPLOY.md` is the step-by-step.
 
-## Deploy in one line
+## Deploying
+
+**Production deploys on push.** `.github/workflows/fly-deploy.yml` runs
+`flyctl deploy --remote-only` for every push to `main` — no tests, no staging,
+no approval step. Treat `main` as the release branch and read `DEPLOY.md`'s first
+section before pushing; the two things that catch people out are that migrations
+run at container boot rather than in CI, and that a second push cancels a deploy
+still in flight.
+
+The manual VPS path still exists, for a box you own rather than Fly:
 
 ```bash
 ./deploy.sh <server-ip> luvd.com <ssh-key.pem>

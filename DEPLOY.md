@@ -1,5 +1,30 @@
 # Deploying LUVD NYC
 
+## Read this first: `main` deploys itself
+
+`.github/workflows/fly-deploy.yml` runs `flyctl deploy --remote-only` on **every
+push to `main`**. There is no test step, no staging environment and no approval
+gate, so a push is a production release the moment it lands. It needs the
+`FLY_API_TOKEN` repo secret; the live app is `luvd-nyc` (`fly.toml`).
+
+Two consequences worth knowing before you push:
+
+- **Schema changes apply on the first request, not in the workflow.** Nothing in
+  CI runs a migration. `app.py` calls `db.init_db()` at import, so the new
+  container migrates the volume as it boots. Migrations therefore have to be
+  additive and idempotent — see `db._migrate()`.
+- **A second push cancels the first mid-flight.** The workflow sets
+  `cancel-in-progress: true`, which is right for a queue of images but means a
+  rapid follow-up push can interrupt a release that was already rolling.
+
+The rest of this file is the **manual VPS runbook** — the original Docker +
+Caddy target, kept because it still works and because it documents the
+environment the container expects. It is not what production runs; production is
+Fly, one machine, one volume, `fly-start.sh` running gunicorn and the nightly
+scrape together.
+
+---
+
 Target: a small VPS running Docker, with Caddy terminating TLS. Roughly $5/month.
 Everything below is copy-paste; substitute your domain where marked.
 
