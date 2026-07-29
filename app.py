@@ -70,62 +70,69 @@ def handle_404(_):
     return _not_found()
 
 
-def _welcome_in_background(email: str):
-    """Send the signup confirmation without the visitor waiting on Mandrill.
+def _in_background(label: str, work):
+    """Run work() off the request thread, where it cannot affect the response.
 
-    send_email() allows itself 30 seconds, and there are only two gunicorn
-    workers — holding one of them for that long on a form post would be enough
-    to stall the site. The thread is a daemon because it must never keep the
-    machine from shutting down; the send takes seconds and the worker lives for
-    the life of the deploy, so it has time to finish.
+    Everything the subscribe and unsubscribe handlers do after the database
+    write — the transactional mail and the subscriber sheet mirror — wants the
+    same two guarantees, so they share one mechanism rather than each growing
+    its own.
 
-    Nothing here can fail the signup: the subscriber is already recorded before
-    this is called, and a failed send is logged and dropped.
+    It must not hold a worker. send_email() allows itself 30 seconds and
+    sheet_sync 30 more, and there are only two gunicorn workers, so holding one
+    for that long on a form post is enough to stall the site.
+
+    And it must not be able to fail the request. The database write is already
+    committed before anything here starts, so every failure — including the
+    thread refusing to start — is logged and dropped. That matters most on the
+    unsubscribe path: leaving is a compliance promise and cannot be made to
+    wait on, or fail because of, a third-party API.
+
+    Daemon threads, so neither job can keep the machine from shutting down. The
+    worker lives for the life of the deploy, so seconds of work has time to
+    finish. `label` names the thread and heads its log lines.
     """
+    def run():
+        try:
+            work()
+        except Exception as e:
+            app.logger.warning("%s failed: %s: %s", label, type(e).__name__, e)
+
+    try:
+        threading.Thread(target=run, name=label, daemon=True).start()
+    except Exception as e:
+        app.logger.warning("could not start %s: %s", label, e)
+
+
+def _mail_in_background(kind: str, email: str):
+    """Send emailer.send_<kind>(email) without the visitor waiting on Mandrill."""
     import emailer
 
     if not emailer.email_configured():
-        app.logger.info("welcome email skipped for %s — MANDRILL_API_KEY unset",
-                        email)
+        app.logger.info("%s email skipped for %s — MANDRILL_API_KEY unset",
+                        kind, email)
         return
+    send = getattr(emailer, f"send_{kind}")
 
-    def run():
-        try:
-            emailer.send_welcome(email)
-            app.logger.info("welcome email sent to %s", email)
-        except Exception as e:
-            app.logger.warning("welcome email to %s failed: %s: %s",
-                               email, type(e).__name__, e)
+    def work():
+        send(email)
+        app.logger.info("%s email sent to %s", kind, email)
 
-    try:
-        threading.Thread(target=run, name="welcome-email", daemon=True).start()
-    except Exception as e:
-        app.logger.warning("could not start welcome email thread for %s: %s",
-                           email, e)
+    _in_background(f"{kind} email to {email}", work)
 
 
 def _sheet_sync_in_background():
     """Mirror the subscribers table to the backup Google Sheet.
 
-    Same shape as the welcome email: the row is already committed to SQLite
-    before this runs, so a failed or skipped sync can never lose a signup —
-    the nightly run re-mirrors the full table and heals any gap.
+    Fired only where the table actually changed. A skipped or failed sync can
+    never lose anything: SQLite is the source of truth, every sync POSTs the
+    whole table, and the nightly run re-mirrors it and heals any gap.
     """
     import sheet_sync
 
     if not sheet_sync.configured():
         return
-
-    def run():
-        try:
-            sheet_sync.sync_subscribers()
-        except Exception as e:
-            app.logger.warning("sheet sync failed: %s: %s", type(e).__name__, e)
-
-    try:
-        threading.Thread(target=run, name="sheet-sync", daemon=True).start()
-    except Exception as e:
-        app.logger.warning("could not start sheet sync thread: %s", e)
+    _in_background("subscriber sheet sync", sheet_sync.sync_subscribers)
 
 
 @app.route("/subscribe", methods=["POST"])
@@ -137,7 +144,7 @@ def subscribe():
     # True only for a new address or someone opting back in after unsubscribing,
     # so re-submitting an active address doesn't mail them again.
     if db.add_subscriber(email):
-        _welcome_in_background(email)
+        _mail_in_background("welcome", email)
         _sheet_sync_in_background()
     return jsonify({"ok": True})
 
@@ -152,8 +159,15 @@ def unsubscribe():
     token = request.values.get("t") or ""
     if not email or not _hmac.compare_digest(token, emailer.unsub_token(email)):
         return ("This unsubscribe link isn't valid.", 400)
-    db.deactivate_subscriber(email)
-    _sheet_sync_in_background()
+    # True only for the call that actually took an active row off the list, so
+    # a second click on the footer link — or a client firing the one-click
+    # endpoint after the reader already used it — sends no second goodbye. The
+    # sheet is behind the same test because it is a mirror of the table: a call
+    # that changed no row has nothing to mirror, and the payload it would post
+    # is the one already there.
+    if db.deactivate_subscriber(email):
+        _mail_in_background("goodbye", email)
+        _sheet_sync_in_background()
     if request.method == "POST":
         return jsonify({"ok": True})
     return f"""<!doctype html><meta charset="utf-8">
