@@ -19,6 +19,7 @@ from .rescues.petconnect import PetConnectSource
 from .rescues.koreank9 import KoreanK9Source
 from .rescues.nycsecondchance import NYCSecondChanceSource
 from .rescues.wagmor import WagmorSource
+from .rescues.loveleo import LoveLeoSource
 
 # Rescues we scrape directly from their own sites.
 _DIRECT: List[Source] = [
@@ -29,12 +30,16 @@ _DIRECT: List[Source] = [
 
 # Rescues read through Petstablished's public search API. Korean K9's own site
 # is behind a Cloudflare challenge; NYC Second Chance's adoptable page is just
-# an iframe of this same widget; Wagmor is Los Angeles, and being on a platform
-# LUVD already reads is why it could open the same day it was chosen.
+# an iframe of this same widget; Wagmor and Love Leo are Los Angeles, and being
+# on a platform LUVD already reads is why both could open the same day they were
+# chosen. They are also the only two: a sweep of ~250 LA-area organisations in
+# Petstablished's own directory found three with live dogs. Every LA rescue after
+# these needs a scraper of its own.
 _VIA_PLATFORM: List[Source] = [
     KoreanK9Source(),          # 15
     NYCSecondChanceSource(),   # 16
     WagmorSource(),            # 20 — Los Angeles
+    LoveLeoSource(),           # 21 — Los Angeles
 ]
 
 

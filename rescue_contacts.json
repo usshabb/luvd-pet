@@ -62,5 +62,13 @@
     "apply_url": "https://nycsecondchancerescue.org/dog-adoption-application/",
     "contact_url": "https://nycsecondchancerescue.org/contact/",
     "evidence": "Every one of their Petstablished listings closes with 'The first step in the process is filling out an application on our website' and cites https://nycsecondchancerescue.org/dog-adoption-application/ (26/26 dogs on page 1; resolves 200, titled 'Dog Adoption Application'). The older /general-application/ link that appears in some write-ups now 301s. Email rescue@nycsecondchancerescue.org is the address the rescue publishes in its own Petstablished organization record (shelter 83716). 501(c)(3), EIN 26-4835303, PO Box 570701 Whitestone NY 11357."
+  },
+  "loveleo": {
+    "label": "Love Leo Rescue",
+    "method": "application",
+    "apply_url": "https://petstablished.com/adoptions/personal-information?application_type=Adopt&donation_section=false&form_id=36515&form_type=generic&generic_form_id=36515&pet_id=1226244&section=1&selected_pets=false",
+    "contact_url": "https://loveleorescue.org/contact",
+    "evidence": "https://loveleorescue.org/ - nav item 'ADOPTION APPLICATION' links straight to the Petstablished adoption form above (form_id=36515); their own /adopt page is the Wagtopia widget and renders nothing without JavaScript. The site's dog list embeds wagtopia.com/search/org?id=2349259, which confirms the org_id this source reads. No email address or phone number is published anywhere on the site: https://loveleorescue.org/contact is a web form - 'Questions? Please fill out the contact form below. As a small team, we appreciate your patience. Please allow 24-48 hours for a reply.' Note the domain is .org; loveleorescue.com has no DNS record at all. 501(c)(3), EIN 47-4175366, Los Angeles CA. Verified 2026-07-29.",
+    "city": "LA"
   }
 }
