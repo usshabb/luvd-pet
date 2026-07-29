@@ -9,6 +9,17 @@ The listing card only carries name / age / sex / photo, so we follow each
 dog's link to pick up the description, breed, weight, fee and gallery photos.
 Detail fetches are polite (shared session, small delay) and best-effort: a dog
 whose detail page fails is still returned with its listing data.
+
+NO LISTING DATE (checked 2026-07-28)
+------------------------------------
+``listed_since`` is deliberately left empty: there is no date anywhere in this
+feed. The pages are HubSpot dynamic pages over a HubDB table synced from
+ShelterLuv, and the row's own createdAt is the only candidate — table 6527631
+answers "not publicly available" without a portal token, and neither the
+listing markup, the detail markup, the meta tags nor sitemap.xml carries a
+date. ``first_seen`` therefore carries these dogs, which for Animal Haven is
+not a bad fit: their write-ups say "I just arrived at Animal Haven!" while the
+photos are still pending, so most of this roster is genuinely new.
 """
 import re
 import time

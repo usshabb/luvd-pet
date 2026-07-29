@@ -1,15 +1,23 @@
 """Registry of all sources, in priority order.
 
-Direct rescue listings (priority 0-899) are preferred and checked first.
-Petfinder's city-wide search (900) is the fallback that catches everything else.
+Rescues we scrape from their own sites come first (priority 0-899). Rescues
+whose own site can't be read are pulled from the platform they actually adopt
+on, which is the same data their site renders.
+
+There is no city-wide fallback any more: that was the Petfinder API, which was
+decommissioned on 2 December 2025 and replaced with an embed-only widget. Every
+rescue is therefore explicit here, and adding one is a deliberate act.
+``sources/petfinder.py`` is kept unregistered for reference only.
 """
 from typing import List
 
 from .base import Source
-from .petfinder import PetfinderSource, PetfinderOrgSource
+from .petstablished import PetstablishedSource
 from .rescues.muddypaws import MuddyPawsSource
 from .rescues.animalhaven import AnimalHavenSource
 from .rescues.petconnect import PetConnectSource
+from .rescues.koreank9 import KoreanK9Source
+from .rescues.nycsecondchance import NYCSecondChanceSource
 
 # Rescues we scrape directly from their own sites.
 _DIRECT: List[Source] = [
@@ -18,19 +26,13 @@ _DIRECT: List[Source] = [
     PetConnectSource(),    # 14 — 24PetConnect / Sean Casey
 ]
 
-# Rescues whose own site blocks scraping, pulled via the sanctioned Petfinder API.
-# Korean K9 Rescue sits behind a Cloudflare challenge; they publish as org NY1374.
-_DIRECT_VIA_API: List[Source] = [
-    PetfinderOrgSource(
-        org_id="NY1374",
-        name="koreank9",
-        label="Korean K9 Rescue",
-        priority=15,
-        adopt_url="https://www.koreank9rescue.org/adopt/",
-    ),
+# Rescues read through Petstablished's public search API. Korean K9's own site
+# is behind a Cloudflare challenge; NYC Second Chance's adoptable page is just
+# an iframe of this same widget.
+_VIA_PLATFORM: List[Source] = [
+    KoreanK9Source(),          # 15
+    NYCSecondChanceSource(),   # 16
 ]
-
-_FALLBACK: List[Source] = [PetfinderSource()]
 
 
 def _try_optional():
@@ -50,10 +52,10 @@ def _try_optional():
 
 
 def all_sources() -> List[Source]:
-    sources = _DIRECT + _DIRECT_VIA_API + _try_optional() + _FALLBACK
+    sources = _DIRECT + _VIA_PLATFORM + _try_optional()
     return sorted(sources, key=lambda s: s.priority)
 
 
 def direct_sources() -> List[Source]:
-    """Everything except the broad Petfinder fallback."""
+    """Everything except a broad city-wide search. Currently every source."""
     return [s for s in all_sources() if s.priority < 900]

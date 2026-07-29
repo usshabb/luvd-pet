@@ -45,6 +45,7 @@ from typing import List, Optional
 import requests
 
 from ..base import Dog, Source, clean_text
+from ..dates import listing_date
 
 API = "https://petstablished.com/api/v2/public/search"
 ORG_ID = "3856"
@@ -73,6 +74,10 @@ MAX_PAGES = 10          # guard against a runaway/looping total_page
 _UNAVAILABLE_STATUS = re.compile(
     r"\b(adopted|hold|pending|deceased|transferred|returned)\b", re.I
 )
+
+# A dog back from an adoption has a record older than its current listing, so
+# its creation date says nothing about the wait. See _listed_since.
+_PLACED_BEFORE = re.compile(r"adopted", re.I)
 
 # Values that mean "nobody filled this in" and must not reach the card.
 _PLACEHOLDERS = {"not available", "unknown", "n/a", "na", "none", "-"}
@@ -219,7 +224,29 @@ class WaggytailSource(Source):
             attributes=self._attributes(detail),
             fee=self._fee(detail.get("adoption_fee")),
             adopt_url=self.adopt_url,
+            listed_since=self._listed_since(detail),
         )
+
+    @staticmethod
+    def _listed_since(detail: dict) -> str:
+        """When Waggytail created this dog's record on Petstablished.
+
+        A record-creation date, not a publication date — Petstablished has no
+        field for the latter. It tracks intake closely (``date_aquired`` is
+        within days of it on every record in this roster) and is the safer of
+        the two, since a listing can't exist before its own record.
+
+        Two records are left blank on purpose. A dog whose previous status was
+        Adopted is back from a home, and its record dates from the first time
+        round; and a date before the dog's own birthday is a broken record.
+        Waggytail carries several multi-year fosters whose dates are real but
+        long, and only the immediately-previous status is exposed, so a dog
+        adopted and returned a while ago still reads as a long single wait.
+        """
+        if _PLACED_BEFORE.search(str(detail.get("previous_status") or "")):
+            return ""
+        return listing_date(detail.get("created_at"),
+                            born=detail.get("date_of_birth"))
 
     @staticmethod
     def _photos(rec: dict, detail: dict) -> List[str]:

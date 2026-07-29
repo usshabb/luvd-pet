@@ -46,6 +46,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..base import Dog, Source, clean_text
+from ..dates import listing_date
 
 BASE = "https://24petconnect.com"
 SHELTER_CODE = "PP1296"
@@ -146,6 +147,15 @@ class PetConnectSource(Source):
                 sex=_txt(card, ".text_Gender"),
                 location=_txt(card, ".text_Locatedat") or "Brooklyn, NY",
                 adopt_url=self.adopt_url,
+                # "Brought to the shelter", dotted: 2026.05.10. The clearest
+                # wait date of any source here — the detail page renders the
+                # same value as prose ("I have been at the shelter since May
+                # 10, 2026"), and a dog returned to Sean Casey is taken in
+                # again, so it describes this stay rather than the record's
+                # whole history. It is an intake date: a dog spends some of it
+                # in medical or behavioural care before adopters see them.
+                listed_since=listing_date(
+                    _txt(card, ".text_Broughttotheshelter")),
             ))
         return dogs
 

@@ -77,16 +77,20 @@ def collect(prefs, verbose=True):
         # different rescues. Inside one source the id is authoritative — two
         # dogs there can legitimately share a name, and a quarter of ours have
         # breed "Unknown", so fuzzy-matching within a source would delete one.
-        source_keys = set()
+        source_keys, source_reprints = set(), set()
         for dog in found:
             if dog.id in seen_ids:
                 continue
+            reprint = dog.reprint_key()
+            if reprint and reprint in source_reprints:
+                continue                      # rescue entered this dog twice
             key = dog.dedupe_key()
             if key in seen_keys and key not in source_keys:
                 continue                      # same dog, higher-priority source
             seen_ids.add(dog.id)
             seen_keys.add(key)
             source_keys.add(key)
+            source_reprints.add(reprint)
             dogs.append(dog)
             kept += 1
         if verbose:
@@ -129,7 +133,7 @@ def run(dry_run=False):
     today_d = nyc_today()
     today = today_d.isoformat()
 
-    print("Fetching NYC rescues (direct first, Petfinder last)...")
+    print("Fetching NYC rescues (own sites first, platform APIs after)...")
     dogs, failures = collect(prefs)
 
     # A scraper breaking is the most likely failure here — rescue sites get

@@ -60,7 +60,7 @@ ssh "${SSH_OPTS[@]}" "$REMOTE" "cd /opt/luvd
     cp .env.example .env
     printf '\nLUVD_DOMAIN=%s\nSITE_URL=https://%s\nLUVD_DB=/data/dogfinder.db\n' \
       '$DOMAIN' '$DOMAIN' >> .env
-    echo '  created .env — add PETFINDER/RESEND keys later with: nano /opt/luvd/.env'
+    echo '  created .env — add the RESEND key later with: nano /opt/luvd/.env'
   else
     grep -q '^LUVD_DOMAIN=' .env || echo 'LUVD_DOMAIN=$DOMAIN' >> .env
     echo '  .env already exists, left as-is'

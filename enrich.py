@@ -294,6 +294,357 @@ def _monthly_cost(dog, base, adult_lbs, grooming_text):
     }
 
 
+# The card hover bubble clamps to two lines at 12.5px, so anything past roughly
+# 80 characters gets truncated mid-joke. Keep every line short.
+_QUIP_MAX = 80
+
+# Lines any dog can truthfully say. The last resort, so that a dog whose better
+# options are all taken still gets to say something.
+_QUIP_ANY = [
+    "Adoptable, delightful, and extremely available.",
+    "Still here, still hopeful, still extremely good.",
+    "Ready to be somebody's favorite decision.",
+    "Looking for one human. Standards: low. Loyalty: high.",
+    "Available now, affectionate always.",
+    "I don't have a resume, just excellent vibes.",
+    "Here for the long haul, ideally on your couch.",
+    "Will trade eye contact for a walk.",
+    "Ready for a door with my name on it.",
+    "One good human is all I'm after.",
+    "Small ask: a name, a bed, and you.",
+    "Prepared to love you unreasonably.",
+    "Vacancy in my life, roughly your size.",
+    "I come with a wag and zero baggage claims.",
+    "Interviewing humans. You seem promising.",
+    "Would very much like to go home now.",
+    "New leash on life, pending your signature.",
+    "Yours, if you'll have me.",
+]
+
+
+def _breed_word(d: Dog) -> str:
+    """A short breed noun that reads naturally mid-sentence, or "".
+
+    "Mixed Breed (Medium)" -> "mutt", "Retriever, Labrador/Mix" -> "retriever".
+    Returns "" when the rescue didn't record a usable breed, which is common —
+    roughly a third of dogs come through as "Unknown".
+    """
+    raw = (d.breed or "").split("/")[0].split(",")[0]
+    raw = re.sub(r"\([^)]*\)", "", raw).strip().lower()
+    raw = re.sub(r"\b(dog|mix|mixed)\b", "", raw).strip(" -")
+    if not raw or "unknown" in raw:
+        return ""
+    if raw in ("breed", "domestic", "other"):
+        return "mutt"
+    return raw if len(raw) <= 22 else ""
+
+
+def _quip_tiers(d: Dog) -> List[tuple]:
+    """(priority, lines) for every claim this dog's own listing supports.
+
+    Priority ranks how well-grounded a line is: an explicit shelter label beats
+    a phrase in the rescue's prose, which beats age, size and breed generics.
+    """
+    desc = (d.description or "").lower()
+    traits = " ".join(t["text"].lower() for t in (d.traits or []))
+    hay = f"{desc} {traits}"
+    age_years = _parse_age_years(d.age)
+    lbs = _weight_lbs(d)
+    size = (d.size or _size_from_breed_string(d.breed)).lower()
+    is_big = (lbs is not None and lbs >= 70) or size in ("large", "xlarge")
+    is_small = (lbs is not None and lbs <= 20) or size == "small"
+    breed = _breed_word(d)
+
+    def has(pat):
+        return re.search(pat, hay) is not None
+
+    rules = [
+        (9, has(r"good with (kids|children)|kid[- ]friendly|great with children"),
+         ["Kids? Adore 'em. I'm basically a fuzzy babysitter.",
+          "Great with little humans — I even share my toys.",
+          "Certified kid-approved. The small ones are my people.",
+          "Good with kids, excellent at being tackled.",
+          "I let the children win. Every time.",
+          "Built for birthday parties and backyard chaos.",
+          "The kids can climb me. I've signed off on it.",
+          "Family dog, fully vetted by small critics."]),
+        (9, has(r"good with (other )?dogs|dog[- ]friendly|gets along with dogs"),
+         ["I make friends at the dog run in about four seconds.",
+          "Other dogs? Instant best friends. Bring the whole pack.",
+          "Good with dogs, great at group naps.",
+          "I've never met a dog I didn't like. Streak intact.",
+          "Happy to share the park. And the water bowl.",
+          "Plays well with others. Ask any of them.",
+          "Bring your dog. We'll sort it out in seconds.",
+          "I speak fluent dog and I'm very polite about it.",
+          "Sidekick available; existing dog welcome.",
+          "Dog park regular, no notes.",
+          "The more dogs the better, honestly.",
+          "I do my best work in a pack.",
+          "Fine with a canine roommate. Encouraged, even.",
+          "Social butterfly, four legs, no wings.",
+          "Every dog here is a friend I haven't sniffed yet.",
+          "Good with dogs, and modest about it."]),
+        (9, has(r"good with cats|cat[- ]friendly|fine with cats"),
+         ["Yep, I'm cool with cats. Very diplomatic of me.",
+          "I'll share the couch with the cat. Treaty signed.",
+          "Cat-approved, which is a high bar.",
+          "The cat and I have an understanding.",
+          "Cats? Coexistence achieved. Peace held.",
+          "I don't chase cats. I respect them.",
+          "Feline roommate? No objections filed.",
+          "Good with cats, better with people.",
+          "I've made peace with the cat lobby.",
+          "Cat-friendly and quietly proud of it.",
+          "Will ignore your cat with total professionalism.",
+          "The cat can keep the windowsill."]),
+        (8, has(r"house[- ]?trained|housebroken|potty[- ]?trained"),
+         ["Already house-trained — your rugs are safe with me.",
+          "House-trained and proud. I take my business outside.",
+          "Housebroken. Your floors and I are on great terms.",
+          "I know where the bathroom is. It's outside.",
+          "Fully house-trained, zero accidents to report.",
+          "No puddles, no drama. House-trained already.",
+          "Your security deposit is safe with me.",
+          "House-trained, so we can skip that chapter.",
+          "I ask to go out. Politely, usually.",
+          "Trained indoors, thrilled outdoors.",
+          "Rugs: respected. Floors: unbothered.",
+          "House-trained and holding it like a champ.",
+          "One less thing to teach me. You're welcome.",
+          "I've mastered doors and what's on the other side."]),
+        (8, has(r"crate[- ]?trained"),
+         ["Crate-trained, so I've got my own little studio apartment.",
+          "My crate is my castle. Trained and settled.",
+          "Crate-trained: I nap where I'm told.",
+          "I have a bedroom already. It's the crate.",
+          "Crate-trained, so alone time isn't a crisis.",
+          "Happy in my crate. It's got great light."]),
+        (7, has(r"couch potato|low[- ]energy|loves? to (lounge|nap|sleep)|mellow|"
+                r"laid[- ]back|lazy|calm|relaxed|easygoing|gentle giant"),
+         ["Professional couch loafer. References available.",
+          "My cardio is walking to the food bowl. It's plenty.",
+          "Here to nap and steal the warm spot. Both going great.",
+          "Low energy, high devotion.",
+          "I've never once been in a hurry.",
+          "Mellow to the bone. Ask anyone.",
+          "I treat the sofa as a full-time position.",
+          "Calm is my whole personality.",
+          "Naps: expertly executed. Daily.",
+          "Easygoing, unbothered, deeply horizontal.",
+          "I don't need much. Mostly a blanket.",
+          "Quiet company, always available.",
+          "Laid-back roommate, minimal opinions.",
+          "Slow mornings are my specialty.",
+          "I peak at rest.",
+          "Chill by nature, not by training."]),
+        (7, has(r"high[- ]energy|energetic|athletic|loves? to run|zoomies|"
+                r"bundle of energy|active|loves? to play|playful"),
+         ["Two speeds: zoomies, or asleep on your feet.",
+          "Will work for one (1) tennis ball. Forever.",
+          "Part dog, part personal trainer. Cardio buddy wanted.",
+          "I have energy. Lots. Bring shoes.",
+          "Ball. Ball? Ball!",
+          "Runner seeking running partner. Pace negotiable.",
+          "I play hard and sleep harder.",
+          "Long walks are the love language here.",
+          "Batteries fully charged, always.",
+          "Let's go. Anywhere. Now.",
+          "Playtime is my job and I'm excellent at it.",
+          "Energetic, enthusiastic, extremely available.",
+          "I'll out-walk you. Kindly.",
+          "Fetch is not a game to me. It's a calling.",
+          "Zoomies scheduled hourly.",
+          "Adventure buddy, ready immediately."]),
+        (7, has(r"cuddl|snuggl|affectionate|loves? to be held|lap dog|velcro|"
+                r"follows? (me|you) everywhere"),
+         ["Part dog, part weighted blanket.",
+          "Your new shadow — I come with the apartment.",
+          "I give hugs whether you asked for one or not.",
+          "Professional snuggler, no off switch.",
+          "I will be touching you at all times.",
+          "Lap space required. Non-negotiable.",
+          "Affection is the whole product here.",
+          "I follow you room to room. It's a feature.",
+          "Cuddles on arrival, cuddles on demand.",
+          "Velcro dog. You've been warned.",
+          "I lean. Heavily. Lovingly.",
+          "Personal space is a concept I reject.",
+          "Built for couch piles and long hugs.",
+          "I'd like to be held now, please.",
+          "Warm, heavy, extremely devoted.",
+          "Snuggling is my cardio.",
+          "I save my very best sleeping for on top of you.",
+          "Attached at the hip, immediately."]),
+        (6, has(r"goofy|silly|clown|derp|wiggle|happy[- ]go[- ]lucky"),
+         ["I'm 60% wiggle, 40% goofball, 100% yours.",
+          "Certified goofball. Dignity sold separately.",
+          "Clown energy, excellent intentions.",
+          "I trip over my own feet and I own it.",
+          "Silly by default, sweet by design.",
+          "My whole body wags. Not just the tail.",
+          "Comic relief, four legs, no shame.",
+          "Happy-go-lucky and slightly ridiculous.",
+          "I make a fool of myself daily. Worth it.",
+          "Goofy, wiggly, thoroughly delightful.",
+          "Grace: none. Joy: enormous.",
+          "I'm a lot of dog and none of it serious."]),
+        (6, has(r"shy|timid|nervous|slow to warm|fearful|decompress|underdog"),
+         ["A little shy at first, then completely, utterly yours.",
+          "Slow to trust, worth every minute of the wait.",
+          "Quiet at first. Devoted forever.",
+          "Give me a week. I'll give you everything.",
+          "Shy, not sad. There's a big heart in here.",
+          "I warm up slowly and love permanently.",
+          "Patience gets you the real me.",
+          "Nervous on day one, glued to you by day ten.",
+          "I need a minute, then I'm all in.",
+          "Gentle soul, still finding my feet.",
+          "Soft-spoken and hoping you're patient.",
+          "The underdog. Literally."]),
+        (6, has(r"smart|clever|intelligent|quick learner|knows? (his|her|their) "
+                r"(commands|sit)|trainable"),
+         ["Smart enough to learn tricks, smarter about getting treats.",
+          "I already know 'sit.' Negotiating 'stay' for snacks.",
+          "Quick learner, quicker at spotting the treat bag.",
+          "Clever enough to be a minor problem.",
+          "Trainable, and fully aware of the leverage.",
+          "I learn fast. I negotiate faster.",
+          "Give me a puzzle. Then a snack.",
+          "Smart dog seeking someone to keep up.",
+          "I know several words and I'm bluffing about more.",
+          "Sharp, willing, mildly opinionated.",
+          "Teach me anything. Bring currency.",
+          "Intelligent, obedient, occasionally strategic."]),
+        (6, has(r"loves? (food|treats|snacks|to eat)|foodie|food motivated"),
+         ["I work exclusively for snacks. Rates are very reasonable.",
+          "Food-motivated is an understatement.",
+          "I would do anything for a treat. Anything.",
+          "Dinner is my favorite time of day. And breakfast.",
+          "Highly trainable, entirely for snacks.",
+          "Every meal is the best meal.",
+          "Is that food? It's food, isn't it.",
+          "Treats accepted in any quantity."]),
+        (5, age_years is not None and age_years < 1,
+         ["Basically a toddler with paws — chaos included, free.",
+          "Small everything, big plans. Still mastering stairs.",
+          "Puppy. Everything is new and I'm thrilled.",
+          "Brand new here. Teach me the rules.",
+          "I chew things. We're working on it.",
+          "Growing fast, learning faster.",
+          "Puppy energy, puppy breath, puppy everything.",
+          "Still figuring out my own legs.",
+          "Young, delighted, occasionally a disaster.",
+          "Everything is a toy until told otherwise.",
+          "I nap hard between adventures.",
+          "Baby dog seeking patient human.",
+          "Fresh out of the box.",
+          "Tiny now. Ask me again in a year."]),
+        (5, age_years is not None and age_years >= 8,
+         ["Old enough to know naps are a lifestyle, not a phase.",
+          "Distinguished, grey around the edges, expert cuddler.",
+          "Senior discount on energy, none on love.",
+          "I've done the wild years. Now I'd like a couch.",
+          "Grey muzzle, gold heart.",
+          "Older, wiser, softer.",
+          "I know exactly what I want: this, but indoors.",
+          "Low mileage on trouble, high mileage on love.",
+          "Retired from chaos. Available for company.",
+          "Seasoned, settled, still very good.",
+          "Older model, fully loaded.",
+          "Slow walks, deep naps, total devotion.",
+          "I've got years left and stories to tell.",
+          "Dignified, mostly. Ask about dinner."]),
+        (4, is_big,
+         ["Big enough to hog the whole bed. Willing to share. Mostly.",
+          "Gentle giant and part-time weighted blanket.",
+          "Large dog, larger heart.",
+          "I'm a lap dog. The lap is a formality.",
+          "Big, soft, and convinced I'm portable.",
+          "Takes up half the couch, earns all of it.",
+          "Substantial. In every sense.",
+          "I lean like furniture and love like family.",
+          "Big paws, bigger opinions about bedtime.",
+          "Room for one more? I'll need most of it.",
+          "Full-size dog, full-size affection.",
+          "I don't know my own size and won't be told.",
+          "Heavyweight cuddler, undefeated.",
+          "More dog per dog."]),
+        (4, is_small,
+         ["Small dog, tiny footprint, enormous opinions.",
+          "Pocket-sized and fully prepared to run your household.",
+          "Compact, portable, extremely in charge.",
+          "Little dog, loud feelings.",
+          "I fit anywhere. Especially your lap.",
+          "Small enough to carry, stubborn enough to walk.",
+          "Tiny body, enormous personality.",
+          "Apartment-sized and thrilled about it.",
+          "I'm small. My presence is not.",
+          "Big dog energy, travel size.",
+          "Fits in a bag. Would prefer the couch.",
+          "Short legs, long list of demands.",
+          "Little, loyal, lightly bossy.",
+          "Sized for city living."]),
+        (3, bool(breed),
+         [f"One part {breed}, one part couch companion.",
+          f"Mostly {breed}. The rest is pure personality.",
+          f"Certified {breed}, minor in professional napping.",
+          f"They say {breed}. I say devastatingly charming.",
+          f"Half {breed}, half 'is that food?'",
+          f"Pedigree says {breed}. Vibe says your best friend.",
+          f"{breed.capitalize()} on paper, menace to squeaky toys in practice.",
+          f"{breed.capitalize()} by breed, opportunist by trade.",
+          f"Part {breed}, part shadow, all yours.",
+          f"{breed.capitalize()}, allegedly. Sweetheart, definitely."]),
+    ]
+    return [(pri, lines) for pri, matched, lines in rules if matched]
+
+
+def _quip_candidates(d: Dog) -> List[str]:
+    """Every line this dog could truthfully say, best-grounded first.
+
+    Within a tier the order is rotated by the dog's id, so two dogs matching the
+    same tiers don't both reach for the same line first — otherwise the
+    assignment below degrades into whoever is processed first taking line one.
+    """
+    import hashlib
+
+    seed = int(hashlib.md5(d.id.encode("utf-8")).hexdigest(), 16)
+    tiers = sorted(_quip_tiers(d), key=lambda t: -t[0])
+    out, seen = [], set()
+    for _, lines in tiers + [(0, _QUIP_ANY)]:
+        lines = [ln for ln in lines if len(ln) <= _QUIP_MAX]
+        if not lines:
+            continue
+        offset = seed % len(lines)
+        for line in lines[offset:] + lines[:offset]:
+            if line not in seen:
+                seen.add(line)
+                out.append(line)
+    return out
+
+
+def _assign_quips(dogs: List[Dog]) -> None:
+    """Give every dog a line no other dog on the page is using.
+
+    Uniqueness has to be decided globally, not per dog: with 200+ dogs and a
+    tier bank of a dozen lines, a purely local choice put the same sentence on
+    49 cards. Dogs are served most-constrained first — one matching a single
+    tier has far fewer options than one matching six, so it picks before the
+    flexible dogs can take what it needed. Deterministic, so the same roster
+    always renders the same page.
+
+    A dog with nothing left says nothing: the bubble simply doesn't render,
+    which is better than repeating a line two cards apart.
+    """
+    candidates = {d.id: _quip_candidates(d) for d in dogs}
+    used = set()
+    for d in sorted(dogs, key=lambda x: (len(candidates[x.id]), x.id)):
+        d.quip = next((ln for ln in candidates[d.id] if ln not in used), "")
+        if d.quip:
+            used.add(d.quip)
+
+
 def enrich(dogs: List[Dog]) -> List[Dog]:
     for d in dogs:
         key = _match_breed(d.breed)
@@ -354,4 +705,8 @@ def enrich(dogs: List[Dog]) -> List[Dog]:
                      or lbs
                      or (sum(base["adult_lbs"]) / 2 if base.get("adult_lbs") else None))
         d.monthly_cost = _monthly_cost(d, base, adult_lbs, base.get("grooming"))
+
+    # After the loop: the hover lines have to be unique across the whole page,
+    # so they can't be chosen one dog at a time.
+    _assign_quips(dogs)
     return dogs

@@ -46,5 +46,13 @@
     "apply_url": "https://www.koreank9rescue.org/adoption-application/",
     "contact_url": "https://www.koreank9rescue.org/contact-us/",
     "evidence": "Site is behind Cloudflare (403 to direct fetch; not bypassed). Confirmed via https://www.adoptapet.com/shelter/94459-korean-k9-rescue-long-island-city-new-york (lists applications@koreank9rescue.org and the application URL https://www.koreank9rescue.org/adoption-application/) and via web-search results indexing koreank9rescue.org pages, which state applications take 7-14 days and to follow up at applications@koreank9rescue.org if no reply after 14 days. Email is a follow-up channel, not the first step."
+  },
+  "nycsecondchance": {
+    "label": "NYC Second Chance Rescue",
+    "method": "application",
+    "email": "rescue@nycsecondchancerescue.org",
+    "apply_url": "https://nycsecondchancerescue.org/dog-adoption-application/",
+    "contact_url": "https://nycsecondchancerescue.org/contact/",
+    "evidence": "Every one of their Petstablished listings closes with 'The first step in the process is filling out an application on our website' and cites https://nycsecondchancerescue.org/dog-adoption-application/ (26/26 dogs on page 1; resolves 200, titled 'Dog Adoption Application'). The older /general-application/ link that appears in some write-ups now 301s. Email rescue@nycsecondchancerescue.org is the address the rescue publishes in its own Petstablished organization record (shelter 83716). 501(c)(3), EIN 26-4835303, PO Box 570701 Whitestone NY 11357."
   }
 }

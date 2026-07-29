@@ -14,6 +14,9 @@ NOT useful as the primary source here:
   * The listing lives on page id 35, whose REST `content.rendered` is EMPTY
     (the theme builds the markup from a custom PHP template, not post content).
 
+It is still worth one call for two things the page can't give us: each post's
+pretty permalink and its publish date, which is what ``listed_since`` uses.
+
 So the listing page HTML is the real source. Each dog is a
 `div.container` holding `div.row > div.col-6` (photo column) +
 `div.col-6` (text column with `h1` name, a "Quick Facts" `ul`, an optional
@@ -40,6 +43,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..base import Dog, Source, clean_text
+from ..dates import listing_date
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -171,8 +175,13 @@ class SugarMuttsSource(Source):
                 add(img.get("src", ""))
         return photos
 
-    def _pretty_links(self, post_ids: List[str]) -> Dict[str, str]:
-        """Best-effort: batch-resolve WP post ids to pretty permalinks."""
+    def _posts(self, post_ids: List[str]) -> Dict[str, dict]:
+        """Best-effort: batch-fetch the WP record behind each dog card.
+
+        Worth one request for two things the listing page doesn't carry: the
+        pretty permalink, and ``date`` — when the rescue published the dog's
+        post, which is the one genuine publication date across all our sources.
+        """
         if not post_ids:
             return {}
         try:
@@ -181,16 +190,16 @@ class SugarMuttsSource(Source):
                 params={
                     "include": ",".join(post_ids),
                     "per_page": 100,
-                    "_fields": "id,link",
+                    "_fields": "id,link,date",
                 },
                 headers={**HEADERS, "Accept": "application/json"},
                 timeout=TIMEOUT,
             )
             resp.raise_for_status()
             return {
-                str(item["id"]): item["link"]
+                str(item["id"]): item
                 for item in resp.json()
-                if item.get("id") and item.get("link")
+                if isinstance(item, dict) and item.get("id")
             }
         except Exception:
             return {}  # non-fatal: the ?p=<id> URL works fine
@@ -256,16 +265,15 @@ class SugarMuttsSource(Source):
                 "photos": self._photos(container),
             })
 
-        links = self._pretty_links([r["post_id"] for r in raw if r["post_id"]])
+        posts = self._posts([r["post_id"] for r in raw if r["post_id"]])
 
         dogs: List[Dog] = []
         for r in raw:
             facts = r["facts"]
+            post = posts.get(r["post_id"], {})
             if r["post_id"]:
-                url = links.get(
-                    r["post_id"],
-                    f"{self.BASE}/?post_type=post&p={r['post_id']}",
-                )
+                url = post.get("link") or (
+                    f"{self.BASE}/?post_type=post&p={r['post_id']}")
             else:
                 url = self.LISTING_URL
 
@@ -289,5 +297,11 @@ class SugarMuttsSource(Source):
                 description=r["description"],
                 attributes=attributes,
                 adopt_url=self.adopt_url,
+                # The post's own publish date, i.e. when this dog's page went
+                # up. Genuinely a publication date, with one thing it can't
+                # see: a post edited to re-list a dog keeps its original date,
+                # and three of these posts are from 2020-21 and have been
+                # edited since. `date` is naive local time, no offset.
+                listed_since=listing_date(post.get("date")),
             ))
         return dogs

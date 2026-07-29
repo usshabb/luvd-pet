@@ -108,13 +108,12 @@ On the server:
 cd /opt/luvd && cp .env.example .env && nano .env
 ```
 
-Fill in — the first two are what make the site fully live:
+Fill in — the first two are what make the site fully live. Fetching dogs needs
+no keys; every rescue source is a public endpoint:
 
 ```
 LUVD_DOMAIN=yourdomain.com
 SITE_URL=https://yourdomain.com
-PETFINDER_KEY=
-PETFINDER_SECRET=
 RESEND_API_KEY=
 FROM_EMAIL=LUVD NYC <hello@yourdomain.com>
 ALERT_EMAIL=you@example.com

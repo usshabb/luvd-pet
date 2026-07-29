@@ -6,6 +6,19 @@ endpoint that their own website consumes, so there is no HTML to scrape:
     GET https://mpr-public-api.uk.r.appspot.com/dogs  ->  JSON array of records
 
 We filter to Status == "Available" AND ShowOnWebsite, then normalize into Dog.
+
+NO LISTING DATE (checked 2026-07-28)
+------------------------------------
+``listed_since`` is deliberately left empty. The record carries no date field
+at all (the only one, NextConfirmedAdoptionEventDate, is null throughout), and
+``/dog/<id>`` and ``/dogs?includeAll=true`` return the same shape. The one date
+in the payload is smuggled into the SmugMug album path —
+``Individual-Dog-Assets/D/DonnySFCreateDate20200819/...`` — and it is a
+Salesforce record-creation date, which here is emphatically not a listing date:
+Donny's 2020 record belongs to the family who adopted him from Muddy Paws and
+is now rehoming him, and Georgie's 2022 one was created when he was a puppy,
+two homes ago. Counting from those would print six years of waiting for dogs
+listed weeks ago, so ``first_seen`` takes over instead.
 """
 import requests
 from typing import List, Optional

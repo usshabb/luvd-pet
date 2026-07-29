@@ -1,8 +1,15 @@
 """Render the LUVD NYC daily page.
 
-One job: show every new dog across NYC rescues today, beautifully, with no
-filters and nothing to learn. Click a dog -> modal with everything we know ->
-one button out to that rescue's own adopt page.
+One job: show every adoptable dog across NYC rescues, beautifully, and get out
+of the way. Click a dog -> modal with everything we know -> one button out to
+that rescue's own adopt page.
+
+One flat grid, newest arrival first, with a NEW marker on the dogs that landed
+today. Above it, four filter pills and a sort — deliberately the smallest set
+that answers a real question, because Petfinder's wall of facets is the thing
+we're not building. Every pill is a fact the rescues actually record, every
+option carries a live count, and each pill's options are total over the roster,
+so no dog is unreachable and no click leads to an empty page.
 """
 import html
 import json
@@ -12,11 +19,137 @@ import shutil
 from datetime import date
 from pathlib import Path
 from typing import List
+from urllib.parse import urlsplit
 
 from sources.base import Dog
 
 OUT_DIR = Path(__file__).parent / "public"
 CONTACT_EMAIL = "hello@coryokeefe.com"
+
+
+def _terms_html(email: str, for_date) -> str:
+    """Plain-language Terms of Use, written around what LUVD actually does:
+    aggregate public rescue listings and point people to the rescues. The aim is
+    to make clear we're an information tool, not a party to any adoption."""
+    upd = for_date.strftime("%B %-d, %Y")
+    return f"""
+      <p class="upd">Last updated {upd}</p>
+      <p>LUVD (&ldquo;LUVD,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;) is a free
+        service that gathers publicly listed adoptable dogs from independent New
+        York City animal rescues and shows them on one page each morning. By using
+        LUVD you agree to these terms. If you don&rsquo;t agree, please don&rsquo;t
+        use the site.</p>
+
+      <h3>1. What LUVD is — and isn&rsquo;t</h3>
+      <p>LUVD is an information and discovery tool. We are not an animal shelter,
+        rescue, breeder, or adoption agency. We do not own, foster, house,
+        transport, evaluate, or rehome any animal, and we are not a party to any
+        adoption. Every adoption is handled entirely by the rescue that lists the
+        dog, under that rescue&rsquo;s own process and terms.</p>
+
+      <h3>2. Information is provided &ldquo;as is&rdquo;</h3>
+      <p>Listings, photos, descriptions, ages, weights, breeds, and our estimated
+        ratings (energy, apartment fit, experience needed) and breed guides are
+        gathered from the rescues&rsquo; own listings and other third-party
+        sources. They may be incomplete, out of date, or inaccurate. Our ratings
+        are automated estimates for general guidance only — not professional,
+        veterinary, training, or behavioral advice. The rescue is always the
+        source of truth for any individual animal, and you should confirm every
+        detail with them before making a decision.</p>
+
+      <h3>3. No affiliation</h3>
+      <p>LUVD is not affiliated with, endorsed by, or sponsored by any rescue,
+        Petfinder, or other organization named on the site. All names, logos, and
+        photos belong to their respective owners and are shown to help you find
+        and contact the rescue directly.</p>
+
+      <h3>4. Links to other sites</h3>
+      <p>LUVD links out to rescue websites, applications, and listings. We
+        don&rsquo;t control those sites and aren&rsquo;t responsible for their
+        content, availability, accuracy, or practices.</p>
+
+      <h3>5. Acceptable use</h3>
+      <p>Use LUVD for your own personal, non-commercial search for a pet.
+        Please don&rsquo;t scrape, copy, or republish the site, interfere with its
+        operation, or misuse the contact and sharing features.</p>
+
+      <h3>6. No warranties</h3>
+      <p>LUVD is provided &ldquo;as is&rdquo; and &ldquo;as available,&rdquo;
+        without warranties of any kind, express or implied, including accuracy,
+        availability, or fitness for a particular purpose. We do not guarantee
+        that any dog shown is still available.</p>
+
+      <h3>7. Limitation of liability</h3>
+      <p>To the fullest extent permitted by law, LUVD and its creator are not
+        liable for any damages arising out of your use of (or inability to use)
+        the site, your reliance on any information here, any interaction or
+        adoption with a rescue, or the temperament, health, or condition of any
+        animal.</p>
+
+      <h3>8. Changes</h3>
+      <p>We may update these terms or the site at any time. Continued use of LUVD
+        means you accept the current version.</p>
+
+      <h3>9. Contact</h3>
+      <p>Questions about these terms? Email
+        <a href="mailto:{email}?subject=LUVD">{email}</a>.</p>"""
+
+
+def _privacy_html(email: str, for_date) -> str:
+    """Plain-language Privacy Policy. LUVD collects almost nothing: an email for
+    the digest, anonymous open counts, and optional interest requests. Saved dogs
+    live in the browser and never reach us."""
+    upd = for_date.strftime("%B %-d, %Y")
+    return f"""
+      <p class="upd">Last updated {upd}</p>
+      <p>This explains what LUVD collects and how we use it. The short version:
+        we collect as little as possible, and we never sell your data.</p>
+
+      <h3>1. What we collect</h3>
+      <ul>
+        <li><b>Your email address</b> — only if you sign up for the morning
+          digest. We use it to send you that email, and nothing else.</li>
+        <li><b>Anonymous usage counts</b> — for example, how many times a
+          dog&rsquo;s card has been opened. These are stored without any personal
+          identifier, so we can show which dogs are getting attention.</li>
+        <li><b>Optional requests</b> — if you tell us a species or city
+          you&rsquo;d like us to cover, along with an email if you want a reply.</li>
+      </ul>
+
+      <h3>2. Your saved dogs stay on your device</h3>
+      <p>The dogs you heart are stored locally in your browser. That list never
+        leaves your device and is never sent to us.</p>
+
+      <h3>3. How we use it</h3>
+      <p>To send the digest you asked for, to understand which dogs draw interest,
+        and to decide what to build next. That&rsquo;s it.</p>
+
+      <h3>4. What we don&rsquo;t do</h3>
+      <p>We don&rsquo;t sell, rent, or trade your information. We don&rsquo;t run
+        advertising or third-party ad-tracking cookies. We don&rsquo;t share your
+        email with anyone except the provider that delivers our email.</p>
+
+      <h3>5. Service providers</h3>
+      <p>We use a third-party email service to send the digest. Rescue links and
+        photos may load from the rescues&rsquo; own sites and from Petfinder;
+        those third parties have their own privacy practices, which we
+        don&rsquo;t control.</p>
+
+      <h3>6. Unsubscribe</h3>
+      <p>Every email includes a one-click unsubscribe link, and we honor it
+        immediately. You can also email us anytime to be removed.</p>
+
+      <h3>7. Data retention</h3>
+      <p>We keep your email until you unsubscribe. Anonymous counts may be kept
+        indefinitely, since they contain no personal information.</p>
+
+      <h3>8. Children</h3>
+      <p>LUVD is intended for adults. We don&rsquo;t knowingly collect information
+        from children under 13.</p>
+
+      <h3>9. Contact</h3>
+      <p>Questions or requests about your data? Email
+        <a href="mailto:{email}?subject=LUVD">{email}</a>.</p>"""
 
 # How each rescue actually wants to be approached, verified against their own
 # pages. Most require an application FIRST — Muddy Paws says outright that only
@@ -28,6 +161,57 @@ try:
 except Exception:
     RESCUE_CONTACTS = {}
 
+
+def rescue_home(source: str) -> str:
+    """The rescue's own homepage, from whatever URL we hold on file for them.
+
+    The contact page is preferred over the application URL because several
+    rescues host their forms on a platform (Petstablished, Salesforce) whose
+    origin isn't theirs. rescueHome() in the client script does the same for the
+    modal byline; this is the equivalent for the static pages.
+    """
+    contact = RESCUE_CONTACTS.get(source) or {}
+    for key in ("contact_url", "apply_url"):
+        parts = urlsplit(contact.get(key) or "")
+        if parts.scheme and parts.netloc:
+            return f"{parts.scheme}://{parts.netloc}"
+    return ""
+
+
+# Chrome for the static crawlable pages (/rescue/*, /rescues). A plain constant
+# rather than CSS inlined into an f-string: braces there need doubling, the last
+# version was one short, and every rescue page shipped `body{{...}}` — invalid,
+# so they all rendered unstyled.
+_STATIC_PAGE_CSS = """
+  :root{--bg:#fbfbfd;--surface:#fff;--text:#1d1d1f;--muted:#6e6e73;
+    --accent:#FF002E;--hair:rgba(0,0,0,.1);}
+  @media (prefers-color-scheme:dark){:root{--bg:#000;--surface:#1c1c1e;
+    --text:#f5f5f7;--muted:#98989d;--hair:rgba(255,255,255,.14);}}
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",
+    Roboto,sans-serif;max-width:760px;margin:0 auto;
+    padding:26px 20px 72px;line-height:1.6;background:var(--bg);
+    color:var(--text);-webkit-font-smoothing:antialiased;}
+  a{color:var(--accent);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  .back{font-size:14px;color:var(--muted);}
+  h1{font-size:clamp(28px,5vw,38px);letter-spacing:-.03em;line-height:1.1;
+    margin:22px 0 10px;}
+  h2{font-size:20px;letter-spacing:-.02em;margin:0 0 4px;}
+  .lead{color:var(--muted);font-size:16.5px;margin:0 0 26px;}
+  .out{display:inline-block;font-size:14px;font-weight:600;margin-bottom:26px;}
+  .card{background:var(--surface);border:1px solid var(--hair);
+    border-radius:16px;padding:18px 20px;margin-bottom:14px;}
+  .card .meta{color:var(--muted);font-size:14px;margin:0;}
+  .card .links{font-size:14px;margin:10px 0 0;}
+  ul.dogs{list-style:none;padding:0;margin:0;}
+  ul.dogs li{padding:11px 0;border-top:1px solid var(--hair);font-size:16px;}
+  ul.dogs li .b{color:var(--muted);font-size:14px;}
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--hair);
+    color:var(--muted);font-size:13.5px;}
+"""
+
+
 def logo_img(cls: str = "brand-logo") -> str:
     """One logo in both themes — the white sticker outline is the brand."""
     return (f'<img class="{cls}" src="assets/luvd-logo.png" '
@@ -37,19 +221,120 @@ def logo_img(cls: str = "brand-logo") -> str:
 LOGO_SVG = logo_img()
 
 
-def _chip_facts(dog: Dog) -> List[str]:
-    """The skimmable pills on the card face."""
+# Breed groups for the filter pill, widest-net-first. Rescues write breed as
+# free text ("Lab Mix", "German Shepherd Dog mix", "Shepherd (Unknown Type)
+# Mix"), so the raw field has 44 spellings across 223 dogs with 20 of them
+# appearing once — a dropdown of that is the DMV form we're trying not to build.
+# Order matters: the first pattern to match wins, so specific beats generic.
+_BREED_GROUPS = (
+    ("Pit bull type", r"staffordshire|pit ?bull|american bully|\bbully\b"),
+    ("Jindo", r"jindo"),
+    ("Retriever", r"retriever|\blab\b|labrador|golden"),
+    ("Shepherd", r"shepherd|malinois|collie|cattle dog|heeler"),
+    ("Terrier", r"terrier|feist"),
+    ("Hound", r"hound|beagle|coonhound|plott"),
+    ("Husky", r"husky|siberian|malamute"),
+    ("Small & fluffy",
+     r"chihuahua|shih ?tzu|maltese|pomeranian|poodle|cockapoo|yorkie|pinscher|"
+     r"papillon|bichon|havanese|schnauzer|pekingese|dachshund|pug\b|shiba"),
+    ("Bulldog & mastiff", r"bulldog|boxer|mastiff|tosa"),
+)
+
+# Named rather than numeric, because "puppy" and "senior" are what people
+# actually search for, and a slider over an age we often only know as "Adult"
+# would imply precision we don't have.
+_AGE_BUCKETS = (
+    ("Puppy", 0, 12),
+    ("Young", 12, 36),
+    ("Adult", 36, 96),
+    ("Senior", 96, 10_000),
+)
+
+
+def breed_group(dog: Dog) -> str:
+    """Which breed pill a dog answers to.
+
+    Mixed and unknown are one visible group rather than being hidden: they're a
+    third of the roster, and a filter that silently drops 76 dogs teaches people
+    the list is shorter than it is.
+    """
+    text = (dog.breed or "").lower()
+    for name, pattern in _BREED_GROUPS:
+        if re.search(pattern, text):
+            return name
+    if not text.strip() or "unknown" in text or "mixed" in text:
+        return "Mixed / unknown"
+    return "Other"
+
+
+def age_months(raw: str) -> int:
+    """Best-effort months from however the rescue wrote the age.
+
+    Handles "3 months", "2 years", "2 years, 5 months", "6 Years", "a year",
+    "approx 6 1/2 years", and the bare buckets ("Adult") that Petstablished
+    hands back when no birthday was recorded. Returns -1 when there's nothing
+    to read, which keeps a dog out of every age pill rather than guessing it
+    into the wrong one.
+    """
+    text = (raw or "").strip().lower()
+    if not text:
+        return -1
+    words = {"puppy": 6, "young": 18, "adult": 48, "senior": 108, "baby": 4,
+             "a year": 12}
+    if text in words:
+        return words[text]
+    years = re.search(r"([\d.]+)\s*(?:1/2\s*)?y", text)
+    months = re.search(r"([\d.]+)\s*mo", text)
+    try:
+        if years:
+            total = int(float(years.group(1)) * 12) + (6 if "1/2" in text else 0)
+            return total + (int(float(months.group(1))) if months else 0)
+        if months:
+            return int(float(months.group(1)))
+    except ValueError:
+        return -1
+    return -1
+
+
+def age_bucket(dog: Dog) -> str:
+    """Puppy / Young / Adult / Senior, or "Unknown" when the age is unreadable.
+
+    Never "": every dog has to land in exactly one bucket, so that the counts in
+    the age menu sum to its "Any age" total. A dog in "Any" and in no option is
+    a dog you cannot reach by clicking, and the missing one makes the arithmetic
+    on screen look wrong.
+    """
+    months = age_months(dog.age)
+    if months < 0:
+        return "Unknown"
+    for name, low, high in _AGE_BUCKETS:
+        if low <= months < high:
+            return name
+    return "Unknown"
+
+
+def _chip_facts(dog: Dog):
+    """The skimmable pills on the card face, as (text, kind) pairs.
+
+    A placement program leads when there is one, then breed. Program first
+    because it decides whether a dog is even a candidate — Korean K9's
+    foster-to-adopt dogs haven't landed in the US yet, and that shouldn't be the
+    fact the 3-pill (2 on mobile) cap cuts. Breed is next, being what adopters
+    scan for otherwise.
+    """
     out = []
-    if dog.age:
-        out.append(dog.age)
-    if dog.sex:
-        out.append(dog.sex)
-    if dog.weight:
-        out.append(dog.weight)
-    elif dog.size:
-        out.append(dog.size.title())
+    if dog.program_label:
+        out.append((dog.program_label, "program"))
     if dog.breed and "unknown" not in dog.breed.lower():
-        out.append(dog.breed.split("/")[0].strip()[:22])
+        out.append((dog.breed.split("/")[0].split(",")[0].strip()[:22], "breed"))
+    if dog.age:
+        out.append((dog.age, ""))
+    if dog.weight:
+        out.append((dog.weight, ""))
+    elif dog.size:
+        out.append((dog.size.title(), ""))
+    if dog.sex:
+        out.append((dog.sex, ""))
     # Three max, one line: a wrapping second row makes that grid row taller than
     # its neighbours and the whole grid stops lining up.
     return out[:3]
@@ -86,6 +371,23 @@ def dog_path(dog: Dog) -> str:
 # the first weeks after launch we simply have no history to show.
 WAIT_BADGE_DAYS = 60
 
+# The wait badge is off on the grid cards. Once the scrapers started supplying
+# real listing dates, 60 days put it on 104 of 223 cards, and 86 of those were
+# NYC Second Chance — three quarters of their roster. A badge on half the grid
+# signals nothing, and concentrated in one rescue it reads as a verdict on them
+# rather than a nudge about a dog. To revive it, raise WAIT_BADGE_DAYS first:
+# 180 days is still 62 cards.
+#
+# Deliberately only the cards. The dog page and modal still show the wait, where
+# you're reading one dog and it's a useful fact rather than a pattern across the
+# grid, and waiting_days still powers the "Longest waiting" sort.
+SHOW_WAIT_BADGE_ON_CARDS = False
+
+# Withhold the NEW marker when today's arrivals are more than this share of the
+# grid. A marker on every card marks nothing — which is exactly what happens on
+# a fresh database, where every dog is seen for the first time today.
+NEW_MARK_MAX_SHARE = 0.5
+
 
 def waiting_days(dog: Dog, today: date):
     """Days listed. Prefers the rescue's own publish date over our first sight.
@@ -102,22 +404,7 @@ def waiting_days(dog: Dog, today: date):
         return None
 
 
-def _ordinal(n: int) -> str:
-    if 11 <= n % 100 <= 13:
-        return f"{n}th"
-    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
-
-
-def _day_label(iso: str, today: date) -> str:
-    """Always the real date — relative labels stop being useful past a day."""
-    try:
-        d = date.fromisoformat(iso)
-    except ValueError:
-        return "Earlier"
-    return f"{d.strftime('%B')} {_ordinal(d.day)}"
-
-
-def _card(d: Dog, i: int, today: date) -> str:
+def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
     photo = d.primary_photo()
     if photo:
         media = (f'<img class="ph" src="{html.escape(photo)}" '
@@ -128,32 +415,44 @@ def _card(d: Dog, i: int, today: date) -> str:
         initial = html.escape(d.name.strip()[:1].upper() or "?")
         media = (f'<div class="ph noph"><span class="noph-i">{initial}</span>'
                  f'<span class="noph-t">Photo coming soon</span></div>')
-    pills = "".join(f'<span class="pill">{html.escape(f)}</span>'
-                    for f in _chip_facts(d))
+    pills = "".join(
+        f'<span class="pill{(" " + kind) if kind else ""}">'
+        f'{html.escape(text)}</span>'
+        for text, kind in _chip_facts(d))
 
-    # Only shown once a wait is long enough to mean something.
-    wd = waiting_days(d, today)
     wait = ""
-    if wd is not None and wd >= WAIT_BADGE_DAYS:
-        wait = f'<span class="waiting" title="Listed {wd} days">⏳ {wd} days</span>'
+    if SHOW_WAIT_BADGE_ON_CARDS:
+        wd = waiting_days(d, today)
+        if wd is not None and wd >= WAIT_BADGE_DAYS:
+            wait = f'<span class="waiting" title="Listed {wd} days">⏳ {wd} days</span>'
+
+    quip = (f'<span class="quip"><span>{html.escape(d.quip)}</span></span>'
+            if d.quip else "")
+
+    # The daily-digest signal, which used to be the date heading a dog sat under.
+    # It sits on the photo, in the corner the wait badge vacated. render() only
+    # passes is_new when today's arrivals are a minority of the grid, so this
+    # marks the exception rather than repeating itself down the whole page.
+    new_chip = ('<span class="new-chip" title="New on LUVD today">New</span>'
+                if is_new else "")
 
     # A real href so crawlers can reach every dog; JS intercepts the click and
     # opens the modal instead of navigating.
     return f"""
       <a class="card" href="{html.escape(dog_path(d))}" data-i="{i}"
          data-id="{html.escape(d.id)}">
-        <div class="ph-wrap">{media}<span class="badge">{html.escape(d.source_label)}</span>
+        <div class="ph-wrap">{media}{quip}
           <span class="views" hidden><span class="fire">🔥</span><b></b></span>
-          {wait}
+          {wait}{new_chip}
           <button class="save" data-id="{html.escape(d.id)}" type="button"
                   aria-pressed="false" aria-label="Save {html.escape(d.name)}">
-            <svg class="hrt" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.4
-              S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.4 2.7c0 5.8-8.4
-              11.1-8.4 11.1Z"/></svg>
+            <svg class="hrt" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21C8
+              18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 12 8C12.9 6 14.5
+              4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18 12 21Z"/></svg>
             <span class="burst" aria-hidden="true"></span>
           </button></div>
         <div class="meta">
-          <h3 class="nm">{html.escape(d.name)}</h3>
+          <div class="nm-row"><h3 class="nm">{html.escape(d.name)}</h3></div>
           <div class="pills">{pills}</div>
         </div>
       </a>"""
@@ -208,7 +507,8 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
          "individual dog best."),
         ("How often is LUVD updated?",
          "Every morning. Dogs stay listed for as long as their rescue still has "
-         "them available, grouped by the day they first appeared."),
+         "them available, newest arrival first, and the dogs that appeared today "
+         "are marked new."),
     ]
 
     return {
@@ -264,43 +564,50 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc) -> dict:
 
 
 def render(dated, for_date: date = None) -> str:
-    """`dated` is [(iso_date, [Dog, ...]), ...], newest day first."""
+    """`dated` is [(iso_date, [Dog, ...]), ...], newest day first.
+
+    The page itself is one flat grid, but the day grouping still comes in: it's
+    how check.py already has the dogs, it's what tells us which cards get the
+    NEW marker, and it puts the grid in newest-first order for free — the
+    default sort. Flattening happens here rather than in every caller.
+    """
     for_date = for_date or date.today()
     if dated and isinstance(dated[0], Dog):          # tolerate a flat list
         dated = [(for_date.isoformat(), list(dated))]
 
     flat: List[Dog] = [d for _, group in dated for d in group]
+    # The filter groupings are derived here, not in the browser: the breed
+    # patterns and age parsing are fiddly enough to want testing, and the client
+    # only needs the answer.
     payload = json.dumps([
-        dict(d.to_dict(), waiting_days=(waiting_days(d, for_date) or 0))
+        dict(d.to_dict(), waiting_days=(waiting_days(d, for_date) or 0),
+             breed_group=breed_group(d), age_bucket=age_bucket(d))
         for d in flat
     ])
     subscribe_url = os.getenv("SUBSCRIBE_URL", "/subscribe")
 
     today_iso = for_date.isoformat()
-    new_today = len(dict(dated).get(today_iso, []))
     total = len(flat)
 
-    sections, i = [], 0
-    for iso, group in dated:
-        cards = []
-        for d in group:
-            cards.append(_card(d, i, for_date))
-            i += 1
-        is_today = iso == today_iso
-        sections.append(f"""
-    <section class="day{' today' if is_today else ''}">
-      <div class="day-hd">
-        {'<span class="day-new">New today</span>' if is_today else ''}
-        <h2>{html.escape(_day_label(iso, for_date))}</h2>
-        <span class="day-n">{len(group)} dog{'' if len(group) == 1 else 's'}</span>
-      </div>
-      <div class="grid">{''.join(cards)}</div>
-    </section>""")
+    # One grid, not a section per day. Day sections read well on a fresh
+    # database where every dog arrived this morning, but in production the page
+    # accumulates a section per day and only sheds one when a rescue delists a
+    # dog — so within weeks a narrow filter scatters its handful of matches
+    # across a dozen headings, each announcing "1 dog". The arrival date is
+    # still here: it's the default sort, and today's dogs carry a NEW marker.
+    #
+    # Unless nearly all of them are today's, which is the state of a fresh
+    # database and of the first day after launch. Marking every card marks
+    # nothing, so below the threshold the marker is dropped entirely rather than
+    # repeated 223 times. It returns on the first day the roster is mixed.
+    new_today = sum(1 for d in flat if d.first_seen == today_iso)
+    mark_new = bool(total) and new_today <= total * NEW_MARK_MAX_SHARE
 
-    # An evergreen headline says what the site IS to a first-time visitor and
-    # holds up on a day with two arrivals. The count is transient, so it moves
-    # to the subhead and to the "New today" section marker.
-    head = "Adopt a dog in NYC"
+    cards = []
+    for i, d in enumerate(flat):
+        cards.append(_card(d, i, for_date,
+                           is_new=mark_new and d.first_seen == today_iso))
+    grid = f'<div class="grid" id="grid">{"".join(cards)}</div>'
 
     site = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
     cache_bust = for_date.isoformat()
@@ -312,12 +619,19 @@ def render(dated, for_date: date = None) -> str:
     )
     structured_data = json.dumps(_structured_data(flat, dated, site, for_date,
                                                   rescues, meta_desc))
-    if len(rescues) > 1:
-        rescue_sentence = ("LUVD follows " + ", ".join(rescues[:-1])
-                           + f" and {rescues[-1]}.")
+    # Each rescue's own page targets a real search ("muddy paws rescue dogs"),
+    # but nothing on the homepage linked to them — they were reachable only from
+    # individual dog pages. Linking them here and in the footer is what gets
+    # them crawled and gives them the homepage's authority.
+    rescue_links = [f'<a href="/rescue/{slugify(label)}">{html.escape(label)}</a>'
+                    for label in rescues]
+    if len(rescue_links) > 1:
+        rescue_sentence = ("LUVD follows " + ", ".join(rescue_links[:-1])
+                           + f" and {rescue_links[-1]}.")
     else:
-        rescue_sentence = f"LUVD follows {rescues[0]}." if rescues else ""
-    rescue_sentence = html.escape(rescue_sentence)
+        rescue_sentence = (f"LUVD follows {rescue_links[0]}."
+                           if rescue_links else "")
+    footer_rescues = " &middot; ".join(rescue_links)
 
     empty = "" if flat else """
       <div class="empty">
@@ -443,11 +757,17 @@ def render(dated, for_date: date = None) -> str:
   .ready .hero-cap{{animation:riseIn .5s cubic-bezier(.2,.8,.25,1) .16s both;}}
   .ready .card{{animation:riseIn .45s cubic-bezier(.2,.8,.25,1) both;
     animation-delay:calc(.22s + var(--i,0) * .035s);}}
+  /* Retired once it has played. Re-sorting moves cards in the DOM, which would
+     otherwise restart this animation and rise the whole grid in again. */
+  .anim-done .card{{animation:none;}}
   @keyframes riseIn{{from{{opacity:0;transform:translateY(12px) scale(.99);}}
     to{{opacity:1;transform:none;}}}}
   @media (prefers-reduced-motion:reduce){{
     .boot .brand-wrap,.boot h1,.boot .hero-cap,.boot .card{{opacity:1;transform:none;}}
     .ready .brand-wrap,.ready h1,.ready .hero-cap,.ready .card{{animation:none;}}
+    .card:hover .ph{{animation:none;transform:scale(1.045);}}
+    .quip{{transition:opacity .2s ease;transform:none;}}
+    .card:hover .quip{{transform:none;}}
   }}
   body{{margin:0;background:var(--bg);color:var(--text);line-height:1.47;
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif;
@@ -590,6 +910,8 @@ def render(dated, for_date: date = None) -> str:
     transition:opacity .2s;text-align:center;}}
   .hero-sub button:hover{{opacity:.88;}}
   .hero-note{{font-size:12.5px;color:var(--muted);margin-top:9px;}}
+  /* The hero note rests empty; don't leave its margin behind holding space. */
+  .hero-note:empty{{margin-top:0;}}
   .hero-note.ok{{color:var(--accent);font-weight:700;font-size:14px;}}
   .sr-only{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
     overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}}
@@ -671,18 +993,6 @@ def render(dated, for_date: date = None) -> str:
   }}
   @media (prefers-reduced-motion:reduce){{ .dbl-heart{{display:none;}} }}
 
-  /* ---------- day sections ---------- */
-  .day{{padding-top:8px;}}
-  .day + .day{{border-top:1px solid var(--hair2);margin-top:18px;padding-top:34px;}}
-  .day-hd{{display:flex;align-items:baseline;gap:12px;padding-top:34px;}}
-  .day + .day .day-hd{{padding-top:0;}}
-  .day-hd h2{{font-size:23px;font-weight:700;letter-spacing:-.022em;margin:0;}}
-  /* Same type as the day name, just grey — a tiny caption read as an error. */
-  .day-n{{font-size:23px;font-weight:700;letter-spacing:-.022em;color:var(--muted);}}
-  .day-new{{font-size:11px;font-weight:800;letter-spacing:.09em;
-    text-transform:uppercase;color:#fff;background:var(--accent);
-    padding:5px 10px;border-radius:980px;align-self:center;}}
-
   /* ---------- grid ---------- */
   .grid{{display:grid;gap:28px;padding:22px 0 8px;
     grid-template-columns:repeat(auto-fill,minmax(248px,1fr));}}
@@ -694,7 +1004,37 @@ def render(dated, for_date: date = None) -> str:
   .ph-wrap{{aspect-ratio:1/1;overflow:hidden;background:var(--hair);position:relative;}}
   .ph{{width:100%;height:100%;object-fit:cover;display:block;
     transition:transform .5s cubic-bezier(.2,.8,.2,1);}}
-  .card:hover .ph{{transform:scale(1.045);}}
+  /* A quick playful wiggle on hover, settling into a gentle zoom. The scale
+     stays >1 throughout so the rotation never exposes the tile behind it. */
+  .card:hover .ph{{animation:cardWiggle .55s cubic-bezier(.36,.07,.19,.97) both;}}
+  @keyframes cardWiggle{{
+    0%{{transform:scale(1) rotate(0);}}
+    22%{{transform:scale(1.05) rotate(-2.4deg);}}
+    44%{{transform:scale(1.05) rotate(1.9deg);}}
+    64%{{transform:scale(1.05) rotate(-1.2deg);}}
+    82%{{transform:scale(1.048) rotate(.6deg);}}
+    100%{{transform:scale(1.045) rotate(0);}}
+  }}
+  /* The dog's own one-liner, in a little speech bubble that pops on hover.
+     Hover-capable pointers only — on touch a stuck :hover would trap it open. */
+  .quip{{display:none;}}
+  @media (hover:hover) and (pointer:fine){{
+    .quip{{display:block;position:absolute;left:12px;right:12px;bottom:12px;
+      background:#fff;color:#1d1d1f;font-size:12.5px;font-weight:600;
+      line-height:1.32;padding:9px 12px;border-radius:15px 15px 15px 4px;
+      box-shadow:0 8px 22px rgba(0,0,0,.22);pointer-events:none;z-index:3;
+      opacity:0;transform:translateY(8px) scale(.9);transform-origin:0 100%;
+      transition:opacity .22s ease,transform .28s cubic-bezier(.34,1.56,.64,1);}}
+    .quip span{{display:-webkit-box;-webkit-line-clamp:2;
+      -webkit-box-orient:vertical;overflow:hidden;}}
+    /* The tail — a little nib on the lower-left, so it reads as speech. */
+    .quip::after{{content:"";position:absolute;left:14px;bottom:-6px;width:14px;
+      height:14px;background:#fff;border-radius:0 0 0 3px;
+      transform:rotate(45deg);box-shadow:-3px 3px 6px rgba(0,0,0,.06);}}
+    .card:hover .quip{{opacity:1;transform:translateY(0) scale(1);}}
+  }}
+  :root[data-theme="dark"] .quip{{background:#2b2b2e;color:#f2f2f2;}}
+  :root[data-theme="dark"] .quip::after{{background:#2b2b2e;}}
   .noph{{display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:10px;height:100%;
     background:linear-gradient(150deg,var(--accent-soft),transparent 72%);}}
@@ -702,11 +1042,6 @@ def render(dated, for_date: date = None) -> str:
     color:var(--accent);opacity:.55;line-height:1;}}
   .noph-t{{font-size:11.5px;font-weight:600;letter-spacing:.03em;
     color:var(--muted);}}
-  .badge{{position:absolute;left:11px;bottom:11px;font-size:11px;font-weight:600;
-    max-width:calc(100% - 22px);overflow:hidden;text-overflow:ellipsis;
-    white-space:nowrap;
-    letter-spacing:.03em;padding:5px 10px;border-radius:980px;color:#fff;
-    background:rgba(0,0,0,.55);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);}}
   /* Real click counts, fetched live. Hidden until a dog has genuine interest —
      never a fabricated number. */
   .views{{position:absolute;left:11px;top:11px;display:flex;align-items:center;gap:5px;
@@ -770,12 +1105,29 @@ def render(dated, for_date: date = None) -> str:
     .save.pop .hrt,.save.pop .burst{{animation:none;}}
     .fh{{display:none;}}
   }}
-  .nm{{font-size:23px;font-weight:700;letter-spacing:-.02em;margin:0 0 10px;
+  .nm-row{{display:flex;align-items:center;gap:7px;margin:0 0 10px;}}
+  .nm{{font-size:23px;font-weight:700;letter-spacing:-.02em;margin:0;min-width:0;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+  /* Arrived today. On a busy morning most cards carry this, so it's sized like
+     the wait badge rather than the old day heading's chip — a marker you can
+     scan past, not a sticker on every dog. */
+  /* On the photo, bottom-right, the corner the wait badge used to hold. Solid
+     accent rather than the old tinted pill: it has to hold up over a photo
+     instead of a white card. The hover quip covers it on desktop, which is
+     fine — that hover is a deliberate takeover of the tile. */
+  .new-chip{{position:absolute;right:11px;bottom:11px;z-index:2;
+    font-size:9.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+    color:#fff;background:var(--accent);padding:4px 9px;border-radius:980px;
+    box-shadow:0 2px 10px rgba(0,0,0,.22);}}
   /* nowrap keeps every card the same height so the grid stays aligned */
   .pills{{display:flex;flex-wrap:nowrap;gap:5px;overflow:hidden;}}
   .pill{{font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:980px;
     background:var(--hair2);color:var(--muted);white-space:nowrap;}}
+  /* Breed leads and is tinted — the one fact most adopters scan for. */
+  .pill.breed{{background:var(--accent-soft);color:var(--accent);font-weight:600;}}
+  /* A different route to the same dog, so it borrows the warning tint rather
+     than the brand one: read this before you get attached, it isn't a feature. */
+  .pill.program{{background:var(--warn-soft);color:var(--warn);font-weight:600;}}
 
 
   .empty{{text-align:center;padding:90px 20px;}}
@@ -787,7 +1139,10 @@ def render(dated, for_date: date = None) -> str:
   .sub-sec{{background:var(--surface);border-radius:28px;padding:56px 32px;
     margin:56px 0 0;text-align:center;box-shadow:var(--shadow);}}
   .sub-sec h2{{font-size:clamp(26px,3.6vw,36px);letter-spacing:-.022em;margin:0 0 10px;}}
-  .sub-sec p{{color:var(--muted);font-size:16.5px;margin:0 auto 26px;max-width:430px;}}
+  /* Wide enough for the promise to land in two lines, balanced so it never
+     drops a one-word orphan onto a third. */
+  .sub-sec p{{color:var(--muted);font-size:16.5px;margin:0 auto 26px;max-width:470px;
+    text-wrap:balance;}}
   .sub-form{{display:flex;gap:9px;max-width:430px;margin:0 auto;flex-wrap:wrap;}}
   .sub-form input{{flex:1;min-width:200px;padding:14px 17px;font-size:16px;border-radius:13px;
     border:1px solid var(--hair);background:var(--bg);color:var(--text);font-family:inherit;}}
@@ -815,6 +1170,141 @@ def render(dated, for_date: date = None) -> str:
     font-weight:600;color:var(--accent);padding:6px 12px;border-radius:980px;
     background:var(--surface);white-space:nowrap;}}
   .fb-clear:hover{{opacity:.8;}}
+
+  /* ---------- filter pills ---------- */
+  /* One quiet row above the dogs, centred under the centred hero. No card, no
+     heading, no sidebar: at ~220 dogs these are for narrowing a scroll, not for
+     running a search. */
+  .fbar{{margin:30px 0 -6px;}}
+  /* These set display (via all:unset or flex), which would otherwise beat the
+     UA rule behind the [hidden] attribute. */
+  .fpill-t[hidden],.fb-clear[hidden]{{display:none;}}
+  /* The pills own this row alone. Sort used to share it behind a hairline
+     divider; it now sits on the results header below, where being a row apart
+     separates it more plainly than the divider ever did. */
+  .fbar-pills{{display:flex;align-items:center;justify-content:center;gap:8px;
+    flex-wrap:wrap;}}
+  /* The results header: count left, sort right, sitting on top of the grid.
+     The count is always on the page, never toggled. It used to appear only once
+     a filter was applied, which pushed the whole grid down at the exact moment
+     you clicked — so the count arrived by shoving the thing you were looking at.
+     Permanent means filtering just changes the number in place. Left, flush with
+     the first card, so it reads as a heading for the grid, which is what it is
+     now that the day headings are gone. */
+  /* No reserved height here any more. This row used to carry a Clear link that
+     came and went with the filter, so it needed a floor to stop the grid
+     dropping 23px the moment you clicked a pill. Clear is gone and both things
+     left — the count and the sort — are permanent and fixed-width, so the row
+     is a constant height by construction. Its height is the sort pill's 44px
+     touch target; see .fpill.fsort > button. */
+  /* The negative bottom margin is doing optical work, not layout work. The row
+     is a fixed 44px and the count is centred in it, so the type change from
+     23px to 19px left ~3px of extra air between the count's ink and the first
+     card without changing a single box. These margins put the ink back where it
+     was: 24px below the pills, 15px above the cards. Measure from the numeral,
+     not from the row, if you retune this. */
+  .fbar-meta{{display:flex;align-items:center;justify-content:flex-start;
+    gap:8px;margin:14px 0 -19px;}}
+  /* 19px at every width — one size, no breakpoint. This is a step down from the
+     retired day heading's 23px desktop size and exactly its phone size. It has
+     that heading's job now the grid is flat, but it also shares a row with the
+     15px sort across ~790px, and at 23px the two ends read as unrelated things
+     rather than one header. Matching the sort at 15px was tried and rejected:
+     this is the page's only statement of how many dogs there are, and at
+     control size it stops reading as a heading and becomes metadata. Numeral at
+     full contrast, unit greyed: the same pairing the date and its "N dogs"
+     had. */
+  .fbar-n{{font-size:19px;font-weight:700;letter-spacing:-.022em;
+    color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;}}
+  .fbar-n b{{font-weight:700;color:var(--text);}}
+  /* Hard right, opposite the count: the heading states what you're looking at,
+     the control at the other end changes its order. */
+  .fbar-meta .fpill.fsort{{margin-left:auto;}}
+  .fpill{{position:relative;}}
+  /* 15px is the control scale, shared with the sort at the other end of the
+     header below. One size for everything you can click up here, so the two
+     rows read as one set of controls rather than two unrelated toolbars. The
+     sort stays the quieter of the two on weight, colour and chrome instead of
+     on size — see .fpill.fsort. */
+  .fpill > button,.fpill-t{{all:unset;box-sizing:border-box;cursor:pointer;
+    display:inline-flex;align-items:center;gap:5px;font-size:15px;
+    font-weight:600;color:var(--text);background:var(--surface);
+    border:1px solid var(--hair);border-radius:980px;padding:8px 14px;
+    white-space:nowrap;transition:border-color .18s,background .18s,color .18s;}}
+  .fpill > button:hover,.fpill-t:hover{{border-color:var(--muted);}}
+  /* Drawn inside the pill, not around it. An offset outline was being sheared
+     off by .fbar-pills' overflow-x scroll container on phones, and on a pill
+     already filled solid accent a red ring one gap away read as a broken double
+     border. Inset can't be clipped; white reads as focus on a filled pill. */
+  .fpill > button:focus-visible,.fpill-t:focus-visible{{
+    outline:2px solid var(--accent);outline-offset:-2px;}}
+  .fpill.on > button:focus-visible,.fpill-t.on:focus-visible{{outline-color:#fff;}}
+  /* Active reads as filled brand, so the row tells you at a glance how narrow
+     the list you're looking at is. */
+  .fpill.on > button,.fpill-t.on{{background:var(--accent);border-color:var(--accent);
+    color:#fff;}}
+  .fpill.on .cv{{color:rgba(255,255,255,.75);}}
+  .fpill-t b{{font-weight:700;opacity:.6;font-variant-numeric:tabular-nums;}}
+  .fpill-t.on b{{opacity:.8;}}
+  .fpill .cv{{font-size:9px;vertical-align:0;margin:0;}}
+  .fpill.open .cv{{transform:rotate(180deg);}}
+  /* Sort is not a filter, so it deliberately looks unlike one: no pill, and a
+     "Sort by:" label. It never fills either — something is always sorting, so a
+     filled control here would claim you'd narrowed the list, and the pill row's
+     filled state is how the page reports exactly that. The hairline divider it
+     used to sit behind is gone with the move to its own row: a row apart is
+     already a stronger separation than a 1px rule. */
+  /* Same 15px as the filter pills — one control scale — but lighter in every
+     other respect: no fill, no border, 500 against their 600, muted against
+     their full-contrast text. It reorders the list, it never narrows it, so it
+     must never look like something you've switched on. */
+  /* min-height, not padding: this is the row's only 44px touch target, and now
+     also the thing that sets the results header's height. Padding alone left it
+     at 40px, and the row used to borrow its floor from the Clear link that no
+     longer exists. */
+  .fpill.fsort > button{{background:none;border-color:transparent;padding:8px;
+    min-height:44px;font-size:15px;font-weight:500;color:var(--muted);}}
+  .fpill.fsort > button:hover{{border-color:transparent;color:var(--text);}}
+  .fpill.fsort .fp-t{{color:var(--text);font-weight:600;}}
+  /* Bigger than the filter pills' 9px. At 9px the chevron reads as a stray
+     interpunct rather than a menu, which matters most on the sub-360px layout
+     where the label is hidden and this glyph is the only thing saying the
+     control is a control. It still rotates on open, which is why it stays a
+     chevron rather than becoming a sort-arrow pair. */
+  .fpill.fsort .cv{{font-size:11px;}}
+  /* Right-anchored: it's the last control in the row, so a left-anchored menu
+     would hang off the edge on narrow screens. */
+  .fpill.fsort .fmenu{{left:auto;right:0;}}
+  .fmenu{{position:absolute;top:calc(100% + 8px);left:0;z-index:48;
+    background:var(--surface);border:1px solid var(--hair);border-radius:14px;
+    box-shadow:0 4px 12px rgba(0,0,0,.14),0 18px 48px rgba(0,0,0,.18);
+    padding:6px;min-width:200px;max-height:min(60vh,420px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:1px;opacity:0;
+    transform:translateY(-6px);
+    transition:opacity .16s ease,transform .2s cubic-bezier(.2,.8,.25,1);}}
+  :root[data-theme="dark"] .fmenu{{
+    box-shadow:0 4px 12px rgba(0,0,0,.5),0 22px 60px rgba(0,0,0,.6);}}
+  .fmenu[hidden]{{display:none;}}
+  .fpill.open .fmenu{{opacity:1;transform:none;}}
+  .fmenu button{{all:unset;cursor:pointer;font-size:14.5px;font-weight:500;
+    padding:9px 12px;border-radius:9px;text-align:left;color:var(--text);
+    display:flex;justify-content:space-between;align-items:center;gap:16px;}}
+  /* One line per option, always. A wrapped row makes the menu look broken and
+     the count float away from the label it belongs to. */
+  .fmenu button > span{{white-space:nowrap;}}
+  /* The label never wraps: a two-line row next to a right-aligned count reads
+     as two options. The menu widens to the longest label instead — "Bulldog &
+     mastiff" and "Mixed / unknown" are the widest we have. */
+  .fmenu button > span{{white-space:nowrap;}}
+  .fmenu button:hover{{background:var(--hair2);}}
+  .fmenu button[aria-selected="true"]{{color:var(--accent);font-weight:700;}}
+  /* Counted and dimmed rather than removed: seeing "Husky 0" is information,
+     and it stops the menu reshuffling under the cursor as filters change. */
+  .fmenu button:disabled{{cursor:default;opacity:.34;}}
+  .fmenu button:disabled:hover{{background:transparent;}}
+  .fmenu button b{{font-weight:600;color:var(--muted);font-size:13px;
+    font-variant-numeric:tabular-nums;}}
+  .fmenu button[aria-selected="true"] b{{color:var(--accent);}}
 
   /* ---------- saved empty state ---------- */
   .saved-empty{{text-align:center;padding:70px 20px 40px;max-width:420px;
@@ -845,11 +1335,30 @@ def render(dated, for_date: date = None) -> str:
     font-size:20px;line-height:1;}}
   .faq details[open] summary::after{{content:'–';}}
   .faq p{{font-size:15px;line-height:1.6;color:var(--muted);margin:10px 0 0;}}
+  /* The rescue names in the coverage answer link to their pages; without this
+     they'd fall back to the UA's default blue. */
+  .faq p a{{color:var(--text);text-decoration:underline;
+    text-decoration-color:var(--hair);text-underline-offset:2px;
+    white-space:nowrap;}}
+  .faq p a:hover{{color:var(--accent);text-decoration-color:var(--accent);}}
 
   /* ---------- footer ---------- */
   footer{{text-align:center;padding:52px 0 72px;color:var(--muted);font-size:13.5px;}}
   footer .date{{font-weight:600;color:var(--text);font-size:15px;}}
   footer a{{color:var(--muted);}}
+  /* Terms/Privacy open modals, so they're buttons dressed as the Contact link. */
+  .foot-link{{background:none;border:0;padding:0;margin:0;font:inherit;
+    color:var(--muted);cursor:pointer;text-decoration:underline;
+    text-underline-offset:2px;}}
+  .foot-link:hover{{color:var(--text);}}
+  .foot-rescues{{margin:20px auto 18px;max-width:600px;line-height:1.95;}}
+  .foot-hd{{display:block;font-size:11px;font-weight:700;letter-spacing:.09em;
+    text-transform:uppercase;opacity:.7;margin-bottom:1px;}}
+  /* A rescue's name is one unit — don't break "Sean Casey Animal Rescue"
+     across two lines. */
+  .foot-rescues a{{white-space:nowrap;}}
+  .foot-rescues a:hover{{color:var(--text);}}
+  .foot-all{{font-weight:600;}}
 
   /* ---------- modal shell ---------- */
   .scrim{{position:fixed;inset:0;background:rgba(0,0,0,.42);
@@ -886,6 +1395,11 @@ def render(dated, for_date: date = None) -> str:
   .foot-row{{display:grid;grid-template-columns:1fr 1fr;gap:10px;}}
   .act-note{{font-size:12.5px;color:var(--muted);text-align:center;
     margin-bottom:10px;}}
+  /* Program terms are several sentences of real commitment, so they get a box
+     and a left edge to read down — centred prose that long is a wall. */
+  .act-note.prog{{text-align:left;line-height:1.55;background:var(--hair2);
+    border-radius:12px;padding:10px 12px;}}
+  .act-note.prog b{{color:var(--warn);}}
   /* .cta is declared later in the sheet, so match specificity to win. */
   .cta.cta2{{background:var(--hair2);color:var(--text);
     border:1px solid var(--hair);cursor:pointer;}}
@@ -960,9 +1474,15 @@ def render(dated, for_date: date = None) -> str:
   .m-scroll.no-hero .m-body{{padding-top:30px;}}
   .m-scroll.no-hero .m-close{{background:var(--hair);color:var(--text);}}
   .m-name-row{{display:flex;align-items:center;justify-content:space-between;
-    gap:14px;margin-bottom:15px;}}
+    gap:14px;margin-bottom:4px;}}
   .m-name{{font-size:clamp(40px,4.4vw,58px);font-weight:800;letter-spacing:-.035em;
     margin:0;line-height:1;min-width:0;overflow-wrap:anywhere;}}
+  /* The rescue reads as attribution under the name, not as another pill.
+     When we know the rescue's site it's a link; otherwise plain text. */
+  .m-rescue{{font-size:15px;font-weight:600;color:var(--muted);
+    margin:0 0 15px;overflow-wrap:anywhere;align-self:flex-start;
+    text-decoration:none;transition:color .15s ease;}}
+  a.m-rescue:hover{{color:var(--accent);text-decoration:underline;}}
   /* Same control as the cards, sized for the detail view and on a surface
      rather than over a photo. */
   .m-save{{position:static;right:auto;top:auto;flex:0 0 auto;width:44px;height:44px;
@@ -985,8 +1505,8 @@ def render(dated, for_date: date = None) -> str:
   .chips{{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:0;}}
   .chip{{font-size:12.5px;padding:6px 12px;border-radius:980px;background:var(--hair2);
     color:var(--text);font-weight:500;}}
-  .chip.rescue{{background:var(--text);color:var(--bg);font-weight:600;}}
   .chip.wait{{background:var(--warn-soft);color:var(--warn);font-weight:600;}}
+  .chip.program{{background:var(--warn-soft);color:var(--warn);font-weight:600;}}
   .m-views{{left:12px;top:12px;}}
   .chip[hidden]{{display:none;}}
 
@@ -1141,6 +1661,19 @@ def render(dated, for_date: date = None) -> str:
   .creed .num{{flex:0 0 auto;font-size:11.5px;font-weight:800;letter-spacing:.06em;
     color:var(--accent);padding-top:4px;font-variant-numeric:tabular-nums;}}
   .creed b{{color:var(--text);font-weight:650;}}
+  /* Get in touch + Share, side by side under the creed. */
+  .about-actions{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px;}}
+  .about-actions .cta{{margin-top:0;}}
+  /* ---------- terms / privacy ---------- */
+  .legal{{padding:34px 34px 38px;}}
+  .legal-h{{font-size:26px;font-weight:800;letter-spacing:-.02em;margin:0 0 4px;}}
+  .legal .upd{{font-size:12.5px;color:var(--muted);margin:0 0 18px;}}
+  .legal h3{{font-size:15px;font-weight:700;color:var(--text);margin:22px 0 6px;}}
+  .legal p{{font-size:14.5px;line-height:1.62;color:var(--muted);margin:0 0 12px;}}
+  .legal ul{{margin:0 0 12px;padding-left:20px;}}
+  .legal li{{font-size:14.5px;line-height:1.62;color:var(--muted);margin:0 0 8px;}}
+  .legal b{{color:var(--text);font-weight:650;}}
+  .legal a{{color:var(--accent);}}
   @media (prefers-reduced-motion:reduce){{ .about-logo{{animation:none;}} }}
 
   /* ---------- subscribe modal ---------- */
@@ -1151,7 +1684,8 @@ def render(dated, for_date: date = None) -> str:
       radial-gradient(120% 110% at 50% 0%, var(--accent-soft) 0%, transparent 62%);}}
   .sub-logo{{width:min(52%,200px);height:auto;display:block;margin:0 auto 22px;}}
   .sub-modal h2{{font-size:26px;letter-spacing:-.022em;margin:0 0 9px;}}
-  .sub-modal p{{color:var(--muted);font-size:15px;margin:0 auto 22px;max-width:360px;}}
+  .sub-modal p{{color:var(--muted);font-size:15px;margin:0 auto 22px;max-width:400px;
+    text-wrap:balance;}}
   body.locked{{overflow:hidden;}}
 
   /* ---------- mobile ---------- */
@@ -1163,18 +1697,17 @@ def render(dated, for_date: date = None) -> str:
     .grid{{grid-template-columns:repeat(2,1fr);gap:13px;padding:16px 0 4px;}}
     .card{{border-radius:15px;}}
     .meta{{padding:11px 12px 13px;}}
-    .nm{{font-size:19px;margin:0 0 8px;}}
+    .nm-row{{margin:0 0 8px;}}
+    .nm{{font-size:19px;}}
+    .new-chip{{right:8px;bottom:8px;font-size:8.5px;padding:3px 7px;
+      letter-spacing:.07em;}}
     .save{{width:38px;height:38px;right:7px;top:7px;}}
     .hrt{{width:19px;height:19px;}}
     .waiting{{right:8px;bottom:8px;font-size:9.5px;}}
     .pill{{font-size:10.5px;padding:3px 7px;}}
     /* Two pills fit a half-width card; a third gets sliced. */
     .pills .pill:nth-child(3){{display:none;}}
-    .badge{{font-size:9.5px;padding:4px 8px;left:8px;bottom:8px;}}
     .views{{font-size:11.5px;padding:5px 9px;left:8px;top:8px;}}
-    .day-hd{{padding-top:26px;}}
-    .day-hd h2,.day-n{{font-size:19px;}}
-    .day + .day{{margin-top:12px;padding-top:26px;}}
     .sub-sec{{padding:38px 20px;border-radius:22px;margin-top:38px;}}
     .sub-form{{flex-direction:column;}}
     .hero-sub{{flex-direction:column;gap:8px;}}
@@ -1228,6 +1761,7 @@ def render(dated, for_date: date = None) -> str:
     .thumbs{{padding-left:18px;padding-right:18px;}}
     .about-hero{{padding:36px 20px 22px;}}
     .about-body{{padding:0 20px 26px;}}
+    .legal{{padding:26px 20px 28px;}}
     .about h2{{font-size:22px;}}
     .creed li{{font-size:14.5px;gap:11px;}}
     .sub-modal{{padding:34px 20px 28px;}}
@@ -1242,6 +1776,28 @@ def render(dated, for_date: date = None) -> str:
     .filter-bar{{padding:10px 12px;margin-top:20px;}}
     .fb-label{{font-size:14px;}}
     .fb-clear{{font-size:13px;padding:6px 11px;}}
+    /* The pills scroll sideways as one row rather than wrapping five of them
+       onto three lines and pushing the dogs off the screen. `safe center` keeps
+       them centred until they overflow, then falls back to flex-start — plain
+       `center` in a scroll container puts the first pill out of reach. */
+    .fbar{{margin:22px 0 -4px;}}
+    .fbar-pills{{flex-wrap:nowrap;justify-content:safe center;overflow-x:auto;
+      padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}}
+    .fbar-pills::-webkit-scrollbar{{display:none;}}
+    .fbar-meta{{margin:12px 0 -10px;}}
+    /* The sort keeps its desktop treatment here — full "Sort by:" label, no
+       border, 15px. It was briefly stripped to the bare value on phones because
+       the row also carried "126 of 224 dogs" and a Clear link and there were
+       only 20px of line left; with the count down to "224 dogs" and Clear gone
+       there are 75px spare at 390px. See the 359px query below for where it
+       stops fitting. */
+    /* Anchored to the row, not the pill, so a menu on the last pill can't open
+       off the edge of a phone. */
+    .fmenu{{position:fixed;left:14px;right:14px;min-width:0;
+      top:auto;transform:translateY(-6px);}}
+    /* Re-asserted: the desktop right-anchor for the sort menu is more specific
+       than the rule above and would otherwise defeat this full-width sheet. */
+    .fpill.fsort .fmenu{{left:14px;right:14px;}}
     .pick-menu{{position:fixed;left:50%;transform:translateX(-50%) translateY(-6px);
       width:calc(100vw - 28px);max-width:330px;min-width:0;}}
     .pick.open .pick-menu{{transform:translateX(-50%);}}
@@ -1249,6 +1805,20 @@ def render(dated, for_date: date = None) -> str:
   }}
   @media (max-width:400px){{
     .tlists ul{{grid-template-columns:1fr;}}
+  }}
+  /* Below this the results header runs out of line: at 320px the count and a
+     full-label sort leave exactly the 8px flex gap between them, so one more
+     digit in the count would collide. The old phone treatment survives here and
+     only here — value only, with a border to say it's still a control.
+     Hidden from the eye, kept in the accessibility tree: display:none would
+     leave it announced as a bare "Recently added", which says nothing about
+     what the control does. */
+  @media (max-width:359px){{
+    .fpill.fsort .fs-l{{position:absolute;width:1px;height:1px;margin:-1px;
+      padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}}
+    .fpill.fsort > button{{border-color:var(--hair);padding:8px 12px;
+      font-size:13.5px;}}
+    .fpill.fsort > button:hover{{border-color:var(--hair);}}
   }}
   @media (max-width:339px){{
     .grid{{grid-template-columns:1fr;}}
@@ -1263,8 +1833,9 @@ def render(dated, for_date: date = None) -> str:
       <button class="nav-btn saved-chip" id="saved-chip"
               aria-label="Your saved dogs">
         <svg class="hrt sc-hrt" viewBox="0 0 24 24" aria-hidden="true"><path
-          d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1
-          8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg><b>0</b></button>
+          d="M12 21C8 18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 12
+          8C12.9 6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18 12
+          21Z"/></svg><b>0</b></button>
     </div>
     <div class="nav-mid">
       <div class="nav-count" id="nav-count">
@@ -1323,25 +1894,92 @@ def render(dated, for_date: date = None) -> str:
       <form class="hero-sub" id="hero-form">
         <input type="email" id="hero-email" placeholder="you@email.com" required
                autocomplete="email" aria-label="Email address">
-        <button type="submit">Send me dogs</button>
+        <button type="submit">Send new dogs</button>
       </form>
-      <div class="hero-note" id="hero-note">Get notified when there are new dogs.</div>
+      <!-- Empty at rest: the button already says what happens, and a line of
+           grey restating it pushed the dogs down for nothing. Kept as an
+           element because it's the form's feedback slot — the submit handler
+           writes success and error copy into it. -->
+      <div class="hero-note" id="hero-note"></div>
     </div>
   </header>
 
   <div class="filter-bar" id="filter-bar" hidden>
     <span class="fb-label">
       <svg class="hrt fb-hrt" viewBox="0 0 24 24" aria-hidden="true"><path
-        d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1
-        8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg>
+        d="M12 21C8 18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 12 8C12.9
+        6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18 12 21Z"/></svg>
       Saved dogs</span>
     <button class="fb-clear" id="fb-clear">All dogs ✕</button>
   </div>
 
+  <!-- Four filter pills, centred under the centred hero, and nothing else on
+       this line. Every filter is a fact the rescues actually record: breed
+       group, sex, age bucket and whether the dog is here yet. Deliberately no
+       "good with kids/cats/dogs" — only 3-14% of listings say, so those filters
+       would report our data coverage as if it were the dogs. Options are built
+       by script from the roster and carry live counts, so nothing leads to
+       zero. -->
+  <div class="fbar" id="fbar">
+    <div class="fbar-pills" id="fbar-pills">
+      <span class="fpill" data-kind="breed">
+        <button type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="fp-t">Breed</span><i class="cv">▾</i></button>
+        <span class="fmenu" role="listbox" aria-label="Filter by breed" hidden></span>
+      </span>
+      <span class="fpill" data-kind="sex">
+        <button type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="fp-t">Gender</span><i class="cv">▾</i></button>
+        <span class="fmenu" role="listbox" aria-label="Filter by gender" hidden></span>
+      </span>
+      <span class="fpill" data-kind="age">
+        <button type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="fp-t">Age</span><i class="cv">▾</i></button>
+        <span class="fmenu" role="listbox" aria-label="Filter by age" hidden></span>
+      </span>
+      <button class="fpill-t" id="f-program" type="button" aria-pressed="false"
+              hidden>Foster-to-adopt <b></b></button>
+    </div>
+    <!-- The results header, sitting directly on the grid: the count reads as the
+         grid's heading on the left, the sort control on the right.
+         Permanent. Only the separator and Clear come and go, and they sit after
+         the count so their arrival can't move it.
+         Sort is not a filter: it reorders rather than narrows, and something is
+         always sorting. So it stays off the pill row, names itself "Sort by:"
+         and wears no pill, to stop it reading as a fifth filter. Off that row
+         also means the phone's horizontal pill scroll can't swallow it — in
+         there it sat entirely off-screen. -->
+    <div class="fbar-meta" id="fbar-meta">
+      <span class="fbar-n" id="fbar-n" aria-live="polite"></span>
+      <span class="fpill fsort" data-sort="1">
+        <button type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="fs-l">Sort by:</span>
+          <span class="fp-t">Recently added</span><i class="cv">▾</i></button>
+        <span class="fmenu" role="listbox" aria-label="Sort dogs" hidden>
+          <button type="button" role="option" data-v="new"
+                  aria-selected="true"><span>Recently added</span></button>
+          <button type="button" role="option" data-v="wait"
+                  aria-selected="false"><span>Longest waiting</span></button>
+        </span>
+      </span>
+    </div>
+  </div>
+
+  <div class="saved-empty" id="filter-empty" hidden>
+    <div class="se-art" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+    </div>
+    <h2>No dogs match those filters</h2>
+    <p>Try loosening one of them — every dog we have today is still here behind
+       the filters.</p>
+    <button class="cta" id="fe-clear">Show all dogs</button>
+  </div>
+
   <div class="saved-empty" id="saved-empty" hidden>
     <div class="se-art" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><path d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1
-        12 6.6a4.7 4.7 0 0 1 8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M12 21C8 18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4
+        4.4C9.5 4.4 11.1 6 12 8C12.9 6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21
+        14.6 16 18 12 21Z"/></svg>
     </div>
     <h2>No saved dogs yet</h2>
     <p>Tap the heart on any dog to keep them here. Your list stays on this
@@ -1350,13 +1988,13 @@ def render(dated, for_date: date = None) -> str:
   </div>
 
   <main id="dogs">
-  {''.join(sections)}
+  {grid}
   {empty}
   </main>
 
   <section class="sub-sec" id="subscribe">
     <h2>Never miss a good dog</h2>
-    <p>One email each morning with the new dogs across every NYC rescue we follow.
+    <p>One email each morning with every new dog across NYC rescues.
        Nothing on the days there aren't any.</p>
     <form class="sub-form" id="sub-form">
       <input type="email" id="sub-email" placeholder="you@email.com" required
@@ -1397,8 +2035,14 @@ def render(dated, for_date: date = None) -> str:
 
   <footer>
     <div class="date">{for_date.strftime('%A, %B %-d, %Y')}</div>
+    <nav class="foot-rescues" aria-label="Rescues on LUVD">
+      <span class="foot-hd">Rescues on LUVD</span>
+      {footer_rescues} &middot; <a class="foot-all" href="/rescues">All rescues &rarr;</a>
+    </nav>
     <div style="margin-top:6px;">
-      LUVD NYC · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD%20NYC">Contact</a>
+      LUVD · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD%20NYC">Contact</a>
+      · <button class="foot-link" id="terms-link" type="button">Terms</button>
+      · <button class="foot-link" id="privacy-link" type="button">Privacy</button>
     </div>
   </footer>
 </div>
@@ -1411,12 +2055,14 @@ def render(dated, for_date: date = None) -> str:
 const DOGS = {payload};
 const SUBSCRIBE_URL = {json.dumps(subscribe_url)};
 const RESTING_NOTE = {{
-  'hero-note': 'Get notified when there are new dogs.',
+  'hero-note': '',
   'sub-note': 'Free. Unsubscribe anytime.',
   'm-sub-note': 'Free. Unsubscribe anytime.',
 }};
 const CONTACTS = {json.dumps(RESCUE_CONTACTS)};
 const CONTACT = {json.dumps(CONTACT_EMAIL)};
+const TERMS_HTML = {json.dumps(_terms_html(CONTACT_EMAIL, for_date))};
+const PRIVACY_HTML = {json.dumps(_privacy_html(CONTACT_EMAIL, for_date))};
 const scrim = document.getElementById('scrim');
 const modal = document.getElementById('modal');
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
@@ -1456,17 +2102,23 @@ function bars(d) {{
 // phone and posted. Photos come back through /img so the canvas stays
 // same-origin and can actually be exported.
 const STORY_W = 1080, STORY_H = 1920;
+const STORY_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif';
 
 function proxied(url) {{
   return '/img?u=' + encodeURIComponent(url);
 }}
 
-function loadImg(src) {{
+// A hung /img fetch must not strand the modal on "Building…" forever: the
+// proxy allows 20s per upstream, and three photos are tried in turn.
+function loadImg(src, ms = 8000) {{
   return new Promise((res, rej) => {{
     const im = new Image();
     im.crossOrigin = 'anonymous';
-    im.onload = () => res(im);
-    im.onerror = rej;
+    const stop = setTimeout(() => {{
+      im.src = ''; rej(new Error('timed out'));
+    }}, ms);
+    im.onload = () => {{ clearTimeout(stop); res(im); }};
+    im.onerror = () => {{ clearTimeout(stop); rej(new Error('failed to load')); }};
     im.src = src;
   }});
 }}
@@ -1477,6 +2129,30 @@ function drawCover(ctx, im, x, y, w, h) {{
   ctx.drawImage(im, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
 }}
 
+// Nine dogs have no photo at all, and a CDN can always fail. Either way the
+// card gets the same treatment the photoless tiles get on the page — a big
+// initial on an accent wash — because a flat black rectangle reads as broken
+// software, and people don't post broken software. The caption still tells the
+// two cases apart: "coming soon" on a dog with no photo is true, but on a dog
+// whose photo we simply couldn't fetch it hides a broken /img proxy.
+function drawNoPhoto(ctx, d, failed) {{
+  const g = ctx.createLinearGradient(0, 0, STORY_W, STORY_H);
+  g.addColorStop(0, '#31101a'); g.addColorStop(.6, '#170d11');
+  g.addColorStop(1, '#0b0b0c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, STORY_W, STORY_H);
+
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255,0,46,.55)';
+  ctx.font = '800 400px ' + STORY_FONT;
+  ctx.fillText(((d.name || '').trim()[0] || '?').toUpperCase(), STORY_W / 2, 660);
+  ctx.font = '600 36px ' + STORY_FONT;
+  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.fillText(failed ? "Photo wouldn't load" : 'Photo coming soon',
+               STORY_W / 2, 900);
+  ctx.restore();
+}}
+
 async function buildStory(d) {{
   const c = document.createElement('canvas');
   c.width = STORY_W; c.height = STORY_H;
@@ -1485,12 +2161,23 @@ async function buildStory(d) {{
   ctx.fillStyle = '#0b0b0c';
   ctx.fillRect(0, 0, STORY_W, STORY_H);
 
-  if (d.photos && d.photos.length) {{
+  // Try a few photos, not just the first: one dead URL shouldn't cost the card
+  // its dog. If none of them load, say so on the card rather than shipping a
+  // black rectangle.
+  let drew = false;
+  const tried = (d.photos || []).slice(0, 3);
+  for (const u of tried) {{
     try {{
-      const im = await loadImg(proxied(d.photos[0]));
-      drawCover(ctx, im, 0, 0, STORY_W, STORY_H);
-    }} catch (e) {{ /* keep the flat background */ }}
+      drawCover(ctx, await loadImg(proxied(u)), 0, 0, STORY_W, STORY_H);
+      drew = true;
+      break;
+    }} catch (e) {{
+      // Silence here once cost a day: every card fell back to the placeholder
+      // because /img could not reach the photo hosts, and nothing said so.
+      console.warn('share card: ' + proxied(u) + ' — ' + e.message);
+    }}
   }}
+  if (!drew) drawNoPhoto(ctx, d, tried.length > 0);
 
   // Scrims: darken top and bottom so type stays legible on any photo.
   let g = ctx.createLinearGradient(0, 0, 0, 620);
@@ -1501,7 +2188,7 @@ async function buildStory(d) {{
   g.addColorStop(1, 'rgba(0,0,0,.94)');
   ctx.fillStyle = g; ctx.fillRect(0, STORY_H - 1000, STORY_W, 1000);
 
-  const F = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif';
+  const F = STORY_FONT;
 
   // Top badge — width measured from the text so the pill hugs it.
   ctx.font = '700 32px ' + F;
@@ -1905,9 +2592,28 @@ function trackOut(d, kind) {{
   }} catch (e) {{}}
 }}
 
+// The rescue's homepage — the root of whatever contact/adopt/listing URL we
+// have on file, so the attribution under the name links somewhere useful.
+function rescueHome(d) {{
+  const c = CONTACTS[d.source] || {{}};
+  const src = c.contact_url || c.apply_url || d.cta_url || d.url || '';
+  try {{ return new URL(src).origin; }} catch (e) {{ return ''; }}
+}}
+
 function contactAction(d) {{
   const c = CONTACTS[d.source] || {{}};
   const url = dogUrl(d);
+  // A placement program outranks the rescue's standard route: this dog is
+  // placed a different way, on a different form, and d.cta_url already points
+  // there. Sending someone to the normal application would be the wrong ask.
+  if (d.program && d.program_label) {{
+    return {{
+      href: d.cta_url,
+      label: `Apply to ${{d.program_label.toLowerCase()}} ${{d.name}} →`,
+      note: d.program_note || null,
+      program: d.program_label
+    }};
+  }}
   if (c.method === 'email' && c.email) {{
     const subject = `Adoption inquiry: ${{d.name}}`;
     const body =
@@ -1960,6 +2666,8 @@ function renderDog(d) {{
     `<span class="chip">${{esc(t.text)}}</span>`).join('');
   const breedPill = d.breed && !/unknown/i.test(d.breed)
     ? `<span class="chip">${{esc(d.breed)}}</span>` : '';
+  const programChip = d.program_label
+    ? `<span class="chip program">${{esc(d.program_label)}}</span>` : '';
   const hasPhoto = !!(d.photos && d.photos.length);
   const thumbs = (d.photos || []).length > 1
     ? `<div class="thumbs">${{d.photos.map((p,n) =>
@@ -1988,14 +2696,18 @@ function renderDog(d) {{
             <button class="save m-save" data-id="${{esc(d.id)}}" type="button"
                     aria-pressed="false" aria-label="Save ${{esc(d.name)}}">
               <svg class="hrt" viewBox="0 0 24 24" aria-hidden="true"><path
-                d="M12 20.4S3.6 15.1 3.6 9.3A4.7 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1
-                8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg>
+                d="M12 21C8 18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6
+                12 8C12.9 6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18
+                12 21Z"/></svg>
               <span class="burst" aria-hidden="true"></span>
             </button>
           </div>
+          ${{(() => {{ const home = rescueHome(d); return home
+            ? `<a class="m-rescue" href="${{esc(home)}}" target="_blank"
+                 rel="noopener">${{esc(d.source_label)}}</a>`
+            : `<p class="m-rescue">${{esc(d.source_label)}}</p>`; }})()}}
           <div class="chips">
-            <span class="chip rescue">${{esc(d.source_label)}}</span>
-            ${{breedPill}}${{factPills}}${{traitPills}}</div>
+            ${{programChip}}${{breedPill}}${{factPills}}${{traitPills}}</div>
         </div>
         ${{bars(d)}}
       </div>
@@ -2007,7 +2719,8 @@ function renderDog(d) {{
     </div>
     </div>
     <div class="m-foot">
-      ${{act.note ? `<div class="act-note">${{esc(act.note)}}</div>` : ''}}
+      ${{act.note ? `<div class="act-note${{act.program ? ' prog' : ''}}">${{
+        act.program ? `<b>${{esc(act.program)}}.</b> ` : ''}}${{esc(act.note)}}</div>` : ''}}
       <div class="foot-row">
         ${{act.email
           ? `<button class="cta" id="contact-btn">${{esc(act.label)}}</button>`
@@ -2064,6 +2777,58 @@ const CREED = [
    'Most rescues want an application first, a few prefer email. Every dog links to the step that one actually needs.'],
 ];
 
+// Short, fun, and written so a follower actually taps through. The platform
+// pulls the share image from the page's og: tags; on image-first apps we also
+// hand over og.png directly.
+const SHARE_TEXT =
+  'Every new rescue dog in NYC, on one page every morning. Go meet your dog 🐶';
+
+async function shareLuvd() {{
+  const url = location.origin + location.pathname;
+  const note = document.getElementById('about-share-note');
+  const say = m => {{ if (note) note.textContent = m; }};
+  if (navigator.share) {{
+    // Prefer sharing with the OG image so image-first apps (Instagram) get a
+    // visual; otherwise a plain link share, which X/LinkedIn unfurl themselves.
+    try {{
+      const resp = await fetch(location.origin + '/og.png');
+      const blob = await resp.blob();
+      const file = new File([blob], 'luvd-nyc.png', {{type: 'image/png'}});
+      if (navigator.canShare && navigator.canShare({{files: [file]}})) {{
+        await navigator.share(
+          {{files: [file], text: SHARE_TEXT + ' ' + url, title: 'LUVD NYC'}});
+        return;
+      }}
+    }} catch (e) {{}}
+    try {{
+      await navigator.share({{title: 'LUVD NYC', text: SHARE_TEXT, url}});
+      return;
+    }} catch (e) {{ if (e && e.name === 'AbortError') return; }}
+  }}
+  // Desktop or no Web Share API — copy the link so it's ready to paste.
+  try {{
+    await navigator.clipboard.writeText(url);
+    say('Link copied — paste it anywhere.');
+  }} catch (e) {{
+    say('Copy this link: ' + url);
+  }}
+}}
+
+// Terms / Privacy — same sheet treatment as About, just static legal copy.
+function openLegal(title, bodyHtml) {{
+  showModal(`
+    <button class="m-close" aria-label="Close">✕</button>
+    <div class="m-scroll">
+      <div class="legal">
+        <h2 class="legal-h">${{esc(title)}}</h2>
+        ${{bodyHtml}}
+      </div>
+    </div>`, 'mid');
+  scrim.classList.add('sheet');
+}}
+const openTerms = () => openLegal('Terms of Use', TERMS_HTML);
+const openPrivacy = () => openLegal('Privacy Policy', PRIVACY_HTML);
+
 function openAbout() {{
   // 'mid' keeps it a 560px card on desktop; on mobile the CSS below takes it
   // full screen, matching the dog detail view.
@@ -2079,12 +2844,22 @@ function openAbout() {{
       <div class="about-body">
         <h2>Every dog deserves to feel loved<br>and find its forever home.</h2>
         <ul class="creed">${{items}}</ul>
-        <a class="cta" href="mailto:${{esc(CONTACT)}}?subject=Hello%20LUVD%20NYC">
-          Get in touch →</a>
-        <div class="cta-sub">We’re not a shelter. We point you to the rescues who are.</div>
+        <div class="about-actions">
+          <a class="cta" href="mailto:${{esc(CONTACT)}}?subject=LUVD">Get in touch →</a>
+          <button class="cta cta2" id="about-share" type="button">
+            <svg class="shr-ic" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15V3M12 3 8.5 6.5M12 3l3.5 3.5"/>
+              <path d="M4.5 13.5v4.75A1.75 1.75 0 0 0 6.25 20h11.5a1.75 1.75 0
+                       0 0 1.75-1.75V13.5"/>
+            </svg>Share LUVD</button>
+        </div>
+        <div class="cta-sub" id="about-share-note">We’re not a shelter. We point
+          you to the rescues who are.</div>
       </div>
     </div>`, 'mid');
   scrim.classList.add('sheet');
+  const asb = document.getElementById('about-share');
+  if (asb) asb.onclick = shareLuvd;
 }}
 
 function closeModal(fromHash) {{
@@ -2226,7 +3001,11 @@ if (location.hash) setTimeout(openFromHash, 0);
     if (!soon) return;
     if (ok) {{
       soon.hidden = true;
-      document.querySelectorAll('.day, .hero-cap').forEach(el => el.style.display = '');
+      document.querySelectorAll('.grid, .hero-cap, .fbar')
+        .forEach(el => el.style.display = '');
+      // Handing the grid back: applyView owns which cards are visible, and it
+      // still has pills applied from before the detour.
+      if (window.applyView) applyView();
       return;
     }}
     const what = state.species === 'cat' ? 'Cats' : 'Dogs';
@@ -2234,8 +3013,10 @@ if (location.hash) setTimeout(openFromHash, 0);
       `right now LUVD covers dogs in NYC. Want to know the day it opens?`;
     soon.hidden = false;
     // Hide the NYC dog grid, so we're never showing dogs that contradict the
-    // sentence the visitor just composed.
-    document.querySelectorAll('.day, .hero-cap').forEach(el => el.style.display = 'none');
+    // sentence the visitor just composed. The filter row goes with it — there's
+    // nothing left to filter.
+    document.querySelectorAll('.grid, .hero-cap, .fbar')
+      .forEach(el => el.style.display = 'none');
   }}
 
   document.querySelectorAll('.pick').forEach(pick => {{
@@ -2324,13 +3105,16 @@ if (location.hash) setTimeout(openFromHash, 0);
 
 // Stagger only what's plausibly on screen; the rest just appear.
 (function () {{
-  document.querySelectorAll('.day:first-of-type .card').forEach((c, n) => {{
+  document.querySelectorAll('.grid .card').forEach((c, n) => {{
     if (n < 12) c.style.setProperty('--i', n);
   }});
   requestAnimationFrame(() => {{
     document.body.classList.remove('boot');
     document.body.classList.add('ready');
   }});
+  // Longest card finishes at .22s + 11 * .035s + .45s. Past that, drop the
+  // animation so re-sorting the grid doesn't replay it on every tile.
+  setTimeout(() => document.body.classList.add('anim-done'), 1200);
 }})();
 
 // Double-tap a card on touch to save it, the way you'd expect from a photo
@@ -2344,8 +3128,9 @@ function bigHeart(card) {{
   if (!wrap) return;
   const h = document.createElement('span');
   h.className = 'dbl-heart';
-  h.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20.4S3.6 15.1 3.6 9.3A4.7'
-    + ' 4.7 0 0 1 12 6.6a4.7 4.7 0 0 1 8.4 2.7c0 5.8-8.4 11.1-8.4 11.1Z"/></svg>';
+  h.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 21C8 18 3 14.6 3 9.6C3 6.4'
+    + ' 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 12 8C12.9 6 14.5 4.4 16.6 4.4C18.9 4.4 21'
+    + ' 6.4 21 9.6C21 14.6 16 18 12 21Z"/></svg>';
   wrap.appendChild(h);
   setTimeout(() => h.remove(), 900);
 }}
@@ -2457,6 +3242,12 @@ function bindSaves(root) {{
       adding ? set.add(b.dataset.id) : set.delete(b.dataset.id);
       writeSaved(set);
       paintSaved();
+      // In the saved view the grid *is* the list of saved dogs, so an unsave has
+      // to leave it. Without this the card stayed put wearing an empty heart,
+      // and clearing the last save never revealed the "no saved dogs" state.
+      // Deliberately only in that view: in the main grid a save must never make
+      // the card you just tapped jump out from under you.
+      if (showingSaved) applyView();
       if (adding) {{
         b.classList.remove('pop');
         void b.offsetWidth;            // restart the animation
@@ -2470,31 +3261,298 @@ function bindSaves(root) {{
 }}
 bindSaves();
 
+// ---- filter pills -----------------------------------------------------------
+// Four facts, and only facts. There is no "good with kids/cats/dogs" filter on
+// purpose: 3-14% of our listings fill those fields in, so the results would
+// describe how thoroughly each rescue types rather than which dogs exist, and
+// two clicks would land on a confident, false zero.
+const FILTERS = {{breed: '', sex: '', age: ''}};
+let fosterOnly = false;
+
+const F_LABEL = {{breed: 'Breed', sex: 'Gender', age: 'Age'}};
+const F_ANY = {{breed: 'Any breed', sex: 'Any gender', age: 'Any age'}};
+// Life order, not popularity: sorting these by count would put Adult above
+// Puppy and read as arbitrary. Abbreviated to "yr"/"yrs" so no row wraps to a
+// second line — "Senior · 8 years and up" was doing exactly that. Unknown sits
+// last and reads as missing data rather than a life stage; it exists so the
+// options add up to "Any age" with no dog left unreachable.
+const AGE_ORDER = [
+  ['Puppy', 'Puppy · under 1 yr'],
+  ['Young', 'Young · 1–2 yrs'],
+  ['Adult', 'Adult · 3–7 yrs'],
+  ['Senior', 'Senior · 8+ yrs'],
+  ['Unknown', 'Unknown · not listed'],
+];
+// The catch-alls are our biggest groups and the least useful thing to pick, so
+// they sink to the bottom instead of leading on count.
+const OPT_LAST = ['Mixed / unknown', 'Other', 'Unknown'];
+
+// One definition of which bucket a dog is in, used for both counting and
+// matching so the two can't disagree. The fallback is what makes each pill's
+// options total over the roster: a blank field would otherwise put a dog in
+// "Any" and in no option, i.e. in a list you can't click your way to.
+const fieldOf = (d, kind) => (kind === 'breed' ? d.breed_group
+  : kind === 'age' ? d.age_bucket : d.sex) || 'Unknown';
+
+// `skip` evaluates a menu's own options as if that pill were cleared. That's
+// what makes the counts inside it reachable numbers rather than a column of
+// zeroes, and it's the whole reason you can't click your way to an empty page.
+function fMatch(d, skip) {{
+  for (const kind of ['breed', 'sex', 'age']) {{
+    if (FILTERS[kind] && skip !== kind && fieldOf(d, kind) !== FILTERS[kind]) return false;
+  }}
+  if (fosterOnly && skip !== 'foster' && d.program !== 'foster-to-adopt') return false;
+  return true;
+}}
+
+function fOptions(kind) {{
+  if (kind === 'age') {{
+    return AGE_ORDER.filter(([v]) => DOGS.some(d => fieldOf(d, 'age') === v));
+  }}
+  const counts = new Map();
+  DOGS.forEach(d => {{
+    const v = fieldOf(d, kind);
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }});
+  return [...counts.entries()]
+    .sort((a, b) => (OPT_LAST.indexOf(a[0]) - OPT_LAST.indexOf(b[0])) || b[1] - a[1])
+    .map(([v]) => [v, v]);
+}}
+
+// Only the pills that filter. The sort pill shares their looks and their
+// open/close behaviour, but it has no counts and never narrows the list.
+function buildFilterMenus() {{
+  document.querySelectorAll('.fpill[data-kind]').forEach(pill => {{
+    const kind = pill.dataset.kind;
+    const menu = pill.querySelector('.fmenu');
+    if (!menu) return;
+    menu.innerHTML = [['', F_ANY[kind]]].concat(fOptions(kind)).map(([v, label]) =>
+      `<button type="button" role="option" data-v="${{esc(v)}}" aria-selected="false">` +
+      `<span>${{esc(label)}}</span><b></b></button>`).join('');
+  }});
+}}
+
+function paintFilters(pool) {{
+  document.querySelectorAll('.fpill[data-kind]').forEach(pill => {{
+    const kind = pill.dataset.kind;
+    const cur = FILTERS[kind];
+    const base = pool.filter(d => fMatch(d, kind));
+    pill.querySelectorAll('.fmenu button').forEach(opt => {{
+      const v = opt.dataset.v;
+      const n = v ? base.filter(d => fieldOf(d, kind) === v).length : base.length;
+      opt.querySelector('b').textContent = n;
+      opt.disabled = !n && v !== cur;
+      opt.setAttribute('aria-selected', v === cur ? 'true' : 'false');
+    }});
+    pill.classList.toggle('on', !!cur);
+    const tag = pill.querySelector('.fp-t');
+    if (tag) tag.textContent = cur || F_LABEL[kind];
+  }});
+  const prog = document.getElementById('f-program');
+  if (prog) {{
+    prog.hidden = !DOGS.some(d => d.program === 'foster-to-adopt');
+    const n = pool.filter(d => fMatch(d, 'foster')
+      && d.program === 'foster-to-adopt').length;
+    prog.querySelector('b').textContent = n;
+    prog.classList.toggle('on', fosterOnly);
+    prog.setAttribute('aria-pressed', fosterOnly ? 'true' : 'false');
+    prog.disabled = !n && !fosterOnly;
+  }}
+}}
+
+function closeFilterMenus() {{
+  document.querySelectorAll('.fpill').forEach(p => {{
+    p.classList.remove('open');
+    const menu = p.querySelector('.fmenu');
+    if (menu) menu.hidden = true;
+    const trigger = p.querySelector('button');
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  }});
+}}
+
+function resetFilters() {{
+  FILTERS.breed = FILTERS.sex = FILTERS.age = '';
+  fosterOnly = false;
+}}
+
+// ---- sort -------------------------------------------------------------------
+// Deliberately not "Newest"/"Oldest": the Age pill sits inches away offering
+// "Senior · 8+ yrs", so "Oldest" would read as the oldest dogs. "Longest
+// waiting" is unambiguous there and says why you'd pick it — long-listed dogs
+// get scrolled past, which is the same reason the ⏳ badge exists.
+//
+// The two options key on DIFFERENT fields, which looks like a bug until you
+// know what each one is answering:
+//
+//   "Recently added"  -> first_seen,   when LUVD first saw the dog.
+//   "Longest waiting" -> waiting_days, how long the RESCUE has had it listed.
+//
+// waiting_days prefers the rescue's own listed_since and only falls back to
+// first_seen, so it is the number printed on the ⏳ badge. Keying "Longest
+// waiting" on first_seen instead would let a dog we noticed yesterday sort as
+// brand new while its own badge reads "⏳ 300 days" — a contradiction visible
+// in one glance. And "Recently added" genuinely means arrival on LUVD, which
+// is first_seen and nothing else; a dog can be newly added here and have been
+// waiting at its rescue for a year.
+const SORT_LABEL = {{new: 'Recently added', wait: 'Longest waiting'}};
+let sortBy = 'new';
+
+// Sorting reorders the cards; applyView still owns which of them are visible.
+// The server-rendered data-i indexes stay put — openDog, the similar-dogs cards
+// and the view counters all resolve a dog through them.
+function applySort() {{
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  const cards = [...grid.children];
+  const dog = c => DOGS[+c.dataset.i] || {{}};
+  const seen = c => dog(c).first_seen || '';
+  const waited = c => dog(c).waiting_days || 0;
+  // Each direction tiebreaks on the other field, so the order is total and the
+  // result is deterministic rather than leaning on sort stability.
+  const cmp = sortBy === 'wait'
+    ? (a, b) => waited(b) - waited(a) || seen(a).localeCompare(seen(b))
+    : (a, b) => seen(b).localeCompare(seen(a)) || waited(a) - waited(b);
+  const sorted = cards.slice().sort(cmp);
+  // Re-appending a node restarts its CSS animation, so don't touch the DOM when
+  // the order is already right — which it is on load, the server having
+  // rendered newest-first.
+  if (sorted.every((c, n) => c === cards[n])) return;
+  const frag = document.createDocumentFragment();
+  sorted.forEach(c => frag.appendChild(c));
+  grid.appendChild(frag);
+}}
+
+function paintSort() {{
+  const pill = document.querySelector('.fpill[data-sort]');
+  if (!pill) return;
+  const tag = pill.querySelector('.fp-t');
+  if (tag) tag.textContent = SORT_LABEL[sortBy] || SORT_LABEL.new;
+  // Never filled, unlike the filter pills: something is always sorting, so a
+  // filled control here would read as "you've narrowed the list".
+  pill.querySelectorAll('.fmenu button').forEach(opt =>
+    opt.setAttribute('aria-selected', opt.dataset.v === sortBy ? 'true' : 'false'));
+}}
+
 // Filter to saved dogs — a view, not a separate page.
 let showingSaved = false;
+// What the pills were set to when the saved view took over, held so leaving can
+// put them back. Null whenever we're not inside the saved view.
+let stashedFilters = null;
+
+// The single owner of what's on screen. Saved-view and the pills both run
+// through here, because two functions each setting card display would take
+// turns undoing each other.
+function applyView() {{
+  const soon = document.getElementById('soon');
+  if (soon && !soon.hidden) return;      // a "coming soon" combo owns the grid
+  const saved = savedSet();
+  const eligible = d => !showingSaved || saved.has(d.id);
+  const pool = DOGS.filter(eligible);
+
+  let shown = 0;
+  document.querySelectorAll('.card').forEach(c => {{
+    const d = DOGS[+c.dataset.i];
+    const ok = !!d && eligible(d) && fMatch(d);
+    c.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  }});
+  paintFilters(pool);
+  paintSort();
+  const label = document.getElementById('fbar-n');
+  // The count is always shown. With the grid flat there's no date heading
+  // stating the total any more, so this is the page's only statement of how many
+  // dogs there are, and the only confirmation that a filter did anything — on a
+  // phone the results are below the fold. Just the number you're looking at, the
+  // same sentence either way: the filled pills already say a filter is on and
+  // clearing them brings the total back, so "N of M" spent words on something
+  // the controls were already saying.
+  if (label) label.innerHTML = `<b>${{shown}}</b> dogs`;
+
+  const noSaves = showingSaved && saved.size === 0;
+  const savedEmpty = document.getElementById('saved-empty');
+  if (savedEmpty) savedEmpty.hidden = !noSaves;
+  const filterEmpty = document.getElementById('filter-empty');
+  if (filterEmpty) filterEmpty.hidden = !(shown === 0 && !noSaves);
+}}
+
 function toggleSavedView() {{
   showingSaved = !showingSaved;
-  const set = savedSet();
-  const empty = document.getElementById('saved-empty');
-  if (empty) empty.hidden = !(showingSaved && set.size === 0);
+  // Deliberately asymmetric. Entering clears the pills, because a saved list is
+  // a handful of dogs and leaving filters applied behind a bar we've just hidden
+  // would silently shorten it with nothing on screen to explain the gap. Leaving
+  // puts them back, because the pills return to view in the same motion — a
+  // filter vanishing while you're looking straight at the controls for it is the
+  // worse surprise, and it costs someone their place in a 224-dog list.
+  if (showingSaved) {{
+    stashedFilters = {{...FILTERS, fosterOnly}};
+    resetFilters();
+  }} else if (stashedFilters) {{
+    FILTERS.breed = stashedFilters.breed;
+    FILTERS.sex = stashedFilters.sex;
+    FILTERS.age = stashedFilters.age;
+    fosterOnly = stashedFilters.fosterOnly;
+    stashedFilters = null;
+  }}
   const bar = document.getElementById('filter-bar');
   if (bar) bar.hidden = !showingSaved;
+  const fbar = document.getElementById('fbar');
+  if (fbar) fbar.hidden = showingSaved;
   // Keep the big footer signup for the main feed only.
   const sec = document.getElementById('subscribe');
   if (sec) sec.style.display = showingSaved ? 'none' : '';
   const faq = document.querySelector('.faq');
   if (faq) faq.style.display = showingSaved ? 'none' : '';
-  document.querySelectorAll('.card').forEach(c => {{
-    c.style.display = (!showingSaved || set.has(c.dataset.id)) ? '' : 'none';
-  }});
-  document.querySelectorAll('.day').forEach(sec => {{
-    const any = [...sec.querySelectorAll('.card')].some(c => c.style.display !== 'none');
-    sec.style.display = any ? '' : 'none';
-  }});
   const chip = document.getElementById('saved-chip');
   if (chip) chip.classList.toggle('active', showingSaved);
+  applyView();
   window.scrollTo({{top: 0, behavior: 'smooth'}});
 }}
+
+buildFilterMenus();
+document.querySelectorAll('.fpill').forEach(pill => {{
+  const trigger = pill.querySelector('button');
+  const menu = pill.querySelector('.fmenu');
+  if (!trigger || !menu) return;
+  trigger.addEventListener('click', e => {{
+    e.stopPropagation();
+    const open = pill.classList.contains('open');
+    closeFilterMenus();
+    if (open) return;
+    menu.hidden = false;
+    // Fixed on phones, so the top has to be measured rather than inherited.
+    menu.style.top = window.matchMedia('(max-width:680px)').matches
+      ? (trigger.getBoundingClientRect().bottom + 10) + 'px' : '';
+    requestAnimationFrame(() => pill.classList.add('open'));
+    trigger.setAttribute('aria-expanded', 'true');
+  }});
+  menu.addEventListener('click', e => {{
+    const opt = e.target.closest('button');
+    if (!opt || opt.disabled) return;
+    e.stopPropagation();
+    if (pill.dataset.sort) {{
+      sortBy = opt.dataset.v;
+      applySort();
+    }} else {{
+      FILTERS[pill.dataset.kind] = opt.dataset.v;
+    }}
+    closeFilterMenus();
+    applyView();
+  }});
+}});
+const progPill = document.getElementById('f-program');
+if (progPill) progPill.addEventListener('click', () => {{
+  fosterOnly = !fosterOnly;
+  applyView();
+}});
+// The only bulk reset on the page, and only in the one state that needs one:
+// zero results is the single dead end where clearing pills one at a time isn't
+// obviously the way out. Everywhere else each menu's "Any …" row does it.
+const feClear = document.getElementById('fe-clear');
+if (feClear) feClear.onclick = () => {{ resetFilters(); applyView(); }};
+document.addEventListener('click', closeFilterMenus);
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape') closeFilterMenus();
+}});
 
 const savedChip = document.getElementById('saved-chip');
 if (savedChip) savedChip.onclick = toggleSavedView;
@@ -2503,6 +3561,7 @@ if (seBrowse) seBrowse.onclick = toggleSavedView;   // flip back to everything
 const fbClear = document.getElementById('fb-clear');
 if (fbClear) fbClear.onclick = toggleSavedView;
 paintSaved();
+applyView();
 // ---- logo easter egg --------------------------------------------------------
 // Paws drift up while you hover; clicking sets off a burst, and the fifth click
 // gets a woof. Purely decorative — nothing depends on it.
@@ -2587,14 +3646,18 @@ paintSaved();
 }})();
 
 document.getElementById('about-btn').onclick = openAbout;
+{{ const _tl = document.getElementById('terms-link');
+   if (_tl) _tl.onclick = openTerms;
+   const _pl = document.getElementById('privacy-link');
+   if (_pl) _pl.onclick = openPrivacy; }}
 function openSubscribe() {{
   showModal(`
     <button class="m-close" aria-label="Close">✕</button>
     <div class="sub-modal">
       <img class="sub-logo" src="assets/luvd-logo.png" alt="LUVD">
       <h2>Never miss a good dog</h2>
-      <p>One email each morning with the new dogs across every NYC rescue we
-         follow. Nothing on the days there aren't any.</p>
+      <p>One email each morning with every new dog across NYC rescues.
+         Nothing on the days there aren't any.</p>
       <form class="sub-form" id="m-sub-form">
         <input type="email" id="m-sub-email" placeholder="you@email.com" required
                autocomplete="email" aria-label="Email address">
@@ -2709,6 +3772,11 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
         body_bits.append(f'<p class="dp-facts">{html.escape(facts)}</p>')
     if wd is not None and wd >= WAIT_BADGE_DAYS:
         body_bits.append(f'<p class="dp-wait">Listed {wd} days</p>')
+    # High up the page, not buried under the bio: this decides whether the rest
+    # is even worth reading for this visitor.
+    if d.program_label and d.program_note:
+        body_bits.append(f'<p class="dp-prog"><b>{html.escape(d.program_label)}.</b> '
+                         f'{html.escape(d.program_note)}</p>')
     if d.traits:
         items = "".join(f"<li>{html.escape(t['text'])}</li>" for t in d.traits)
         body_bits.append(f"<h2>What to expect</h2><ul>{items}</ul>")
@@ -2722,6 +3790,9 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
                          f"<h2>Exercise</h2><p>{html.escape(bi.get('exercise',''))}</p>"
                          f"<h2>In a NYC apartment</h2>"
                          f"<p>{html.escape(bi.get('nyc',''))}</p>")
+
+    cta_label = (f"Apply to {d.program_label.lower()} {d.name}" if d.program_label
+                 else f"Contact {d.source_label} about {d.name}")
 
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -2748,34 +3819,117 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
   .dp-sub{{{{color:#6e6e73;margin:0 0 4px;}}}}
   .dp-facts{{{{color:#6e6e73;margin:0;}}}}
   .dp-wait{{{{color:#a86500;font-weight:600;}}}}
+  .dp-prog{{{{background:#fff6e5;border-radius:12px;padding:12px 14px;
+    margin:16px 0 0;font-size:14.5px;}}}}
+  .dp-prog b{{{{color:#a86500;}}}}
   .dp-cta{{{{display:inline-block;background:#FF002E;color:#fff;text-decoration:none;
     padding:13px 22px;border-radius:12px;font-weight:600;margin-top:26px;}}}}
   .dp-back{{{{display:block;margin-bottom:20px;font-size:14px;}}}}
   @media (prefers-color-scheme:dark){{{{
     body{{{{background:#000;color:#f5f5f7;}}}} .dp-sub,.dp-facts{{{{color:#98989d;}}}}
+    .dp-prog{{{{background:#2a2114;}}}} .dp-prog b{{{{color:#f0b357;}}}}
   }}}}
 </style></head><body>
 <a class="dp-back" href="/">← All adoptable dogs in NYC</a>
 {''.join(body_bits)}
 <a class="dp-cta" href="{html.escape(d.cta_url())}" target="_blank" rel="noopener">
-  Contact {html.escape(d.source_label)} about {html.escape(d.name)}</a>
+  {html.escape(cta_label)}</a>
 <p><a href="/rescue/{rescue_slug(d)}">More dogs from {html.escape(d.source_label)}</a>
  · <a href="{html.escape(d.url)}" target="_blank" rel="noopener">Original listing</a></p>
 </body></html>"""
 
 
+def _shelter_ld(label: str, source: str, site: str, slug: str) -> dict:
+    """The rescue as an entity, not just a page heading.
+
+    AnimalShelter is the closest schema.org type to an NYC foster-based rescue,
+    and being specific is what lets an answer engine treat these as
+    organizations rather than list items. ``url`` points at the rescue's own
+    site because that's the canonical home of the entity — our page describes
+    it, which is what the CollectionPage ``about`` below says.
+    """
+    contact = RESCUE_CONTACTS.get(source) or {}
+    home = rescue_home(source)
+    node = {
+        "@type": "AnimalShelter",
+        "@id": f"{site}/rescue/{slug}#rescue",
+        "name": label,
+        "url": home or f"{site}/rescue/{slug}",
+        "areaServed": {"@type": "City", "name": "New York City"},
+    }
+    if home:
+        node["sameAs"] = home
+    if contact.get("email"):
+        node["email"] = contact["email"]
+    return node
+
+
+def _rescue_structured_data(label: str, source: str, dogs: List[Dog],
+                            site: str, slug: str, desc: str) -> dict:
+    items = [
+        {
+            "@type": "ListItem",
+            "position": i,
+            "url": f"{site}{dog_path(d)}",
+            "name": d.name,
+        }
+        for i, d in enumerate(dogs[:60], 1)
+    ]
+    return {
+        "@context": "https://schema.org",
+        "@graph": [
+            _shelter_ld(label, source, site, slug),
+            {
+                "@type": "CollectionPage",
+                "@id": f"{site}/rescue/{slug}",
+                "url": f"{site}/rescue/{slug}",
+                "name": f"{label} — adoptable dogs in NYC",
+                "description": desc,
+                "isPartOf": {"@id": f"{site}/#website"},
+                "about": {"@id": f"{site}/rescue/{slug}#rescue"},
+                "mainEntity": {
+                    "@type": "ItemList",
+                    "name": f"Dogs available for adoption from {label}",
+                    "numberOfItems": len(dogs),
+                    "itemListElement": items,
+                },
+            },
+            {
+                "@type": "BreadcrumbList",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": 1, "name": "Adopt a dog in NYC",
+                     "item": f"{site}/"},
+                    {"@type": "ListItem", "position": 2, "name": "NYC dog rescues",
+                     "item": f"{site}/rescues"},
+                    {"@type": "ListItem", "position": 3, "name": label},
+                ],
+            },
+        ],
+    }
+
+
 def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     """One page per rescue — "muddy paws rescue dogs" is a real search."""
     slug = slugify(label)
+    source = dogs[0].source if dogs else ""
     title = f"{label} — adoptable dogs in NYC | LUVD"
-    desc = (f"All {len(dogs)} dogs currently available for adoption from "
-            f"{label} in New York City, updated daily.")
-    cards = "".join(
+    n = len(dogs)
+    desc = (f"All {n} dog{'' if n == 1 else 's'} currently available for "
+            f"adoption from {label} in New York City, updated daily.")
+    rows = "".join(
         f'<li><a href="{html.escape(dog_path(d))}">{html.escape(d.name)}</a>'
-        f' — {html.escape(d.breed or "Mixed breed")}'
-        f'{" · " + html.escape(d.age) if d.age else ""}</li>'
+        f'<span class="b"> — {html.escape(d.breed or "Mixed breed")}'
+        f'{" · " + html.escape(d.age) if d.age else ""}</span></li>'
         for d in dogs
     )
+    home = rescue_home(source)
+    # The outbound link belongs here rather than in the site-wide footer: it's
+    # useful in context, and it's the link that ties our page to the real
+    # organization.
+    out = (f'<a class="out" href="{html.escape(home)}" target="_blank"'
+           f' rel="noopener">Visit {html.escape(label)}&rsquo;s own site &rarr;</a>'
+           if home else "")
+    ld = json.dumps(_rescue_structured_data(label, source, dogs, site, slug, desc))
     return f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -2784,18 +3938,108 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}/rescue/{slug}">
 <link rel="icon" href="/favicon.png" type="image/png">
-<style>
-  body{{{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-    max-width:720px;margin:0 auto;padding:28px 20px 60px;line-height:1.6;
-    background:#fbfbfd;color:#1d1d1f;}}}}
-  a{{{{color:#FF002E;}}}} h1{{{{font-size:32px;letter-spacing:-.025em;}}}}
-  ul{{{{padding-left:18px;}}}} li{{{{margin-bottom:8px;}}}}
-  @media (prefers-color-scheme:dark){{{{body{{{{background:#000;color:#f5f5f7;}}}}}}}}
-</style></head><body>
-<a href="/">← All adoptable dogs in NYC</a>
+<script type="application/ld+json">{ld}</script>
+<style>{_STATIC_PAGE_CSS}</style></head><body>
+<a class="back" href="/">&larr; All adoptable dogs in NYC</a>
 <h1>{html.escape(label)}</h1>
-<p>{html.escape(desc)}</p>
-<ul>{cards}</ul>
+<p class="lead">{html.escape(desc)}</p>
+{out}
+<ul class="dogs">{rows}</ul>
+<footer>
+  <a href="/rescues">All NYC rescues on LUVD</a> &middot;
+  <a href="/">Today&rsquo;s new dogs</a>
+</footer>
+</body></html>"""
+
+
+def _rescues_page(by_rescue: dict, site: str, for_date: date) -> str:
+    """The rescue index — a page that can answer "which dog rescues are in NYC?".
+
+    A footer list can't rank for that and can't be cited; a page with the roster,
+    each rescue's dog count and a link to their own site can. It also gives the
+    seven rescue pages a single hub to be linked from.
+    """
+    labels = sorted(by_rescue)
+    total = sum(len(v) for v in by_rescue.values())
+    title = "NYC dog rescues — every rescue LUVD tracks | LUVD"
+    desc = (f"The {len(labels)} New York City dog rescues LUVD checks every "
+            f"morning, with all {total} of their adoptable dogs in one place.")
+    # The meta description above already says what LUVD does with them, so the
+    # on-page lead adds the part a visitor needs instead of repeating it.
+    intro = ("Every adoption is handled by the rescue itself &mdash; LUVD just "
+             "helps you find the dog.")
+
+    cards = []
+    for label in labels:
+        dogs = by_rescue[label]
+        slug = slugify(label)
+        source = dogs[0].source if dogs else ""
+        home = rescue_home(source)
+        n = len(dogs)
+        links = [f'<a href="/rescue/{slug}">See all {n} dog'
+                 f'{"" if n == 1 else "s"}</a>']
+        if home:
+            links.append(f'<a href="{html.escape(home)}" target="_blank"'
+                         f' rel="noopener">{html.escape(urlsplit(home).netloc)}</a>')
+        cards.append(
+            f'<div class="card"><h2><a href="/rescue/{slug}">'
+            f'{html.escape(label)}</a></h2>'
+            f'<p class="meta">{n} dog{"" if n == 1 else "s"} available today'
+            f' &middot; New York City</p>'
+            f'<p class="links">{" &middot; ".join(links)}</p></div>'
+        )
+
+    ld = json.dumps({
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "CollectionPage",
+                "@id": f"{site}/rescues",
+                "url": f"{site}/rescues",
+                "name": "NYC dog rescues on LUVD",
+                "description": desc,
+                "isPartOf": {"@id": f"{site}/#website"},
+                "dateModified": for_date.isoformat(),
+                "mainEntity": {
+                    "@type": "ItemList",
+                    "name": "Dog rescues in New York City",
+                    "numberOfItems": len(labels),
+                    "itemListElement": [
+                        {"@type": "ListItem", "position": i,
+                         "url": f"{site}/rescue/{slugify(label)}",
+                         "item": _shelter_ld(
+                             label,
+                             by_rescue[label][0].source if by_rescue[label] else "",
+                             site, slugify(label))}
+                        for i, label in enumerate(labels, 1)
+                    ],
+                },
+            },
+            {
+                "@type": "BreadcrumbList",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": 1, "name": "Adopt a dog in NYC",
+                     "item": f"{site}/"},
+                    {"@type": "ListItem", "position": 2, "name": "NYC dog rescues"},
+                ],
+            },
+        ],
+    })
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(desc)}">
+<link rel="canonical" href="{site}/rescues">
+<link rel="icon" href="/favicon.png" type="image/png">
+<script type="application/ld+json">{ld}</script>
+<style>{_STATIC_PAGE_CSS}</style></head><body>
+<a class="back" href="/">&larr; All adoptable dogs in NYC</a>
+<h1>NYC dog rescues</h1>
+<p class="lead">{html.escape(desc)} {intro}</p>
+{''.join(cards)}
+<footer><a href="/">Today&rsquo;s new dogs</a></footer>
 </body></html>"""
 
 
@@ -2920,8 +4164,13 @@ def write(dated, for_date: date = None) -> Path:
         (rdir / f"{slugify(label)}.html").write_text(
             _rescue_page(label, dogs, site), encoding="utf-8")
 
+    # The hub the footer points at, and the page that answers "which rescues?".
+    (OUT_DIR / "rescues.html").write_text(
+        _rescues_page(by_rescue, site, for_date), encoding="utf-8")
+
     # Sitemap lists every real URL.
-    urls = [f"{site}/"] + [f"{site}/rescue/{slugify(l)}" for l in by_rescue] \
+    urls = [f"{site}/", f"{site}/rescues"] \
+           + [f"{site}/rescue/{slugify(l)}" for l in by_rescue] \
            + [f"{site}{dog_path(d)}" for d in flat]
     today_iso = for_date.isoformat()
     body = "".join(
@@ -2935,5 +4184,6 @@ def write(dated, for_date: date = None) -> Path:
     (OUT_DIR / "404.html").write_text(_not_found_page(flat, site),
                                       encoding="utf-8")
 
-    print(f"  {len(flat)} dog pages, {len(by_rescue)} rescue pages, sitemap, 404")
+    print(f"  {len(flat)} dog pages, {len(by_rescue)} rescue pages, "
+          f"/rescues, sitemap, 404")
     return out

@@ -142,13 +142,20 @@ def view():
 # sends CORS headers — and rescue photo hosts don't. Re-serving them from here
 # keeps the share card same-origin. Strictly allowlisted: an open proxy would
 # let anyone use this server to fetch arbitrary URLs.
+# Exact hostnames only — never suffixes. "s3.amazonaws.com" as a suffix test
+# would match any bucket-style host and hand out an open proxy.
 _IMG_HOSTS = {
-    "photos.smugmug.com",
-    "new-s3.shelterluv.com",
-    "s3.us-east-1.amazonaws.com",
+    "photos.smugmug.com",                # Muddy Paws
+    "new-s3.shelterluv.com",             # Animal Haven (Shelterluv)
+    "s3.us-east-1.amazonaws.com",        # Petstablished: Korean K9, NYC Second
+                                         # Chance, Waggytail
+    # Deliberately NOT "s3.amazonaws.com": the only thing our sources ever
+    # served from the global endpoint was Petstablished's placeholder image,
+    # which sources/petstablished.py now drops at ingest. Allowlisting it would
+    # open the proxy to every public object in every S3 bucket.
     "www.sugarmuttsrescue.com",
     "sugarmuttsrescue.com",
-    "g.petango.com",
+    "g.petango.com",                     # Sean Casey (Petango)
     "dl5zpyw5k3jeb.cloudfront.net",      # Petfinder CDN
 }
 
@@ -161,12 +168,18 @@ def img():
     raw = request.args.get("u", "")
     p = urlparse(raw)
     if p.scheme != "https" or p.netloc not in _IMG_HOSTS:
+        # A new source whose photo host was never allowlisted looks identical to
+        # an attack from here, so say which host was refused — otherwise the
+        # only symptom is a share card with a black hole where the dog was.
+        app.logger.warning("/img refused host %r — add it to _IMG_HOSTS if it "
+                           "belongs to one of our sources", p.netloc)
         return ("not allowed", 403)
     try:
         r = requests.get(raw, timeout=20, stream=True,
                          headers={"User-Agent": "Mozilla/5.0 (LUVD NYC)"})
         r.raise_for_status()
-    except Exception:
+    except Exception as e:
+        app.logger.warning("/img upstream failed for %s: %s", raw, e)
         return ("upstream error", 502)
     ctype = r.headers.get("Content-Type", "")
     if not ctype.startswith("image/"):

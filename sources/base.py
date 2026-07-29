@@ -39,10 +39,20 @@ class Dog:
     # --- the CTA: where to actually inquire about this dog ---
     adopt_url: str = ""           # rescue's adopt/contact page; falls back to url
 
+    # --- placement programs that aren't a plain adoption ---
+    # Some rescues place dogs through a named program with a different
+    # application and a different commitment. Korean K9's foster-to-adopt dogs
+    # are still in South Korea, so "apply and go meet the dog" is wrong for
+    # them. When set, the UI leads with this instead of the usual apply button.
+    program: str = ""             # machine key, e.g. "foster-to-adopt"
+    program_label: str = ""       # chip text, e.g. "Foster-to-adopt"
+    program_note: str = ""        # what the adopter is committing to
+
     # --- filled in by the pipeline, not by sources ---
     first_seen: str = ""          # YYYY-MM-DD the dog first appeared on LUVD
     listed_since: str = ""        # YYYY-MM-DD the RESCUE published it, when known
     scores: dict = field(default_factory=dict)      # energy/apartment/experience, 1-5
+    quip: str = ""                # playful first-person card line, grounded in the bio
     breed_key: Optional[str] = None
     breed_info: dict = field(default_factory=dict)
     size_outlook: dict = field(default_factory=dict)
@@ -58,6 +68,18 @@ class Dog:
         """Secondary guard against the same dog appearing across two sources."""
         return f"{self.name.strip().lower()}|{self.breed.strip().lower()[:20]}"
 
+    def reprint_key(self) -> str:
+        """One dog entered twice in a single rescue's own feed.
+
+        Far stricter than dedupe_key, because within a source we normally trust
+        the id and two dogs may legitimately share a name. A shared cover photo
+        *and* a shared name is a re-entered record rather than a coincidence,
+        and it's the only within-source match safe enough to act on. Empty when
+        there's no photo to compare, which means "don't guess".
+        """
+        photo = self.primary_photo()
+        return f"{self.name.strip().lower()}|{photo}" if photo else ""
+
     def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "source": self.source,
@@ -67,7 +89,9 @@ class Dog:
             "location": self.location, "description": self.description,
             "attributes": self.attributes, "traits": self.traits, "fee": self.fee,
             "first_seen": self.first_seen, "listed_since": self.listed_since,
-            "cta_url": self.cta_url(),
+            "cta_url": self.cta_url(), "quip": self.quip,
+            "program": self.program, "program_label": self.program_label,
+            "program_note": self.program_note,
             "scores": self.scores, "breed_info": self.breed_info,
             "size_outlook": self.size_outlook,
             "monthly_cost": self.monthly_cost,
