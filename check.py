@@ -207,12 +207,22 @@ def run(dry_run=False):
 
     # The social card leads with real dog faces, so it's rebuilt with the page.
     # Never fatal — a stale card is better than a failed run.
+    photographed = [d for d in dogs if d.photos]
     try:
         import og_image
-        og = og_image.build([d for d in dogs if d.photos], total=len(dogs))
+        og = og_image.build(photographed, total=len(dogs))
         print(f"Share card:   {og}")
     except Exception as e:
         print(f"  share card skipped ({type(e).__name__}: {e})")
+
+    # Same deal for the welcome email's montage: rebuilt from dogs listed today
+    # so a new subscriber sees dogs actually waiting, and never fatal. The
+    # email checks the file exists and simply omits it if this never ran.
+    try:
+        import montage
+        print(f"Montage:      {montage.build(photographed)}")
+    except Exception as e:
+        print(f"  montage skipped ({type(e).__name__}: {e})")
 
     if dry_run:
         for d in new_today[:10]:
