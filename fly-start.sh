@@ -48,6 +48,10 @@ ln -s /data/public /app/public
 # back with a clean lock instead of a wedged one that survives forever.
 RENDER_LOCK=/tmp/luvd-render.lock
 
+# Which city owns the once-a-week jobs. Read from the registry rather than
+# written here, so there is still exactly one place that decides it.
+DEFAULT_CITY=$(python cities.py --default 2>/dev/null || echo NYC)
+
 # Minutes within which an existing page counts as "just rendered".
 RENDER_FRESH_MIN=12
 
@@ -93,17 +97,47 @@ render() {
     render check.py --dry-run
   fi
 
-  # Sleep until the next 05:30 America/New_York (TZ set in the Dockerfile),
-  # run once, repeat. Mondays also send the per-rescue digest. This one is the
-  # real run — it records what was seen and mails the digest.
+  # Sleep until the next city's 05:30, run that city, repeat. Mondays also send
+  # the per-rescue digest. These are the real runs — they record what was seen
+  # and mail the digest.
+  #
+  # Each city runs at 05:30 in ITS OWN timezone, so New York and Los Angeles are
+  # three hours apart and each city's readers get their morning email in the
+  # morning. The container's TZ is fixed (America/New_York, set in the
+  # Dockerfile), so the arithmetic cannot be left to the ambient clock: cities.py
+  # computes each city's local 05:30 with zoneinfo and prints the soonest, which
+  # also keeps the schedule and the city registry from drifting apart.
+  #
+  # It replaces `date -d "today 05:30"` for a second reason: -d is a GNU
+  # extension, so that line was silently portable only to this image.
+  #
+  # The two cities' runs share the render lock, so they serialise rather than
+  # tearing public/ between them if one overruns into the other. Nothing new is
+  # needed for that — it is the same mutex the boot render already uses.
   while true; do
-    now=$(date +%s)
-    next=$(date -d "today 05:30" +%s)
-    [ "$next" -le "$now" ] && next=$((next + 86400))
-    echo "cron: next run in $((next - now))s"
-    sleep $((next - now))
-    render check.py
-    [ "$(date +%u)" = "1" ] && python weekly_report.py
+    schedule=$(python cities.py --next) || schedule=""
+    if [ -z "$schedule" ]; then
+      # Registry unreadable. An hour is short enough to recover quickly and long
+      # enough not to spin, and the page currently being served stays up.
+      echo "cron: could not compute the next run — retrying in 1h"
+      sleep 3600
+      continue
+    fi
+    wait_s=${schedule%% *}
+    due=${schedule#* }
+    echo "cron: next run in ${wait_s}s for: ${due}"
+    sleep "$wait_s"
+    for city in $due; do
+      render check.py --city "$city"
+    done
+    # The weekly report is one business summary, not a per-city one, so it goes
+    # out after the default city's run only. Without that it would arrive once
+    # per live city every Monday.
+    case " $due " in
+      *" $DEFAULT_CITY "*)
+        [ "$(date +%u)" = "1" ] && python weekly_report.py
+        ;;
+    esac
   done
 ) &
 
