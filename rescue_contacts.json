@@ -70,5 +70,23 @@
     "contact_url": "https://loveleorescue.org/contact",
     "evidence": "https://loveleorescue.org/ - nav item 'ADOPTION APPLICATION' links straight to the Petstablished adoption form above (form_id=36515); their own /adopt page is the Wagtopia widget and renders nothing without JavaScript. The site's dog list embeds wagtopia.com/search/org?id=2349259, which confirms the org_id this source reads. No email address or phone number is published anywhere on the site: https://loveleorescue.org/contact is a web form - 'Questions? Please fill out the contact form below. As a small team, we appreciate your patience. Please allow 24-48 hours for a reply.' Note the domain is .org; loveleorescue.com has no DNS record at all. 501(c)(3), EIN 47-4175366, Los Angeles CA. Verified 2026-07-29.",
     "city": "LA"
+  },
+  "apurposeful": {
+    "label": "A Purposeful Rescue",
+    "method": "application",
+    "email": "apurprescue@yahoo.com",
+    "apply_url": "https://petstablished.com/adoptions/personal-information?application_type=Adopt&donation_section=false&form_id=53142&form_type=generic&generic_form_id=53142&section=1&selected_pets=false",
+    "contact_url": "https://apurposefulrescue.org/faq",
+    "evidence": "https://apurposefulrescue.org/faq - 'You must start by filling out an adoption application.' No application link is published anywhere on the site to go with that sentence: both https://apurposefulrescue.org/adopt and /adoptable-dogs are Shelterluv embeds (shelterluv_embed.js, GID 609) and neither the pages nor the nav carry an application URL, and there is no contact page at all - apurprescue@yahoo.com is the only address published. The apply_url above is therefore their Petstablished form, adoption_form_id 53142, which is identical on all 53 of their listings and is what those listings' own adopt buttons open; it returns 200. Note the split: their own site sends adopters to Shelterluv, while LUVD reads their Petstablished roster (org 3204319) - see sources/rescues/apurposeful.py. 21 of those 53 records are courtesy posts for other organisations and are dropped rather than attributed here. Los Angeles CA. Verified 2026-07-30.",
+    "city": "LA"
+  },
+  "animalrescuemission": {
+    "label": "The Animal Rescue Mission",
+    "method": "application",
+    "email": "info@theanimalrescuemission.org",
+    "apply_url": "https://www.theanimalrescuemission.org/adoptionapplication",
+    "contact_url": "https://www.theanimalrescuemission.org/adopt",
+    "evidence": "https://www.theanimalrescuemission.org/adopt is a Petstablished embed and the page carries org id 2330596, which is what confirms the org_id this source reads rather than taking it from the directory on trust. Their nav links /adoptionapplication on their own domain (also Squarespace, also Petstablished-backed), which is preferred over the raw Petstablished form because it is the link the rescue would give an adopter themselves. info@theanimalrescuemission.org is published on the site. 501(c)(3) founded 2018 by Shira Scott Astrof; a Best Friends Animal Society network partner, which is the outside corroboration that this is a working rescue. West Hollywood CA - all 19 of their listings say so. Verified 2026-07-30.",
+    "city": "LA"
   }
 }

@@ -20,6 +20,8 @@ from .rescues.koreank9 import KoreanK9Source
 from .rescues.nycsecondchance import NYCSecondChanceSource
 from .rescues.wagmor import WagmorSource
 from .rescues.loveleo import LoveLeoSource
+from .rescues.apurposeful import APurposefulSource
+from .rescues.animalrescuemission import AnimalRescueMissionSource
 
 # Rescues we scrape directly from their own sites.
 _DIRECT: List[Source] = [
@@ -30,16 +32,40 @@ _DIRECT: List[Source] = [
 
 # Rescues read through Petstablished's public search API. Korean K9's own site
 # is behind a Cloudflare challenge; NYC Second Chance's adoptable page is just
-# an iframe of this same widget; Wagmor and Love Leo are Los Angeles, and being
-# on a platform LUVD already reads is why both could open the same day they were
-# chosen. They are also the only two: a sweep of ~250 LA-area organisations in
-# Petstablished's own directory found three with live dogs. Every LA rescue after
-# these needs a scraper of its own.
+# an iframe of this same widget; the four Los Angeles rescues are here because
+# being on a platform LUVD already reads is what let each of them open within a
+# day of being chosen.
+#
+# This note used to say Wagmor and Love Leo were "the only two", on the strength
+# of a sweep of ~250 LA-area organisations that "found three with live dogs".
+# That was wrong, and wrong in the expensive direction: it is the sentence that
+# tells the next person not to bother looking. A resweep on 2026-07-30 — 16 ZIPs
+# across the basin at 35 miles, paginated — found 364 distinct organisations and
+# 36 with live dogs. The two figures do not measure the same area (35 miles from
+# Long Beach or Sylmar reaches Orange County and Riverside, and one org in the
+# results is actually in New Hampshire), so the counts are not comparable. The
+# claim that Los Angeles itself held nothing else is what did not survive: A
+# Purposeful Rescue is in Los Angeles with 53 records, and was there all along.
+#
+# Filtered to organisations actually in Los Angeles with a real roster, the
+# sweep yielded the two added below. The rest of the 36 are mostly Orange County
+# and Inland Empire, breed-specific (Basset Hound Rescue of Southern
+# California), overseas-import (China Rescue Dogs), or down to one or two dogs.
+# `scratchpad/sweep.py` in the session that added these is the script; the
+# method is just the shelters endpoint documented in petstablished.py.
+#
+# Worth recording for whoever picks up the curated shortlist: none of MaeDay
+# Rescue, the HIT Living Foundation, Outta the Cage or Yogi's House is on
+# Petstablished. HIT Living and Outta the Cage are on Adopt a Pet, Yogi's House
+# self-manages on Wix, and MaeDay publishes availability only on Instagram.
+# Each needs a route of its own, and none of them is a subclass of this.
 _VIA_PLATFORM: List[Source] = [
-    KoreanK9Source(),          # 15
-    NYCSecondChanceSource(),   # 16
-    WagmorSource(),            # 20 — Los Angeles
-    LoveLeoSource(),           # 21 — Los Angeles
+    KoreanK9Source(),               # 15
+    NYCSecondChanceSource(),        # 16
+    WagmorSource(),                 # 20 — Los Angeles
+    LoveLeoSource(),                # 21 — Los Angeles
+    APurposefulSource(),            # 22 — Los Angeles
+    AnimalRescueMissionSource(),    # 23 — West Hollywood
 ]
 
 
