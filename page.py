@@ -1324,6 +1324,21 @@ def render(dated, for_date: date = None, city: str = None) -> str:
      separates it more plainly than the divider ever did. */
   .fbar-pills{{display:flex;align-items:center;justify-content:center;gap:8px;
     flex-wrap:wrap;}}
+  /* An open menu is only above the grid for as long as nothing between it and
+     the page root is a stacking context — and this row has now twice become one
+     by accident. First the scroll fade's mask (paintPillFade stands it down for
+     exactly this reason), then -webkit-overflow-scrolling:touch on iOS, which
+     put every filter menu behind the dogs in mobile Safari. A menu's z-index:48
+     is measured inside whichever context it lands in, so each time the row grew
+     one, 48 stopped meaning "above the cards" and started meaning "above the
+     other things in this row".
+     So the row states its own order instead of relying on not having one: while
+     a menu is open it *is* a stacking context, deliberately, and one that sits
+     above the grid. 49 is one below nav's 50 — a menu should cover the dogs, not
+     the bar you close it from. Toggled by paintPillFade(), which already knows
+     when a menu is open. Anything added here that draws outside the row's box
+     now stays correct without a third special case. */
+  .fbar-pills.menu-open{{position:relative;z-index:49;}}
   /* The results header: count left, sort right, sitting on top of the grid.
      The count is always on the page, never toggled. It used to appear only once
      a filter was applied, which pushed the whole grid down at the exact moment
@@ -1938,8 +1953,16 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        them centred until they overflow, then falls back to flex-start — plain
        `center` in a scroll container puts the first pill out of reach. */
     .fbar{{margin:22px 0 -4px;}}
+    /* No -webkit-overflow-scrolling:touch. It used to be here for momentum, and
+       it is why every filter menu opened *behind* the dogs on iOS: that property
+       promotes the row to its own composited layer, which contains
+       position:fixed descendants — so the menu, fixed and z-index 48, was
+       trapped inside a row that paints before the grid, and the cards and the
+       results header drew straight over it. Momentum scrolling has been the
+       default for overflow containers since iOS 13, so nothing is lost.
+       .fbar-pills.menu-open is the belt to this braces; see it for why both. */
     .fbar-pills{{flex-wrap:nowrap;justify-content:safe center;overflow-x:auto;
-      padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}}
+      padding-bottom:2px;scrollbar-width:none;}}
     .fbar-pills::-webkit-scrollbar{{display:none;}}
     /* The fade that says the row keeps going. A mask, not an overlaid gradient,
        for two reasons: a mask cannot intercept a touch, so the pills under it
@@ -1974,12 +1997,20 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     /* No sort override here on purpose: it is 17px at every width from its base
        declaration, so this breakpoint is where the count comes down to meet it
        rather than where the sort moves. */
-    /* Back to 13.5px, and desktop stays at 15px. The one-control-scale rule is
-       about hierarchy against the count *within* a breakpoint, and the two
-       breakpoints have no reason to agree: a phone row is width-constrained in
-       a way desktop isn't, and 15px cost 22px of overflow for no gain anyone
-       could see. Still true with the shorter Foster label — it decides whether
-       the row fits at all on the narrower phones. */
+    /* 14.5px, and desktop stays at 15px. This was 13.5px, chosen because the
+       full 15px cost 22px of overflow for no gain anyone could see. Half of that
+       still holds and half didn't survive being read on a phone: 13.5px is a
+       step below the 14.5px the *menu* rows these pills open are set at, so the
+       control read as smaller than its own contents. 14.5px puts the trigger and
+       its options on one size and stops the row looking like fine print.
+       It is not free. Measured at 375px the row goes from 6px of overflow to
+       19px, so a little more of the last pill starts off-screen — but the row has
+       been a scroller with a fade cue at this width for a while, so this makes an
+       existing scroll slightly longer rather than introducing one. The full 15px
+       is still declined: 26px at the same width, and it would flatten the step
+       the rest of the page's type takes across this breakpoint (card names 23 to
+       19, count 19 to 17) for the sake of matching desktop, which has room this
+       breakpoint doesn't. */
     /* 12px of side padding, not the desktop 14. The drawn chevrons are ~5px
        wider each than the text glyph they replaced, which put 15.7px back onto
        a row that had 8.7px of room — enough to reintroduce the overflow the
@@ -1987,8 +2018,8 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        it back: 2px a side across four pills returns 16px, the pills still look
        generously spaced at this size, and neither the chevron nor the label had
        to shrink to pay for it. */
-    .fpill > button,.fpill-t{{font-size:13.5px;padding:8px 12px;}}
-    /* The sort deliberately does NOT come down to 13.5px with them: it is 17px
+    .fpill > button,.fpill-t{{font-size:14.5px;padding:8px 12px;}}
+    /* The sort deliberately does NOT come down to 14.5px with them: it is 17px
        at every width, and it is now short enough that the width that costs is
        no longer the problem it was when it read "Sort by: Recently added". */
     /* Anchored to the row, not the pill, so a menu on the last pill can't open
@@ -3589,6 +3620,9 @@ function paintPillFade() {{
   // down for as long as one is open. Anything else added here that escapes the
   // row's box needs the same treatment.
   const menuOpen = !!pillRow.querySelector('.fpill.open');
+  // The other half of the same problem: the row has to out-rank the grid while
+  // the menu is up, or it opens behind the dogs. See .fbar-pills.menu-open.
+  pillRow.classList.toggle('menu-open', menuOpen);
   const room = !menuOpen && pillSlack > 1;
   const x = pillRow.scrollLeft;
   pillRow.classList.toggle('fade-r', room && x < pillSlack - 1);
