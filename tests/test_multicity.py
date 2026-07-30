@@ -688,6 +688,136 @@ def test_sources_are_partitioned_by_city():
        sum(len(sources_for_city(c)) for c in cities.all_codes()), len(every))
 
 
+def test_events_are_city_scoped_and_bounded_to_the_week():
+    """The Monday events mail, on both axes that can send someone to the wrong place.
+
+    A subscriber in one city must never be told to turn up in the other, and an
+    event outside this week must not be announced as being in it — a date that is
+    wrong by a fortnight sends somebody to a car park.
+    """
+    import events as sheet
+    fresh_db("events.db")
+    monday = date(2026, 7, 27)
+    sunday = monday + timedelta(days=6)
+
+    csv_text = (
+        "City,Rescue,Title,Date,Start,End,Location,Address,URL,Note\n"
+        'NYC,NYC Second Chance,Adoption Event,"Saturday, August 1, 2026",'
+        "11AM,1 PM,JustFoodForDogs,45 Christopher St,,\n"
+        "NYC,Korean K9,Meet the Dogs,7/29/2026,2 pm,5 pm,Petco,815 Hutch,,\n"
+        "NYC,Muddy Paws,Too Far Out,2026-08-20,10 am,,Prospect Park,,,\n"
+        "NYC,Muddy Paws,Already Gone,2026-07-20,10 am,,Prospect Park,,,\n"
+        "LA,Wagmor Pets,Meet & Greet,2026-07-30,10 am,2 pm,Studio City,,,\n"
+        "CHI,Nobody,Not Live,2026-07-29,,,,,,\n"
+        "NYC,Muddy Paws,Unreadable Date,next Saturday,,,,,,\n"
+    )
+    rows, problems = sheet.parse(csv_text, monday)
+    eq("every readable row is kept", len(rows), 5)
+    eq("a city that is not live is refused",
+       any("CHI" in p for p in problems), True)
+    eq("a date a human cannot pin down is refused, not guessed",
+       any("could not read the date" in p for p in problems), True)
+
+    # "If you are not certain the event is real, don't send it." A sheet is
+    # edited by typing, so a cancellation arrives as a word in a cell rather
+    # than as a deleted row — and an event with no place is not one a reader
+    # can act on.
+    doubtful = (
+        "City,Rescue,Title,Date,Start,End,Location,Address,URL,Note\n"
+        "NYC,Real Rescue,Adoption Event,2026-07-29,11 am,1 pm,Petco,815 Hutch,,\n"
+        "NYC,Off Rescue,Adoption Event CANCELLED,2026-07-29,11 am,,Petco,,,\n"
+        "NYC,Off Rescue,Yard Day,2026-07-30,10 am,,Prospect Park,,,Postponed - TBA\n"
+        "NYC,Vague Rescue,Mystery Meetup,2026-07-31,11 am,,,,,\n"
+        "NYC,Maybe Rescue,Pop-up,2026-07-31,11 am,,Silver Lake,,,rain date if wet\n"
+    )
+    kept, said = sheet.parse(doubtful, monday)
+    eq("only the unambiguous event survives", [r["title"] for r in kept],
+       ["Adoption Event"])
+    eq("a cancelled row is not sent",
+       any("cancelled" in p for p in said), True)
+    eq("a postponed row is not sent",
+       any("postponed" in p for p in said), True)
+    eq("a rain date is not sent", any("rain date" in p for p in said), True)
+    eq("an event with nowhere to go is not sent",
+       any("no location or address" in p for p in said), True)
+
+    db.replace_events(rows)
+    eq("rows land under the right cities", db.event_counts(), {"LA": 1, "NYC": 4})
+
+    nyc = db.events_between("NYC", monday.isoformat(), sunday.isoformat())
+    la = db.events_between("LA", monday.isoformat(), sunday.isoformat())
+    eq("NYC gets only its own week", [e["title"] for e in nyc],
+       ["Meet the Dogs", "Adoption Event"])
+    eq("LA gets only its own week", [e["title"] for e in la], ["Meet & Greet"])
+    eq("no event is in both cities' answers",
+       set(e["uid"] for e in nyc) & set(e["uid"] for e in la), set())
+    eq("an event a fortnight out is not announced as this week",
+       any(e["title"] == "Too Far Out" for e in nyc), False)
+    eq("an event that already happened is not announced",
+       any(e["title"] == "Already Gone" for e in nyc), False)
+    eq("soonest first", [e["starts_on"] for e in nyc],
+       sorted(e["starts_on"] for e in nyc))
+
+    # An unreadable sheet must leave the cache alone rather than cancel the week.
+    eq("an empty parse never empties the table", db.replace_events([]), 0)
+    eq("the cache survives it", db.event_counts(), {"LA": 1, "NYC": 4})
+
+    # Re-syncing the same sheet must not duplicate anything.
+    db.replace_events(rows)
+    eq("re-syncing is idempotent", db.event_counts(), {"LA": 1, "NYC": 4})
+
+
+def test_events_email_points_at_its_own_city():
+    """Each city's events mail links to that city's page, not the default one."""
+    import emailer
+    fresh_db("events_mail.db")
+    monday = date(2026, 7, 27)
+    db.replace_events([{
+        "uid": "la|wagmor|2026-07-30|meet", "city": "LA", "rescue": "Wagmor Pets",
+        "title": "Meet & Greet", "starts_on": "2026-07-30", "starts_at": "10 am",
+        "ends_at": "2 pm", "location": "Studio City", "address": "",
+        "url": "", "note": "",
+    }, {
+        "uid": "nyc|kk9|2026-07-29|meet", "city": "NYC", "rescue": "Korean K9",
+        "title": "Meet the Dogs", "starts_on": "2026-07-29", "starts_at": "2 pm",
+        "ends_at": "", "location": "Petco", "address": "", "url": "", "note": "",
+    }])
+    os.environ["SITE_URL"] = "https://luvd.com"
+    week = (monday.isoformat(), (monday + timedelta(days=6)).isoformat())
+    for city, want in (("NYC", "https://luvd.com"), ("LA", "https://luvd.com/la")):
+        evs = db.events_between(city, *week)
+        html_body = emailer.build_events_html(evs, city)
+        links = {u for u in re.findall(r'href="(https://luvd\.com[^"]*)"', html_body)
+                 if "unsubscribe" not in u}
+        eq(f"{city}'s events mail links {city}'s page", links, {want})
+        text_body = emailer.build_events_text(evs, city)
+        eq(f"{city}'s text part does too", want in text_body, True)
+
+    # One link per event, and never one that goes nowhere. `rescue` is a display
+    # label, so the sheet can name an organisation LUVD publishes no page for —
+    # in which case the row gets no link rather than a 404.
+    base = {"uid": "x", "city": "NYC", "title": "Adoption Event",
+            "starts_on": "2026-07-29", "starts_at": "11 am", "ends_at": "",
+            "location": "Petco", "address": "", "note": ""}
+    own_url = dict(base, rescue="Muddy Paws Rescue",
+                   url="https://example.org/event")
+    with_url = emailer.build_events_html([own_url], "NYC")
+    eq("an event with its own url offers its details",
+       "View Event Details" in with_url, True)
+    eq("and not the rescue fallback too",
+       "See Adoptable Dogs" in with_url, False)
+
+    no_url = dict(base, rescue="Muddy Paws Rescue", url="")
+    fallback = emailer.build_events_html([no_url], "NYC")
+    eq("no url falls back to that rescue's dogs",
+       "See Adoptable Dogs" in fallback, True)
+
+    unknown = dict(base, rescue="An Org LUVD Does Not Follow", url="")
+    body = emailer.build_events_html([unknown], "NYC")
+    eq("an unknown organisation gets no button at all",
+       ("View Event Details" in body) or ("See Adoptable Dogs" in body), False)
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

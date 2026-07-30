@@ -279,11 +279,17 @@ def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
 
 def _grid(dogs: List[Dog], cols: int, edge: int, table_class: str,
           img_class: str, cell_class: str, hidden: bool,
-          mso_fallback: bool, caption: bool = True) -> str:
+          mso_fallback: bool, caption: bool = True,
+          align: str = "center") -> str:
     """A table of square tiles, `cols` across.
 
     Four dogs go two across rather than three-then-one: a row holding a single
     tile reads as something that failed to load.
+
+    `align` is centre by default, which is right for the digest and the goodbye
+    where the grid is the whole content of the mail. An event block is a left
+    ragged column — title, date, address, link — and a centred row of photos
+    inside it reads as belonging to something else.
     """
     if not dogs:
         return ""
@@ -298,8 +304,17 @@ def _grid(dogs: List[Dog], cols: int, edge: int, table_class: str,
             for j, d in enumerate(chunk))
         rows += f"<tr>{cells}</tr>"
     hide = "display:none;mso-hide:all;" if hidden else ""
-    return (f'<table class="{table_class}" cellpadding="0" cellspacing="0" '
-            f'align="center" style="border-collapse:collapse;margin:0 auto;'
+    # `align="left"` on a table *floats* it — the next element wraps around the
+    # photos instead of sitting under them, which put an event's button beside
+    # its own faces and the following event's title alongside them. A table is
+    # block-level and already sits left, so left alignment is the attribute's
+    # absence plus margin:0. Only "center" gets an align attribute.
+    if align == "center":
+        attrs, margin = ' align="center"', "margin:0 auto;"
+    else:
+        attrs, margin = "", "margin:0;"
+    return (f'<table class="{table_class}" cellpadding="0" cellspacing="0"'
+            f'{attrs} style="border-collapse:collapse;{margin}'
             f'{hide}">{rows}</table>')
 
 
@@ -623,6 +638,284 @@ See today's dogs: {_city_page(city)}
 LUVD
 Unsubscribe: {unsub_url(to_email)}
 """
+
+
+def _ordinal(n: int) -> str:
+    """1 -> 1st, 2 -> 2nd, 11 -> 11th, 21 -> 21st."""
+    if 11 <= (n % 100) <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
+def _event_when(ev: dict) -> str:
+    """"Saturday August 1st, 2026 · 11 am – 1 pm", or the day alone if no time.
+
+    Written the way somebody says it out loud, with the ordinal and the year.
+    The year is redundant on its face — every event in this mail is inside seven
+    days — but this line is the one thing a reader may screenshot, forward or put
+    in a calendar, and at that point it has left the email that dated it.
+    """
+    try:
+        d = date.fromisoformat(ev["starts_on"])
+        day = f"{d.strftime('%A %B')} {_ordinal(d.day)}, {d.year}"
+    except (ValueError, KeyError):
+        day = ev.get("starts_on") or ""
+    start, end = (ev.get("starts_at") or "").strip(), (ev.get("ends_at") or "").strip()
+    if start and end:
+        clock = f"{start} – {end}"
+    else:
+        clock = start or end
+    return f"{day} · {clock}" if clock else day
+
+
+def _rescue_page(rescue: str) -> str:
+    """The rescue's own page on LUVD, if this run actually wrote one.
+
+    `rescue` on an event is a display label, not a source key — the sheet can
+    carry an event run by an organisation LUVD does not scrape — so the page may
+    not exist. The file on disk is the honest test, the same one _dog_link()
+    uses: a link into a 404 is worse than no link.
+    """
+    try:
+        from page import slugify
+        path = f"/rescue/{slugify(rescue)}"
+    except Exception:
+        return ""
+    return _abs(path) if (PUBLIC / f"{path.lstrip('/')}.html").is_file() else ""
+
+
+def _event_cta(ev: dict) -> str:
+    """One small link per event, to whatever is genuinely there to look at.
+
+    A per-event link rather than a rescue logo, and that is a deliberate trade.
+    Logos would need one image per row from hosts we do not control: Petstablished
+    hands out its own grey placeholder for most rescues, and every major client
+    blocks remote images by default — so a logo column would be three empty boxes
+    as often as not, in the exact spot the eye lands. A text link always renders.
+
+    Order is what the reader most wants: the event's own page if the sheet gives
+    one, otherwise that rescue's dogs on LUVD, otherwise nothing at all rather
+    than a link that goes somewhere generic.
+    """
+    if ev.get("url"):
+        return html.escape(ev["url"]), "View Event Details"
+    page = _rescue_page(ev.get("rescue") or "")
+    if page:
+        # Not "See Korean K9 Rescue's dogs": the rescue's name is already on the
+        # line above, so repeating it makes the button the longest thing in the
+        # block. Two buttons of a fixed width read as a set; two that grow with
+        # whatever the sheet typed read as ragged.
+        return html.escape(page), "See Adoptable Dogs"
+    return "", ""
+
+
+EVENT_FACE_COUNT = 3
+EVENT_FACE_EDGE = 92
+# Photos across the whole mail, not per event. Rescue photo hosts mostly publish
+# one rendition and ignore width parameters — see _email_photo — so a 92px tile
+# can still be a 3MB original, and three faces on each of six events would be a
+# mail nobody's phone wants. Nine is what the digest already ships at six tiles
+# plus a montage, so it is a weight this list has received before.
+EVENT_FACE_TOTAL = 9
+
+
+def _faces_per_event(count: int) -> int:
+    """How many dogs each event may show, given how many events there are.
+
+    Shrinks rather than truncating: a busy week reduces every event to one face
+    instead of illustrating the first three and leaving the rest bare, which
+    would read as the later events being an afterthought.
+    """
+    if count <= 0:
+        return 0
+    return max(1, min(EVENT_FACE_COUNT, EVENT_FACE_TOTAL // count))
+
+
+def rescue_faces(rescue: str, city: str = None,
+                 limit: int = EVENT_FACE_COUNT) -> List[Dog]:
+    """A few photographed dogs currently with one rescue, from its city's page.
+
+    Reads the published page rather than the database for the same reason
+    roster() does: the page's DOGS payload is the only thing on disk that knows
+    photo URLs, and this runs from a job that holds no dogs of its own.
+
+    Per city, unlike roster(), which only ever reads index.html — an LA event
+    must not be illustrated with Brooklyn dogs.
+
+    Matched on the rescue's display label, because that is what the sheet
+    carries and what the payload records. No match, no faces: the sheet may name
+    an organisation LUVD does not follow, and every failure returns [] on
+    purpose. A photoless event block is fine; a broken one is not.
+    """
+    label = " ".join((rescue or "").split()).lower()
+    if not label:
+        return []
+    try:
+        page_file = cities.resolve(city).file
+        text = (PUBLIC / page_file).read_text(encoding="utf-8")
+        m = _DOGS_JSON.search(text)
+        if not m:
+            return []
+        pool = [
+            Dog(id=r.get("id") or "", name=r.get("name") or "",
+                source=r.get("source") or "",
+                source_label=r.get("source_label") or "",
+                url=r.get("url") or "", breed=r.get("breed") or "",
+                photos=[p for p in (r.get("photos") or []) if p])
+            for r in json.loads(m.group(1))
+            if " ".join((r.get("source_label") or "").split()).lower() == label
+        ]
+        pool = [d for d in pool if d.name and d.photos]
+        return random.sample(pool, min(limit, len(pool)))
+    except Exception:
+        return []
+
+
+def _event_faces(ev: dict, city: str = None, limit: int = EVENT_FACE_COUNT) -> str:
+    """Three of that rescue's dogs under the event, or nothing.
+
+    Deliberately *not* captioned "dogs at this event". No rescue publishes which
+    animals it brings — that is decided on the morning — so naming these as
+    attendees would be the one misdirection this email cannot afford: somebody
+    travels across a city for a dog who was never going to be there. The
+    disclaimer under the header says what they actually are, once, rather than
+    three times.
+
+    They are still worth showing. An event block is a date and an address, and
+    these are the reason anybody goes.
+    """
+    faces = rescue_faces(ev.get("rescue") or "", city, limit)
+    if not faces:
+        return ""
+    return ('<div style="margin-top:10px;">'
+            + _grid(faces, len(faces), EVENT_FACE_EDGE, "ev-grid", "ev-img",
+                    "ev-cell", hidden=False, mso_fallback=True, caption=False,
+                    align="left")
+            + '</div>')
+
+
+def _event_block(ev: dict, city: str = None,
+                 faces: int = EVENT_FACE_COUNT) -> str:
+    """One event: what it is, when, where, who is running it, and one link."""
+    where_bits = [b for b in (ev.get("location"), ev.get("address")) if b]
+    where = " · ".join(html.escape(b) for b in where_bits)
+    title = html.escape(ev.get("title") or "Adoption event")
+    note = (f'<div style="font:400 14px/1.5 -apple-system,Segoe UI,Roboto,'
+            f'sans-serif;color:#6e6e73;margin-top:5px;">'
+            f'{html.escape(ev["note"])}</div>') if ev.get("note") else ""
+    href, label = _event_cta(ev)
+    # Outlined, not filled: the solid red button at the foot of the mail is the
+    # one action for the whole email, and three filled buttons above it would
+    # each compete with it and with each other. Left-aligned with everything
+    # else in the block.
+    cta = ("" if not href else f"""
+      <div style="margin-top:12px;">
+        <a href="{href}" style="display:inline-block;font:600 14px
+                  -apple-system,Segoe UI,Roboto,sans-serif;color:#FF002E;
+                  text-decoration:none;padding:9px 16px;border-radius:980px;
+                  border:1.5px solid #FF002E;">{html.escape(label)}</a>
+      </div>""")
+    return f"""
+    <div style="border-top:1px solid #ececf0;padding:16px 0 4px;">
+      <div style="font:700 17px -apple-system,Segoe UI,Roboto,sans-serif;
+                  color:#1d1d1f;letter-spacing:-.01em;">{title}</div>
+      <div style="font:600 14px -apple-system,Segoe UI,Roboto,sans-serif;
+                  color:#FF002E;margin-top:4px;">
+        {html.escape(_event_when(ev))}</div>
+      <div style="font:400 15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+                  color:#1d1d1f;margin-top:4px;">
+        {html.escape(ev.get("rescue") or "")}{(" · " + where) if where else ""}</div>
+      {note}{_event_faces(ev, city, faces)}{cta}
+    </div>"""
+
+
+def build_events_html(events: List[dict], city: str = None,
+                      unsubscribe_for: str = None) -> str:
+    """The Monday "what's on this week" mail for one city.
+
+    Never built empty: check_events refuses to send a mail with no events in it,
+    because "here is this week's events: none" is worse than silence and trains
+    people to ignore the next one.
+    """
+    c = cities.resolve(city)
+    n = len(events)
+    site = html.escape(_city_page(city))
+    per_event = _faces_per_event(n)
+    blocks = "".join(_event_block(e, city, per_event) for e in events)
+    # One line, and no city in it: the subject line already carries the city, the
+    # button at the foot says it again, and every event under this is in it. The
+    # sentences that used to follow — how turning up is the fastest way to meet a
+    # dog, and what the photos are — were both explaining things the blocks below
+    # already show.
+    head = (f"{n} place to meet your future friend this week" if n == 1
+            else f"{n} places to meet your future friend this week")
+    return _document(f"""{_preheader(head)}
+<div style="background:#fbfbfd;padding:32px 16px;">
+  <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
+              padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
+    {_logo()}
+    <h1 style="font:700 26px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+               text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
+      Meet a dog in person</h1>
+    <p style="font:400 15.5px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+              color:#6e6e73;text-align:center;margin:0 0 18px;">
+      {html.escape(head)}.</p>
+    {blocks}
+    <a href="{site}"
+       style="display:block;background:#FF002E;color:#fff;text-decoration:none;
+              text-align:center;padding:15px;border-radius:13px;font:600 16px
+              -apple-system,Segoe UI,Roboto,sans-serif;margin-top:26px;">
+      See every {html.escape(c.short)} dog →</a>
+    {_footer(unsubscribe_for)}
+  </div>
+</div>""")
+
+
+def build_events_text(events: List[dict], city: str = None,
+                      unsubscribe_for: str = None) -> str:
+    c = cities.resolve(city)
+    n = len(events)
+    # Matches the HTML's one line, so the two parts of the same mail do not open
+    # with different sentences.
+    lines = [f"{n} place to meet your future friend this week" if n == 1
+             else f"{n} places to meet your future friend this week", ""]
+    for ev in events:
+        lines.append(ev.get("title") or "Adoption event")
+        lines.append(f"  {_event_when(ev)}")
+        who = ev.get("rescue") or ""
+        where = " · ".join(b for b in (ev.get("location"), ev.get("address")) if b)
+        if who or where:
+            lines.append(f"  {who}{(' · ' + where) if where else ''}")
+        if ev.get("note"):
+            lines.append(f"  {ev['note']}")
+        if ev.get("url"):
+            lines.append(f"  {ev['url']}")
+        lines.append("")
+    lines += [f"See every {c.short} dog: {_city_page(city)}", "", "--", "LUVD"]
+    if unsubscribe_for:
+        lines.append(f"Unsubscribe: {unsub_url(unsubscribe_for)}")
+    return "\n".join(lines) + "\n"
+
+
+def send_events_digest(to_email: str, events: List[dict], city: str = None):
+    """This week's in-person events for one city.
+
+    A separate send from the dog digest on purpose. check.py returns before
+    mailing when no dogs arrived overnight, so folding events into that mail
+    would make them hostage to whether any dog turned up — and a Monday with no
+    new dogs is exactly a Monday when an event matters most.
+    """
+    c = cities.resolve(city)
+    n = len(events)
+    subject = (f"One place to meet a dog in {c.short} this week 🐶" if n == 1
+               else f"{n} places to meet a dog in {c.short} this week 🐶")
+    return send_email(
+        to_email,
+        subject,
+        html_body=build_events_html(events, city, unsubscribe_for=to_email),
+        text_body=build_events_text(events, city, unsubscribe_for=to_email),
+        headers=_bulk_headers(to_email),
+    )
 
 
 def send_welcome(to_email: str, city: str = None):

@@ -107,16 +107,77 @@ this mirror — and both run on `app.py`'s one background-thread helper
 request or suppress the other: the database write is already committed before
 either starts.
 
-## The three emails
+## The four emails
 
 Everything goes out through Mandrill, and every message is built in
 `emailer.py`.
 
 | Email | Sent when | What's in it |
 |---|---|---|
-| Welcome | someone subscribes and wasn't already an active subscriber | two lines of copy and a montage of four dogs, read off a file rather than a live scrape |
+| Welcome | someone subscribes and wasn't already an active subscriber | two lines of copy naming their city, and a montage of four dogs read off a file rather than a live scrape |
 | New dogs | the morning run finds dogs nobody has been shown before | up to 6 faces desktop / 4 phone, a count, one button |
+| This week's events | Monday's run, per city, if that city has any events in the next seven days | one block per event: what it is, the day, the time, who's running it, where |
 | Goodbye | someone unsubscribes, and only the click that actually took them off the list | 3 faces desktop / 2 phone, uncaptioned, and the line "This is the last email you'll get from us" |
+
+Every one of them is city-scoped on both sides — the content and the list it
+goes to. An LA subscriber's links all land on `/la`, and the only mail that has
+no city is the goodbye, because unsubscribing takes you off every list.
+
+## In-person events
+
+`check_events.py` runs on Monday inside each city's own 05:30 job and mails that
+city its week. It is a **separate send from the dog digest, deliberately**:
+`check.py` returns before mailing when no dogs arrived overnight, so an events
+block folded into that mail would vanish on exactly the quiet Monday it matters
+most. Each skips on its own terms, and a city with no events that week sends
+nothing at all.
+
+The events come from a Google Sheet, not from scrapers, and that is a measured
+decision rather than laziness. A scan of all eleven rescues LUVD follows found
+**one** — NYC Second Chance — publishing events in a form anything can read.
+Korean K9 runs events and answers 403 to every request, so their site can never
+be read. Muddy Paws and Waggytail hide theirs behind an AddEvent widget. Five
+publish no events page at all, and Los Angeles has effectively none. A scraped
+digest would have been confidently incomplete, which is worse than absent: the
+first subscriber who knew about an event we left out would stop trusting the
+whole email.
+
+So whatever you learn — a rescue's newsletter, an Instagram post — goes in the
+sheet, and the email is complete for both cities. `events.py` reads it:
+
+```bash
+.venv/bin/python events.py --print     # parse the sheet, touch nothing
+.venv/bin/python events.py --sync      # cache it in SQLite
+.venv/bin/python check_events.py --city NYC --dry-run
+```
+
+Columns are matched case- and space-insensitively so the sheet stays readable to
+a human: `city | rescue | title | date | start | end | location | address | url
+| note`. Dates are parsed forgivingly — `2026-08-01`, `8/1/2026`, `Aug 1 2026`
+and `Saturday, August 1, 2026` all work.
+
+**When in doubt it does not send.** Mailing several hundred people to an event
+that isn't happening is the worst thing this feature can do, so a row is dropped
+and reported — never guessed at — when any of these is true:
+
+| Dropped when | Because |
+|---|---|
+| the date can't be read, including a bare `Aug 1` with no year | guessing the year sends somebody out on a day nothing is happening |
+| the title or notes say cancelled, postponed, TBA/TBC or rain date | a sheet is edited by typing, so that is how a cancellation actually arrives — not as a deleted row |
+| there is no location *and* no address | an event with a day and no place is not one a reader can act on |
+| the city is unknown, or registered but not live | it would be a list nobody is on |
+| the row has neither a title nor a rescue | half-entered |
+
+Everything dropped is printed by the run, so a half-finished row gets finished
+rather than silently vanishing.
+
+Unset `EVENTS_SHEET_CSV_URL` and the whole feature is skipped; nothing else
+changes. A sheet that fails to load leaves the previous cache in place rather
+than cancelling the week, and an empty parse never empties the table — an
+unreadable sheet means "I don't know", not "cancel everything".
+
+Scrapers can write into the same `events` table later. They are an optimisation,
+not the source of truth.
 
 Every footer is the wordmark, with `Unsubscribe` under it on the two that carry
 one. Nothing about dates, cadence or why you're receiving it — see HANDOFF.md,

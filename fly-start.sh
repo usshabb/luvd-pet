@@ -129,6 +129,25 @@ render() {
     sleep "$wait_s"
     for city in $due; do
       render check.py --city "$city"
+      # Mondays, that city's week of in-person events. Per city and inside this
+      # loop, because it is each city's own Monday that matters and each city's
+      # own list that gets mailed — unlike the weekly report below, which is one
+      # business summary for the operator.
+      #
+      # Deliberately a separate send from check.py's digest rather than a section
+      # inside it: check.py returns before mailing when no dogs arrived
+      # overnight, so an events block folded in there would vanish on exactly
+      # the quiet Monday it matters most. It is also outside `render`, which
+      # holds the page lock — this writes no pages and must not block, or be
+      # blocked by, a scrape.
+      #
+      # `date +%u` reads the container's fixed TZ (America/New_York), so LA's
+      # Monday run fires on New York's Monday. At 05:30 Pacific that is 08:30
+      # Eastern the same day, so the two agree — but a city west of Hawaii or
+      # east of London would not, and would need cities.py to answer this.
+      if [ "$(date +%u)" = "1" ]; then
+        python check_events.py --city "$city" || true
+      fi
     done
     # The weekly report is one business summary, not a per-city one, so it goes
     # out after the default city's run only. Without that it would arrive once

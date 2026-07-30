@@ -117,6 +117,43 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_outbound_created "
             "ON outbound(created)"
         )
+        # In-person adoption events, for the Monday digest. A cache of an
+        # operator-maintained sheet, never a store: `replace_events()` rewrites
+        # the whole table from the sheet every sync, the same bargain
+        # sheet_sync.py makes in the other direction. So nothing here needs
+        # append/dedup bookkeeping and a failed sync heals on the next one.
+        #
+        # Why a sheet rather than scrapers: of eleven rescues, one publishes
+        # events in a form anything can read. Korean K9 runs them and their site
+        # answers 403 to everyone, five have no events page at all, and Los
+        # Angeles has effectively none — so a scraped digest would have been
+        # wrong in a way subscribers could see. Scrapers can write into this
+        # table later; they are an optimisation, not the source of truth.
+        #
+        # `uid` is the sheet's own identity for a row (city + rescue + date +
+        # title, slugified) so the same event surviving an edit stays one row.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS events (
+                uid TEXT PRIMARY KEY,
+                city TEXT NOT NULL,
+                rescue TEXT NOT NULL,      -- display label, not a source key:
+                                           -- an event may be run by a rescue
+                                           -- LUVD does not scrape
+                title TEXT NOT NULL,
+                starts_on TEXT NOT NULL,   -- ISO date, local to the city
+                starts_at TEXT,            -- "11 am", free text as written
+                ends_at TEXT,
+                location TEXT,
+                address TEXT,
+                url TEXT,
+                note TEXT,
+                synced TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_city_date "
+            "ON events(city, starts_on)"
+        )
         _migrate(conn)
         # seed defaults if empty
         cur = conn.execute("SELECT COUNT(*) AS n FROM prefs")
@@ -583,6 +620,61 @@ def subscriber_cities(email: str):
             (email.strip().lower(),),
         ).fetchall()
     return [r["city"] for r in rows]
+
+
+def replace_events(rows) -> int:
+    """Rewrite the events table from the sheet. Returns the row count kept.
+
+    Wholesale, inside one transaction, because the sheet is the source of truth
+    and a partial table is worse than a stale one: an event deleted from the
+    sheet has to disappear here too, or a cancelled event keeps being mailed
+    out. Same reasoning as sheet_sync.py POSTing the whole subscriber table
+    rather than a diff.
+
+    Empty input is refused rather than obeyed. A sheet that fails to load, or
+    loads as nothing because it was renamed or unshared, is indistinguishable
+    from "no events" at this layer — and the safe reading of an unreadable
+    sheet is "I don't know", not "cancel everything". The caller decides
+    whether that is an error; the table keeps what it had.
+    """
+    rows = list(rows or [])
+    if not rows:
+        return 0
+    with connect() as conn:
+        conn.execute("DELETE FROM events")
+        conn.executemany(
+            "INSERT OR REPLACE INTO events(uid, city, rescue, title, starts_on,"
+            " starts_at, ends_at, location, address, url, note)"
+            " VALUES(:uid,:city,:rescue,:title,:starts_on,:starts_at,:ends_at,"
+            ":location,:address,:url,:note)",
+            rows,
+        )
+    return len(rows)
+
+
+def events_between(city: str, start_iso: str, end_iso: str):
+    """One city's events in a date window, soonest first.
+
+    Inclusive of both ends: a week runs Monday to Sunday and an event on either
+    boundary belongs to it. Scoped to a city for the same reason the digest is —
+    an LA subscriber must never be told to turn up in Brooklyn.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM events WHERE city = ? AND starts_on >= ? "
+            "AND starts_on <= ? ORDER BY starts_on, rescue, title",
+            (cities.canon(city) or city, start_iso, end_iso),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def event_counts() -> dict:
+    """{city: rows} — for the operator endpoints and a quick sanity check."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT city, COUNT(*) AS n FROM events GROUP BY city ORDER BY city"
+        ).fetchall()
+    return {r["city"]: r["n"] for r in rows}
 
 
 def subscriber_city_counts() -> dict:
