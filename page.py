@@ -481,7 +481,7 @@ def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
       <a class="card" href="{html.escape(dog_path(d))}" data-i="{i}"
          data-id="{html.escape(d.id)}">
         <div class="ph-wrap">{media}{quip}
-          <span class="views" hidden><span class="fire">🔥</span><b></b></span>
+          <span class="views" hidden><span class="eyes" aria-hidden="true">👀</span><b></b></span>
           {wait}{new_chip}
           <button class="save" data-id="{html.escape(d.id)}" type="button"
                   aria-pressed="false" aria-label="Save {html.escape(d.name)}">
@@ -533,10 +533,21 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
         desc_bits = [b for b in (d.age, d.sex, d.breed, d.weight) if b]
         if desc_bits:
             about["description"] = " · ".join(desc_bits)
+        # The dog's own page, not a fragment of this one. This used to be
+        # `{page_url}#dog/{d.id}`, which is the id the modal opens on — but a
+        # fragment is not a URL as far as a crawler is concerned: all 60 items
+        # resolved to the same document, so the list asserted sixty things and
+        # addressed one. Every dog already has a real page, written by the same
+        # run and listed in sitemap.xml, and it is the only URL that can carry
+        # its own title, description, photo and Product data. Pointing here is
+        # what lets an answer engine cite an individual dog rather than the
+        # roster it appeared on.
+        dog_url = f"{site}{dog_path(d)}"
+        about["url"] = dog_url
         items.append({
             "@type": "ListItem",
             "position": i,
-            "url": f"{page_url}#dog/{d.id}",
+            "url": dog_url,
             "item": about,
         })
 
@@ -643,9 +654,15 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     # The filter groupings are derived here, not in the browser: the breed
     # patterns and age parsing are fiddly enough to want testing, and the client
     # only needs the answer.
+    # `path` is the dog's own page, and it comes from dog_path() rather than
+    # being rebuilt in the browser on purpose: the same call writes the file, the
+    # card's href and the sitemap entry, so a shared link cannot address a page
+    # this run didn't write. Rebuilding the slug in JS would be a second
+    # implementation of dog_slug() free to drift from the first.
     payload = json.dumps([
         dict(d.to_dict(), waiting_days=(waiting_days(d, for_date) or 0),
-             breed_group=breed_group(d), age_bucket=age_bucket(d))
+             breed_group=breed_group(d), age_bucket=age_bucket(d),
+             path=dog_path(d))
         for d in flat
     ])
     subscribe_url = os.getenv("SUBSCRIBE_URL", "/subscribe")
@@ -1190,7 +1207,12 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     -webkit-backdrop-filter:blur(10px);animation:pop .35s cubic-bezier(.34,1.56,.64,1);}}
   /* display:flex above would otherwise beat the [hidden] attribute. */
   .views[hidden]{{display:none;}}
-  .views .fire{{font-size:13px;line-height:1;}}
+  /* Eyes, not a flame. The number is how many people have opened this dog's
+     card — a plain count of who looked, which is useful to an adopter deciding
+     whether to hurry. A flame reads as "trending", which turns the same number
+     into a popularity contest and quietly tells you the quiet dogs matter less.
+     Every dog here is waiting; the badge should say "looked at", not "hot". */
+  .views .eyes{{font-size:13px;line-height:1;}}
   @keyframes pop{{from{{transform:scale(.6);opacity:0;}}to{{transform:scale(1);opacity:1;}}}}
   .card{{text-decoration:none;color:inherit;}}
   .meta{{padding:15px 16px 17px;}}
@@ -2912,7 +2934,7 @@ function renderDog(d) {{
         alt="${{esc(d.name)}}">
         <span class="views m-views" id="m-views" data-id="${{esc(d.id)}}"${{
           (VIEW_COUNTS[d.id] || 0) >= VIEW_FLOOR ? '' : ' hidden'}}>
-          <span class="fire">🔥</span><b>${{VIEW_COUNTS[d.id] || 0}}</b></span>
+          <span class="eyes" aria-hidden="true">👀</span><b>${{VIEW_COUNTS[d.id] || 0}}</b></span>
       </div>
       ${{thumbs}}
     </div>` : '';
@@ -3119,6 +3141,13 @@ function paintViews(counts) {{
     if (!el) return;
     if (n && n >= VIEW_FLOOR) {{
       el.querySelector('b').textContent = n > 999 ? (n / 1000).toFixed(1) + 'k' : n;
+      // The emoji is aria-hidden, so without this a screen reader reads a bare
+      // number and a sighted visitor has to guess what it counts. Says "views"
+      // in words, which is also the honest description of it.
+      const label = n === 1 ? '1 person has viewed this dog'
+                            : n + ' people have viewed this dog';
+      el.title = label;
+      el.setAttribute('aria-label', label);
       el.hidden = false;
     }} else {{
       el.hidden = true;
@@ -3179,8 +3208,21 @@ function slugFor(d) {{
   return d.id.replace(/[^a-zA-Z0-9:_-]/g, '');
 }}
 
+// The link you hand to somebody else: the dog's own page, not a fragment of the
+// roster. This used to be `pathname + '#dog/' + id`, which shared and unfurled
+// as the whole city page — the recipient landed on 230 dogs and had to find the
+// one they were sent, and everything that reads a URL for meaning (link previews,
+// a rescue opening an inquiry, an answer engine) saw the roster. The dog's page
+// is written by the same run, carries its own title, photo and apply button, and
+// is the URL in the sitemap.
+//
+// `#dog/<id>` is still what the in-page modal pushes to history (see openDog):
+// that is view state within a page you are already on, which is a different job
+// from a link that leaves the building.
+//
+// Sharing the *site* is unchanged and still the city page — see shareLuvd().
 function dogUrl(d) {{
-  return location.origin + location.pathname + '#dog/' + slugFor(d);
+  return location.origin + (d.path || (location.pathname + '#dog/' + slugFor(d)));
 }}
 
 function openDog(i, opts) {{
@@ -4058,8 +4100,15 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
     photo = d.primary_photo()
     wd = waiting_days(d, today)
 
-    ld = {
-        "@context": "https://schema.org",
+    # A graph rather than the bare Product it used to be, for the breadcrumb.
+    # These pages are three clicks deep in a structure nothing declared: a dog
+    # belongs to a rescue, and the rescue has its own page ranking for its own
+    # name. Saying so gives the dog page a parent to inherit authority from, and
+    # gives a search result the "luvd.com › Muddy Paws Rescue › Poof" trail
+    # instead of a bare URL. Every hop is a page this run actually writes.
+    c = cities.resolve(getattr(d, "city", None))
+    city_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
+    product = {
         "@type": "Product",
         "name": d.name,
         "description": clean_meta(d.description) or desc,
@@ -4068,7 +4117,24 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
         "url": f"{site}{dog_path(d)}",
     }
     if photo:
-        ld["image"] = photo
+        product["image"] = photo
+    ld = {
+        "@context": "https://schema.org",
+        "@graph": [
+            product,
+            {
+                "@type": "BreadcrumbList",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": 1,
+                     "name": f"Adopt a dog in {c.short}", "item": city_url},
+                    {"@type": "ListItem", "position": 2,
+                     "name": d.source_label,
+                     "item": f"{site}/rescue/{rescue_slug(d)}"},
+                    {"@type": "ListItem", "position": 3, "name": d.name},
+                ],
+            },
+        ],
+    }
 
     body_bits = []
     if photo:
@@ -4115,6 +4181,7 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
 <meta property="og:title" content="{html.escape(title)}">
 <meta property="og:description" content="{html.escape(desc)}">
 {f'<meta property="og:image" content="{html.escape(photo)}">' if photo else ''}
+<meta property="og:url" content="{html.escape(site + dog_path(d))}">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">{json.dumps(ld)}</script>
 <style>
