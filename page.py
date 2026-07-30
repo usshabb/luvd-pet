@@ -402,16 +402,52 @@ WAIT_BADGE_DAYS = 60
 # grid, and waiting_days still powers the "Longest waiting" sort.
 SHOW_WAIT_BADGE_ON_CARDS = False
 
-# Withhold the NEW marker when today's arrivals are more than this share of the
-# grid. A marker on every card marks nothing — which is exactly what happens on
-# a fresh database, where every dog is seen for the first time today.
 # Cities in the headline picker that LUVD does not cover. Not in cities.py: that
 # registry is what the app runs on, and these are demand signals — a name in a
 # menu, an /interest row, and nothing else. Promoting one means adding it there
 # with its scrapers, at which point it leaves this list.
 SOON_CITIES = (("CHI", "Chicago"), ("BOS", "Boston"), ("SF", "San Francisco"))
 
-NEW_MARK_MAX_SHARE = 0.5
+# The NEW marker is unconditional: a dog first seen today is marked today, on
+# every page, however many of them there are.
+#
+# There used to be a NEW_MARK_MAX_SHARE = 0.5 here that withheld the marker when
+# today's arrivals were more than half the grid, on the reasoning that a marker
+# on every card marks nothing. That reasoning is about how the page looks. It
+# loses to what the marker is for: it is the answer to "what showed up today",
+# which is the whole promise of the product and the one thing a returning visitor
+# is scanning for. Withholding it on a busy day is withholding it exactly when
+# there is most to say, and it fails silently — the badge simply is not there,
+# which reads as "nothing new today" rather than "too much was new to tell you".
+#
+# It also made the marker impossible to trust: LA showed it on none of 89 dogs
+# and New York on none of 234, so nobody could tell the feature from a bug.
+#
+# The case the old threshold really guarded against was a first_seen column full
+# of today — a fresh database, or dates that got rewritten. That is a data
+# problem, and hiding the marker hid the symptom instead of surfacing it.
+#
+# How recently the RESCUE must have listed a dog for "first seen today" to be
+# believable. first_seen only knows when LUVD noticed a dog, so it says "new"
+# for two things that are not the same: a dog that genuinely arrived, and a dog
+# that was already waiting when we started watching its rescue. Adding a rescue
+# backfills its entire roster as new — all 139 of LA's dogs on the day the third
+# and fourth rescues landed — and a dog whose discovery date gets rewritten looks
+# new again years into its wait.
+#
+# So the rescue's own publish date has to corroborate ours. Measured on live data
+# the day this went in: of the 139 LA dogs first seen that day, 75 had been
+# listed for over 180 days and 23 for one to six months; of New York's 148, 55
+# were over 180 days old. None of those is news. Seven days is wide enough to
+# survive the lag between a rescue listing a dog and our next run finding it —
+# and wide enough that a rescue posting in a weekly batch still gets marked —
+# while excluding every one of those long-waiting dogs.
+#
+# A dog whose rescue publishes no date at all is allowed through on our own
+# sighting, because that is the only evidence there is and 12 LA and 11 New York
+# dogs would otherwise never be markable. waiting_days() already falls back to
+# first_seen for exactly this case, which makes it 0 here rather than unknown.
+NEW_MARK_MAX_LISTED_DAYS = 7
 
 # What that marker says. One string, because it appears on the grid card, in the
 # modal and on the dog's own page, and three copies would drift.
@@ -443,6 +479,23 @@ def waiting_days(dog: Dog, today: date):
         return None
 
 
+def _is_new_today(dog: Dog, today_iso: str, today: date) -> bool:
+    """Did this dog actually arrive today, as opposed to being newly noticed?
+
+    Two conditions, and both are needed. LUVD has to have seen it for the first
+    time today, and the rescue's own publish date has to be recent enough to
+    back that up — because "we saw it first today" is also true of every dog on
+    a rescue's roster the day that rescue is added, and of any dog whose
+    discovery date gets rewritten. See NEW_MARK_MAX_LISTED_DAYS.
+
+    A dog with no publish date passes on our sighting alone: waiting_days()
+    falls back to first_seen, which is 0 on the day we found it.
+    """
+    if not dog.first_seen or dog.first_seen != today_iso:
+        return False
+    return (waiting_days(dog, today) or 0) <= NEW_MARK_MAX_LISTED_DAYS
+
+
 def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
     photo = d.primary_photo()
     if photo:
@@ -469,9 +522,10 @@ def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
             if d.quip else "")
 
     # The daily-digest signal, which used to be the date heading a dog sat under.
-    # It sits on the photo, in the corner the wait badge vacated. render() only
-    # passes is_new when today's arrivals are a minority of the grid, so this
-    # marks the exception rather than repeating itself down the whole page.
+    # It sits on the photo, in the corner the wait badge vacated. Whether a dog
+    # earns it is _is_new_today()'s call: first seen today, and listed by its
+    # rescue recently enough that "today" is about the dog rather than about when
+    # we started watching.
     new_chip = (f'<span class="new-chip" title="New on LUVD today">'
                 f'{html.escape(NEW_MARK_LABEL)}</span>' if is_new else "")
 
@@ -676,18 +730,13 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     # dog — so within weeks a narrow filter scatters its handful of matches
     # across a dozen headings, each announcing "1 dog". The arrival date is
     # still here: it's the default sort, and today's dogs carry a NEW marker.
-    #
-    # Unless nearly all of them are today's, which is the state of a fresh
-    # database and of the first day after launch. Marking every card marks
-    # nothing, so below the threshold the marker is dropped entirely rather than
-    # repeated 223 times. It returns on the first day the roster is mixed.
-    new_today = sum(1 for d in flat if d.first_seen == today_iso)
-    mark_new = bool(total) and new_today <= total * NEW_MARK_MAX_SHARE
-
+    # Today's genuine arrivals, all of them, however many there are: no share
+    # threshold (see NEW_MARK_LABEL) but the rescue's own listing date has to
+    # agree that the dog is new (see NEW_MARK_MAX_LISTED_DAYS).
     cards = []
     for i, d in enumerate(flat):
-        cards.append(_card(d, i, for_date,
-                           is_new=mark_new and d.first_seen == today_iso))
+        cards.append(_card(d, i, for_date, is_new=_is_new_today(d, today_iso,
+                                                               for_date)))
     grid = f'<div class="grid" id="grid">{"".join(cards)}</div>'
 
     site = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
