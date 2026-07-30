@@ -69,6 +69,21 @@ class City:
     def title(self) -> str:
         return f"Adopt a dog in {self.short} — LUVD"
 
+    @property
+    def share_title(self) -> str:
+        """The same headline without the brand, for og:title and twitter:title.
+
+        A share card is not a search result. Slack, iMessage and the rest render
+        og:site_name as its own line above the title, and og:site_name is already
+        "LUVD" — so "Adopt a dog in NYC — LUVD" under a heading that says LUVD
+        says the brand twice and spends the title's width doing it.
+
+        `title` keeps the suffix, because a <title> has no site_name beside it:
+        in a search result the brand is the only thing telling you whose page
+        this is.
+        """
+        return f"Adopt a dog in {self.short}"
+
 
 # Order is display order. Codes are the values that reach the database, the JSON
 # payloads and the backup spreadsheet's tab names, so they are deliberately

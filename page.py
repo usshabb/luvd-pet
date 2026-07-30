@@ -859,14 +859,14 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="LUVD">
 <meta property="og:url" content="{page_url}">
-<meta property="og:title" content="{c.title}">
+<meta property="og:title" content="{c.share_title}">
 <meta property="og:description" content="{meta_desc}">
 <meta property="og:image" content="{site}/og.png?v={cache_bust}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="LUVD — adoptable dogs across {c.name} rescues">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="{c.title}">
+<meta name="twitter:title" content="{c.share_title}">
 <meta name="twitter:description" content="{meta_desc}">
 <meta name="twitter:image" content="{site}/og.png?v={cache_bust}">
 <meta name="theme-color" content="#FF002E">
@@ -4141,7 +4141,11 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
         re.search(rf"\b{re.escape(alias)}\b", d.source_label.lower())
         for alias in c.aliases)
     where = "" if label_has_city else f" in {c.short}"
-    title = f"{d.name} — {breed} for adoption at {d.source_label}{where} | LUVD"
+    headline = f"{d.name} — {breed} for adoption at {d.source_label}{where}"
+    # Brand in the <title>, not in the share tags: og:site_name renders as its
+    # own line above og:title, so repeating "LUVD" there says it twice and eats
+    # width a dog's name and breed need. Same split as City.share_title.
+    title = f"{headline} | LUVD"
     desc = (f"{d.name} is a {breed.lower()} available for adoption from "
             f"{d.source_label} in {c.name}."
             + (f" {facts}." if facts else "")
@@ -4227,11 +4231,15 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
 <link rel="canonical" href="{site}{dog_path(d)}">
 <link rel="icon" href="/favicon.png" type="image/png">
 <meta property="og:type" content="article">
-<meta property="og:title" content="{html.escape(title)}">
+<meta property="og:site_name" content="LUVD">
+<meta property="og:title" content="{html.escape(headline)}">
 <meta property="og:description" content="{html.escape(desc)}">
 {f'<meta property="og:image" content="{html.escape(photo)}">' if photo else ''}
 <meta property="og:url" content="{html.escape(site + dog_path(d))}">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{html.escape(headline)}">
+<meta name="twitter:description" content="{html.escape(desc)}">
+{f'<meta name="twitter:image" content="{html.escape(photo)}">' if photo else ''}
 <script type="application/ld+json">{json.dumps(ld)}</script>
 <style>
   body{{{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
