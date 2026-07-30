@@ -21,6 +21,8 @@ from urllib.parse import quote
 
 import requests
 
+import cities
+
 from sources.base import Dog
 
 MANDRILL_URL = "https://mandrillapp.com/api/1.0/messages/send.json"
@@ -142,6 +144,24 @@ def _abs(path: str) -> str:
     """Absolute URL on whatever site we are rendering for. Email has no
     document base, so every src and href has to be spelled out in full."""
     return f"{_site_url().rstrip('/')}{path}"
+
+
+def _city_page(city: str = None) -> str:
+    """Absolute URL of one city's page — the front page a subscriber means.
+
+    Every "see today's dogs" link in every mail used to be ``_site_url()``,
+    which is New York's page, because it was written when New York was the only
+    city. That sent an LA subscriber's morning digest, and their welcome, to a
+    page of Brooklyn dogs: the right dogs were in the mail and every link out of
+    it went to the wrong city.
+
+    ``city=None`` keeps the old answer for callers that genuinely have no city —
+    the goodbye, which is sent after someone has been taken off every list, so
+    there is no city left to send them to.
+    """
+    if not city:
+        return _site_url()
+    return _abs(cities.resolve(city).path).rstrip("/") or _site_url()
 
 
 def _dog_link(dog: Dog) -> str:
@@ -417,11 +437,17 @@ def _preheader(text: str) -> str:
             f'mso-hide:all;">{html.escape(text)}{pad}</div>')
 
 
-def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None) -> str:
+def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None,
+               city: str = None) -> str:
     # for_date is unused since the footer stopped printing the date. It stays
     # in the signature because check.py passes it and a digest is still a thing
     # that happened on a day; dropping it would be a breaking change for the
     # sake of one line.
+    #
+    # `city` is the digest's own city, and it decides one thing: where the
+    # button at the bottom goes. The dogs above it are already this city's —
+    # check.py only ever hands us `new_today` from one city's sources — so this
+    # is the last place the mail could still point somewhere else.
     n = len(dogs)
     with_photos = [d for d in dogs if d.photos]
     desk = with_photos[:PREVIEW_COUNT]
@@ -464,7 +490,7 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
     {grid_desk}{grid_phone}
     {more}
 
-    <a href="{html.escape(_site_url())}"
+    <a href="{html.escape(_city_page(city))}"
        style="display:block;background:#FF002E;color:#fff;text-decoration:none;
               text-align:center;padding:15px;border-radius:13px;font:600 16px
               -apple-system,Segoe UI,Roboto,sans-serif;margin-top:24px;">
@@ -484,12 +510,13 @@ def _bulk_headers(to_email: str) -> dict:
     }
 
 
-def send_digest(to_email: str, dogs: List[Dog], for_date: date = None):
+def send_digest(to_email: str, dogs: List[Dog], for_date: date = None,
+                city: str = None):
     n = len(dogs)
     return send_email(
         to_email,
         "A new dog just dropped 🐶" if n == 1 else "New dogs just dropped 🐶",
-        html_body=build_html(dogs, for_date, unsubscribe_for=to_email),
+        html_body=build_html(dogs, for_date, unsubscribe_for=to_email, city=city),
         headers=_bulk_headers(to_email),
     )
 
@@ -530,7 +557,19 @@ def _montage() -> str:
             f'Roboto,sans-serif;color:#6e6e73;text-align:center;">')
 
 
-def build_welcome_html(to_email: str) -> str:
+def _welcome_place(city: str = None) -> str:
+    """"in Los Angeles", or "in your city" when we genuinely don't know.
+
+    Naming it is the whole point of a per-city list: someone who signed up on
+    the LA page and is told about "the top rescues in your city" has no way to
+    tell whether we understood which city that was. The fallback survives for
+    the one case where it is honest — a caller with no city at all.
+    """
+    c = cities.get(city) if city else None
+    return f"in {c.name}" if c else "in your city"
+
+
+def build_welcome_html(to_email: str, city: str = None) -> str:
     """The one-time signup confirmation.
 
     Deliberately reads nothing from the database: this is the first mail an
@@ -538,7 +577,8 @@ def build_welcome_html(to_email: str) -> str:
     because a scrape came back with nothing. The montage is a file written by
     last night's run, not a live lookup, and it is omitted if it isn't there.
     """
-    site = html.escape(_site_url())
+    site = html.escape(_city_page(city))
+    place = html.escape(_welcome_place(city))
     return _document(f"""{_preheader("Let's find you a friend")}
 <div style="background:#fbfbfd;padding:32px 16px;">
   <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
@@ -550,7 +590,7 @@ def build_welcome_html(to_email: str) -> str:
 
     <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
               margin:0 0 14px;">
-      Each day we find dogs from the top rescues in your city and share them
+      Each day we find dogs from the top rescues {place} and share them
       with you. Our goal is to help every animal find their forever home.</p>
     <p style="font:400 16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
               margin:0;">
@@ -567,17 +607,17 @@ def build_welcome_html(to_email: str) -> str:
 </div>""")
 
 
-def build_welcome_text(to_email: str) -> str:
+def build_welcome_text(to_email: str, city: str = None) -> str:
     """Plain-text alternative. A first-contact mail with no text part looks
     materially worse to spam filters than one with it."""
     return f"""You're on the list!
 
-Each day we find dogs from the top rescues in your city and share them with
-you. Our goal is to help every animal find their forever home.
+Each day we find dogs from the top rescues {_welcome_place(city)} and share
+them with you. Our goal is to help every animal find their forever home.
 
 Thanks for joining!
 
-See today's dogs: {_site_url()}
+See today's dogs: {_city_page(city)}
 
 --
 LUVD
@@ -585,14 +625,20 @@ Unsubscribe: {unsub_url(to_email)}
 """
 
 
-def send_welcome(to_email: str):
+def send_welcome(to_email: str, city: str = None):
     """One-time confirmation that someone is subscribed. Sent at signup only —
-    the cadence after this is still 'nothing unless there are new dogs'."""
+    the cadence after this is still 'nothing unless there are new dogs'.
+
+    ``city`` is the list they just joined, so the mail can name it and link to
+    its page. Someone adding a second city gets a second welcome naming that
+    one, which is what ``db.add_subscriber`` returning True for a new city row
+    already arranges.
+    """
     return send_email(
         to_email,
         "You're on the list! 🐶",
-        html_body=build_welcome_html(to_email),
-        text_body=build_welcome_text(to_email),
+        html_body=build_welcome_html(to_email, city),
+        text_body=build_welcome_text(to_email, city),
         headers=_bulk_headers(to_email),
     )
 

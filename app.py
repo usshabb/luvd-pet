@@ -137,8 +137,13 @@ def _in_background(label: str, work):
         app.logger.warning("could not start %s: %s", label, e)
 
 
-def _mail_in_background(kind: str, email: str):
-    """Send emailer.send_<kind>(email) without the visitor waiting on Mandrill."""
+def _mail_in_background(kind: str, email: str, **kwargs):
+    """Send emailer.send_<kind>(email, **kwargs) without the visitor waiting
+    on Mandrill.
+
+    kwargs is how the welcome learns which city it is welcoming someone to;
+    the goodbye takes none, because unsubscribing takes you off every list.
+    """
     import emailer
 
     if not emailer.email_configured():
@@ -148,7 +153,7 @@ def _mail_in_background(kind: str, email: str):
     send = getattr(emailer, f"send_{kind}")
 
     def work():
-        send(email)
+        send(email, **kwargs)
         app.logger.info("%s email sent to %s", kind, email)
 
     _in_background(f"{kind} email to {email}", work)
@@ -174,10 +179,14 @@ def subscribe():
     email = (data.get("email") or "").strip().lower()
     if not EMAIL_RE.match(email):
         return jsonify({"ok": False, "error": "invalid email"}), 400
-    # You sign up for one city at a time. The page does not send one yet, so the
-    # absent case is the live path and it has to mean New York — which is both
-    # the status quo and the only answer that can never file someone under a
-    # list that does not exist.
+    # You sign up for one city at a time, and it is the city whose page you were
+    # on: page.py bakes `const CITY` in at render time and the signup POSTs it,
+    # so index.html sends NYC and la.html sends LA.
+    #
+    # The absent case is therefore no longer the live path — it is an old cached
+    # page, a form submitted without JavaScript, or a direct POST — and it still
+    # has to mean New York, which is both the status quo and the only answer
+    # that cannot file someone under a list that does not exist.
     raw_city = (data.get("city") or "").strip()
     city = cities.DEFAULT_CITY if not raw_city else cities.canon(raw_city)
     # Never store free text. This value becomes a digest segment key and a tab
@@ -196,7 +205,7 @@ def subscribe():
     # an existing subscriber adding a city they were not on — so re-submitting an
     # active address for a city they already have doesn't mail them again.
     if db.add_subscriber(email, city):
-        _mail_in_background("welcome", email)
+        _mail_in_background("welcome", email, city=city)
         _sheet_sync_in_background()
     return jsonify({"ok": True})
 

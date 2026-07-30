@@ -348,7 +348,7 @@ def run(dry_run=False, city=None):
     sent = 0
     for addr in recipients:
         try:
-            send_digest(addr, new_today)
+            send_digest(addr, new_today, city=city)
             sent += 1
         except Exception as e:
             print(f"  email to {addr} failed: {type(e).__name__}: {e}")
