@@ -1011,51 +1011,57 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
-def test_a_video_is_never_treated_as_a_photo():
-    """Videos are dropped, and we never lead with a format Chrome cannot show.
+def test_a_video_is_a_video_and_never_a_photo():
+    """Clips play in the gallery; nothing that needs a still ever gets one.
 
     Petstablished accepts a video upload down an .../uploads/image/image/... path,
     so the URL looks like a photo and only the extension says otherwise. One
-    reached a dog's og:image: iMessage could not render it and fell back to the
-    site icon, and the grid card was a broken image — but only in Chrome.
-    WebKit paints the first frame of an mp4 in an <img>, so it looked fine in
-    Safari and broken in Chrome, which is the worst way for this to fail.
+    reached a dog's og:image — iMessage could not render it and fell back to the
+    site icon — and drew a broken tile in the grid, but only in Chrome: WebKit
+    paints the first frame of an mp4 inside an <img>, so the same listing looked
+    fine in Safari. That split is the reason this is asserted rather than eyeballed.
 
-    HEIC is the same split and is handled differently: it is a real photograph,
-    so it stays in the gallery, but it is not what we lead with.
+    So they are separated, not discarded: `photos` is what anything needing a
+    still uses, `videos` is what the carousel offers as a clip.
     """
     import normalize as _norm
     from sources.base import Dog as _Dog
 
-    for url in ("https://s3.example.com/uploads/image/image/1/IMG_5331.mp4",
-                "https://x.example.com/a/trim.ABC.MOV",       # upper case
-                "https://x.example.com/a/clip.mp4?sig=abc",   # query string
-                "https://x.example.com/a/reel.webm"):
-        eq(f"rejected: {url.rsplit('/', 1)[-1]}", _norm._is_image(url), False)
-    for url in ("https://x.example.com/a/dog.jpg",
-                "https://x.example.com/a/dog.HEIC",
-                "https://x.example.com/photo/12345"):   # extensionless CDN URL
-        eq(f"kept: {url.rsplit('/', 1)[-1]}", _norm._is_image(url), True)
+    for url in ("https://e.org/uploads/image/image/1/IMG_5331.mp4",
+                "https://e.org/a/trim.ABC.MOV",        # upper case
+                "https://e.org/a/clip.mp4?sig=abc",    # query string
+                "https://e.org/a/reel.webm"):
+        eq(f"not a photo: {url.rsplit('/', 1)[-1]}", _norm._is_image(url), False)
+        eq(f"is a clip:   {url.rsplit('/', 1)[-1]}", _norm._is_video(url), True)
+    for url in ("https://e.org/a/dog.jpg", "https://e.org/a/dog.HEIC",
+                "https://e.org/photo/12345"):          # extensionless CDN URL
+        eq(f"a photo: {url.rsplit('/', 1)[-1]}", _norm._is_image(url), True)
+        eq(f"not a clip: {url.rsplit('/', 1)[-1]}", _norm._is_video(url), False)
+    # Neither a still nor something that plays.
+    eq("a pdf is neither", (_norm._is_image("https://e.org/a/x.pdf"),
+                            _norm._is_video("https://e.org/a/x.pdf")), (False, False))
 
-    # End to end through normalize(), which is where every source's photos land.
     d = _Dog(id="t:1", name="Cane", source="animalrescuemission",
              source_label="The Animal Rescue Mission", url="https://e.org/1",
              breed="American Bully", city="LA",
              photos=["https://e.org/IMG_5331.mp4", "https://e.org/real.jpg"])
     _norm.normalize([d])
-    eq("the video is gone", d.photos, ["https://e.org/real.jpg"])
-    eq("and the og:image is the real photo",
+    eq("the clip left photos", d.photos, ["https://e.org/real.jpg"])
+    eq("and is kept as a video", d.videos, ["https://e.org/IMG_5331.mp4"])
+    eq("the og:image is the real photo",
        d.primary_photo(), "https://e.org/real.jpg")
+    eq("and it travels in the payload", "videos" in d.to_dict(), True)
 
-    # A dog with nothing but video ends up with no photo, not a broken one.
+    # A dog with nothing but video has no photo — the empty state, not a broken
+    # image — and still offers the clip.
     v = _Dog(id="t:2", name="V", source="s", source_label="S",
              url="https://e.org/2", breed="", city="LA",
              photos=["https://e.org/a.mp4"])
     _norm.normalize([v])
-    eq("all-video means no photo at all", v.photos, [])
-    eq("and primary_photo says so", v.primary_photo(), "")
+    eq("no photo at all", (v.photos, v.primary_photo()), ([], ""))
+    eq("but the clip survives", v.videos, ["https://e.org/a.mp4"])
 
-    # Lead with what every browser can draw.
+    # Lead with what every browser can draw. HEIC stays in the gallery.
     h = _Dog(id="t:3", name="H", source="s", source_label="S",
              url="https://e.org/3", breed="", city="LA",
              photos=["https://e.org/a.heic", "https://e.org/b.jpg"])
@@ -1063,8 +1069,84 @@ def test_a_video_is_never_treated_as_a_photo():
     only = _Dog(id="t:4", name="O", source="s", source_label="S",
                 url="https://e.org/4", breed="", city="LA",
                 photos=["https://e.org/a.heic"])
-    eq("but heic alone still beats nothing",
+    eq("heic alone still beats nothing",
        only.primary_photo(), "https://e.org/a.heic")
+
+    # And the page actually offers it: one tile per clip, in the same strip as
+    # the photos, each carrying its own first frame as the poster.
+    from datetime import date as _date
+    import page as _page
+    d.first_seen = "2026-07-31"
+    out = _page._dog_page(d, "https://luvd.com", _date(2026, 7, 31))
+    eq("one video tile", out.count('data-kind="vid"'), 1)
+    eq("in the same carousel", out.count('data-kind="img"'), 1)
+    eq("with its own first frame as the poster", "#t=0.1" in out, True)
+    eq("and a hero to play it in", 'id="hero-v"' in out, True)
+    eq("the share image is still the photo",
+       f'og:image" content="https://e.org/real.jpg"' in out, True)
+    eq("no clip is ever an <img>", ".mp4\" alt" in out or "<img src=\"https://e.org/IMG_5331.mp4"
+       in out, False)
+
+
+def test_subscribing_picks_cities_and_mails_once():
+    """The form offers a box per live city, and two cities is still one welcome.
+
+    The lists are deliberately separate — a NYC subscriber must not get LA dogs
+    — so signing up for both is two subscriptions. What it is not is two welcome
+    emails landing in the same second for something that felt like one action.
+    """
+    import app as _app
+    fresh_db("subscribe_cities.db")
+    sent = []
+    real_mail, real_sync = _app._mail_in_background, _app._sheet_sync_in_background
+    _app._mail_in_background = lambda kind, email, **kw: sent.append((kind, email, kw))
+    _app._sheet_sync_in_background = lambda: None
+    try:
+        c = _app.app.test_client()
+
+        r = c.post("/subscribe", json={"email": "both@e.com",
+                                       "cities": ["NYC", "LA"]})
+        eq("both cities accepted", r.status_code, 200)
+        eq("and both recorded", sorted(db.cities_for("both@e.com"))
+           if hasattr(db, "cities_for") else sorted(r.get_json()["cities"]),
+           ["LA", "NYC"])
+        eq("exactly one welcome", len(sent), 1)
+
+        sent.clear()
+        r = c.post("/subscribe", json={"email": "both@e.com",
+                                       "cities": ["NYC", "LA"]})
+        eq("re-submitting mails nobody", (r.status_code, len(sent)), (200, 0))
+
+        # An unknown city is refused outright rather than partly applied — the
+        # good half must not be silently written while the bad half 400s.
+        sent.clear()
+        r = c.post("/subscribe", json={"email": "new@e.com",
+                                       "cities": ["NYC", "ZZZ"]})
+        eq("unknown city refused", r.status_code, 400)
+        eq("and nothing was mailed", len(sent), 0)
+
+        # The old shape still works: a cached page, or a form with no JS.
+        sent.clear()
+        eq("legacy singular city",
+           c.post("/subscribe", json={"email": "old@e.com",
+                                      "city": "LA"}).status_code, 200)
+        eq("mails once", len(sent), 1)
+        sent.clear()
+        eq("no city at all still means the default",
+           c.post("/subscribe", json={"email": "bare@e.com"}
+                  ).get_json()["cities"], [cities.DEFAULT_CITY])
+    finally:
+        _app._mail_in_background, _app._sheet_sync_in_background = real_mail, real_sync
+
+    # The form itself: a box per live city, the page's own city pre-ticked, and
+    # no city named in the copy — luvd.com is shared to people anywhere.
+    html_out = _page_html()
+    for code in cities.live_codes():
+        eq(f"{code} has a checkbox", f'value="{code}"' in html_out, True)
+    eq("the page's own city starts ticked", 'value="NYC" checked' in html_out, True)
+    eq("the copy names no city",
+       "One email when new dogs drop from top rescues in your favorite cities."
+       in html_out, True)
 
 
 def test_the_about_sheet_can_reach_its_own_bottom():

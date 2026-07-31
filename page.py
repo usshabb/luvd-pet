@@ -970,6 +970,19 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     footer_rescues = " &middot; ".join(rescue_links)
 
     scale_json = json.dumps(SCALE, ensure_ascii=False)
+
+    # One checkbox per live city. The city whose page you are on starts ticked,
+    # because that is the one you demonstrably came for — but the lists stay
+    # separate, so ticking both is two subscriptions, not a merged one.
+    def city_picks(prefix: str) -> str:
+        return "".join(
+            f'<label class="sub-city"><input type="checkbox"'
+            f' name="{prefix}city" value="{o.code}"'
+            f'{" checked" if o.code == c.code else ""}>'
+            f'<span>{html.escape(o.short)}</span></label>'
+            for o in (cities.CITIES[k] for k in cities.live_codes()))
+    sub_picks = city_picks("")
+    msub_picks = city_picks("m-")
     theme_script = _theme_script(c)
 
     empty = "" if flat else """
@@ -1501,6 +1514,23 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     padding:14px 26px;border-radius:13px;transition:opacity .2s;
     text-align:center;}}
   .sub-form button:hover{{opacity:.88;}}
+  /* One row of city checkboxes under the field. Deliberately plain — this is a
+     two-item choice, not a form, and anything more elaborate would outweigh the
+     email field above it. */
+  .sub-cities{{border:0;margin:12px 0 0;padding:0;display:flex;gap:8px;
+    justify-content:center;flex-wrap:wrap;}}
+  .sub-city{{display:inline-flex;align-items:center;gap:7px;cursor:pointer;
+    font-size:14px;font-weight:600;padding:7px 14px;border-radius:980px;
+    border:1px solid var(--hair);background:var(--surface);
+    transition:border-color .18s,background .18s;}}
+  .sub-city:hover{{border-color:var(--muted);}}
+  .sub-city:has(input:checked){{border-color:var(--accent);
+    background:var(--accent-soft);}}
+  .sub-city input{{accent-color:var(--accent);width:15px;height:15px;
+    margin:0;cursor:pointer;}}
+  /* Visually hidden, still read out: the checkboxes need a group label. */
+  .vh{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+    overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}}
   .sub-note{{font-size:13px;color:var(--muted);margin-top:14px;}}
   .sub-note a{{color:var(--accent);}}
   .sub-ok{{color:var(--accent);font-weight:600;margin-top:14px;font-size:15px;}}
@@ -1923,8 +1953,16 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     min-width:0;min-height:0;}}
   .m-hero{{position:relative;flex:1 1 auto;min-height:0;
     background:var(--hair);border-radius:16px;overflow:hidden;}}
-  .m-hero img{{width:100%;height:100%;object-fit:cover;object-position:center;
-    display:block;}}
+  /* Photo and clip are the same thing in the same box: both fill the hero and
+     centre-crop, and neither contributes height. Out of flow for both, because
+     in flow a 720x1280 portrait clip grows the whole top band the moment you
+     tap it — and leaving only ONE of them in flow is worse, because then the
+     band changes size depending on which you are looking at (it did: 548px on a
+     photo, 528px on a clip). The hero's height comes from the layout around it
+     either way. */
+  .m-hero img,.m-hero video{{position:absolute;inset:0;width:100%;height:100%;
+    object-fit:cover;object-position:center;display:block;}}
+  .m-hero video{{background:#000;}}
   .m-close{{position:absolute;top:-12px;right:-12px;width:36px;height:36px;border:none;
     border-radius:50%;cursor:pointer;font-size:17px;line-height:1;
     background:rgba(28,28,30,.72);color:#fff;
@@ -1938,6 +1976,27 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     scrollbar-width:none;}}
   .m-media:has(.thumbs) .m-hero{{min-height:0;}}
   .thumbs::-webkit-scrollbar{{height:0;}}
+  /* Videos ride in the same strip as the photos. The thumbnail IS a <video>
+     with preload="metadata" and a #t=0.1 fragment, so the browser paints the
+     clip's own first frame — a real poster with no server-side frame grab and
+     no extra dependency. The rules below therefore have to apply to a <video>
+     and to the wrapper that carries the play badge, not just to <img>. */
+  .thumbs img,.thumbs .th-v{{width:60px;height:60px;object-fit:cover;
+    object-position:center;border-radius:10px;cursor:pointer;flex:0 0 auto;
+    opacity:.5;transition:opacity .2s;border:2px solid transparent;}}
+  .thumbs .th-v{{position:relative;display:block;overflow:hidden;padding:0;
+    background:var(--hair);}}
+  .thumbs .th-v video{{width:100%;height:100%;object-fit:cover;display:block;
+    pointer-events:none;}}
+  .thumbs .th-v:hover,.thumbs .th-v.sel{{opacity:1;border-color:var(--accent);}}
+  /* The badge is what says "this one moves" before anything has loaded. */
+  .th-play{{position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;pointer-events:none;}}
+  .th-play::after{{content:"";width:0;height:0;margin-left:2px;
+    border-left:11px solid #fff;border-top:7px solid transparent;
+    border-bottom:7px solid transparent;
+    filter:drop-shadow(0 1px 3px rgba(0,0,0,.55));}}
+  .m-hero video[hidden],.m-hero img[hidden]{{display:none;}}
   .thumbs img{{width:60px;height:60px;object-fit:cover;object-position:center;
     border-radius:10px;cursor:pointer;
     flex:0 0 auto;opacity:.5;transition:opacity .2s;border:2px solid transparent;}}
@@ -2618,13 +2677,16 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 
   <section class="sub-sec" id="subscribe">
     <h2>Never miss a good dog</h2>
-    <p>One email each morning with every new dog across {c.short} rescues.
-       Nothing on the days there aren't any.</p>
+    <p>One email when new dogs drop from top rescues in your favorite cities.</p>
     <form class="sub-form" id="sub-form">
       <input type="email" id="sub-email" placeholder="you@email.com" required
              autocomplete="email" aria-label="Email address">
       <button type="submit">Subscribe</button>
     </form>
+    <fieldset class="sub-cities" id="sub-cities">
+      <legend class="vh">Cities to hear about</legend>
+      {sub_picks}
+    </fieldset>
     <div class="sub-note" id="sub-note">Free. Unsubscribe anytime.</div>
   </section>
 
@@ -3327,14 +3389,25 @@ function renderDog(d) {{
   const programChip = d.program_label
     ? `<span class="chip program">${{esc(d.program_label)}}</span>` : '';
   const hasPhoto = !!(d.photos && d.photos.length);
-  const thumbs = (d.photos || []).length > 1
-    ? `<div class="thumbs">${{d.photos.map((p,n) =>
-        `<img src="${{esc(p)}}" class="${{n===0?'sel':''}}" data-src="${{esc(p)}}"
-          alt="">`).join('')}}</div>` : '';
+  // Photos then clips, one strip. A clip's thumbnail is a muted <video> at
+  // #t=0.1 so the browser paints its own first frame as the poster.
+  const clips = d.videos || [];
+  const tiles = (d.photos || []).map(p =>
+      `<img src="${{esc(p)}}" data-src="${{esc(p)}}" data-kind="img" alt="">`)
+    .concat(clips.map(v =>
+      `<span class="th-v" data-src="${{esc(v)}}" data-kind="vid" role="button"
+             tabindex="0" aria-label="Play video of ${{esc(d.name)}}"><video
+             src="${{esc(v)}}#t=0.1" preload="metadata" muted playsinline
+             ></video><i class="th-play"></i></span>`));
+  const thumbs = tiles.length > 1
+    ? `<div class="thumbs">${{tiles.map((t, n) =>
+        n === 0 ? t.replace(/^(<\w+)/, '$1 class="sel"') : t).join('')}}</div>`
+    : '';
   const media = hasPhoto ? `
     <div class="m-media">
       <div class="m-hero"><img id="hero" src="${{esc(d.photos[0])}}"
         alt="${{esc(d.name)}}">
+        <video id="hero-v" controls playsinline preload="metadata" hidden></video>
         <span class="views m-views" id="m-views" data-id="${{esc(d.id)}}"${{
           (VIEW_COUNTS[d.id] || 0) >= VIEW_FLOOR ? '' : ' hidden'}}>
           <span class="eyes" aria-hidden="true">👀</span><b>${{VIEW_COUNTS[d.id] || 0}}</b></span>
@@ -3411,10 +3484,30 @@ function renderDog(d) {{
     if (card) countView(card);
   }});
 
-  modal.querySelectorAll('.thumbs img').forEach(t => t.onclick = () => {{
-    document.getElementById('hero').src = t.dataset.src;
-    modal.querySelectorAll('.thumbs img').forEach(o => o.classList.remove('sel'));
+  // One handler for both kinds: a photo swaps the <img>, a clip reveals the
+  // <video> in the same box. Whatever is playing stops when you pick another,
+  // so a modal never leaves sound running behind a photo.
+  const heroImg = document.getElementById('hero');
+  const heroVid = document.getElementById('hero-v');
+  const pickTile = t => {{
+    modal.querySelectorAll('.thumbs [data-kind]')
+      .forEach(o => o.classList.remove('sel'));
     t.classList.add('sel');
+    if (t.dataset.kind === 'vid') {{
+      heroVid.src = t.dataset.src;
+      heroVid.hidden = false; heroImg.hidden = true;
+      heroVid.play().catch(() => {{}});
+    }} else {{
+      heroVid.pause(); heroVid.removeAttribute('src'); heroVid.load();
+      heroVid.hidden = true; heroImg.hidden = false;
+      heroImg.src = t.dataset.src;
+    }}
+  }};
+  modal.querySelectorAll('.thumbs [data-kind]').forEach(t => {{
+    t.onclick = () => pickTile(t);
+    t.onkeydown = e => {{
+      if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); pickTile(t); }}
+    }};
   }});
   modal.querySelectorAll('.tab').forEach(tb => tb.onclick = () => {{
     modal.querySelectorAll('.tab').forEach(o => o.classList.remove('on'));
@@ -3524,6 +3617,9 @@ function openAbout() {{
   if (!fromHash && /^#dog\//.test(location.hash)) {{
     history.pushState(null, '', location.pathname + location.search);
   }}
+  // Stop anything playing. The modal keeps its markup until the next open, so
+  // a clip left running would go on making noise behind a closed dialog.
+  modal.querySelectorAll('video').forEach(v => {{ try {{ v.pause(); }} catch (e) {{}} }});
   scrim.classList.remove('vis');
   document.body.classList.remove('locked');
   setTimeout(() => scrim.classList.remove('on'), 280);
@@ -4656,13 +4752,16 @@ function openSubscribe() {{
     <div class="sub-modal">
       <img class="sub-logo" src="assets/luvd-logo.png" alt="LUVD">
       <h2>Never miss a good dog</h2>
-      <p>One email each morning with every new dog across {c.short} rescues.
-         Nothing on the days there aren't any.</p>
+      <p>One email when new dogs drop from top rescues in your favorite cities.</p>
       <form class="sub-form" id="m-sub-form">
         <input type="email" id="m-sub-email" placeholder="you@email.com" required
                autocomplete="email" aria-label="Email address">
         <button type="submit">Subscribe</button>
       </form>
+      <fieldset class="sub-cities" id="m-sub-cities">
+        <legend class="vh">Cities to hear about</legend>
+        {msub_picks}
+      </fieldset>
       <div class="sub-note" id="m-sub-note">Free. Unsubscribe anytime.</div>
     </div>`, 'narrow');
   setTimeout(() => document.getElementById('m-sub-email').focus(), 340);
@@ -4691,17 +4790,35 @@ function announce(msg) {{
 }}
 
 // Shared by the nav modal and the section at the bottom of the page.
+// Which cities this form has ticked. The hero form has no checkboxes at all,
+// so it falls back to the page's own city — the behaviour it always had.
+function pickedCities(formId) {{
+  const box = document.getElementById(
+    formId === 'm-sub-form' ? 'm-sub-cities' : 'sub-cities');
+  if (!box) return [CITY];
+  const on = [...box.querySelectorAll('input[type=checkbox]:checked')]
+    .map(i => i.value);
+  return on.length ? on : [];
+}}
+
 async function handleSubscribe(e, emailId, noteId, formId) {{
   e.preventDefault();
   const email = document.getElementById(emailId).value.trim();
   const note = document.getElementById(noteId);
   if (!email) return;
   note.className = note.id === 'hero-note' ? 'hero-note' : 'sub-note';
+  const picked = pickedCities(formId);
+  if (!picked.length) {{
+    // Nothing ticked is not a default — it is a question. Sending them the
+    // page's city anyway would sign them up for a list they just unticked.
+    note.textContent = 'Pick at least one city.';
+    return;
+  }}
   try {{
     const r = await fetch(SUBSCRIBE_URL, {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{email: email, city: CITY}})
+      body: JSON.stringify({{email: email, cities: picked, city: picked[0]}})
     }});
     if (!r.ok) throw new Error('bad status');
     // Restore the note to its resting copy — no "you're in" line at all.
@@ -4783,7 +4900,6 @@ _DOG_PAGE_CSS = """
      under the last rating. Taking the image out of flow restores the modal's
      intent: the right column decides, the photo fills it. */
   .dpg-card .m-hero{min-height:180px;}
-  .dpg-card .m-hero img{position:absolute;inset:0;}
   /* And spread whatever slack is left through the four rows rather than
      letting it collect at the bottom of the panel. */
   .dpg-card .scores{justify-content:space-between;}
@@ -5193,18 +5309,30 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
     }
 
     # ---- the card, module by module, same classes as the modal ---------------
+    # Photos then clips, in one strip — the same carousel, not a second block.
+    # A clip's thumbnail is a muted <video> at #t=0.1, so the browser paints the
+    # clip's own first frame and there is no poster to generate server-side.
     photos = list(d.photos or [])
+    clips = list(getattr(d, "videos", None) or [])
+    tiles = [f'<img src="{html.escape(p)}" data-src="{html.escape(p)}"'
+             f' data-kind="img" alt="" loading="lazy">' for p in photos]
+    tiles += [f'<span class="th-v" data-src="{html.escape(v)}" data-kind="vid"'
+              f' role="button" tabindex="0"'
+              f' aria-label="Play video of {html.escape(d.name)}">'
+              f'<video src="{html.escape(v)}#t=0.1" preload="metadata" muted'
+              f' playsinline></video><i class="th-play"></i></span>'
+              for v in clips]
     thumbs = ""
-    if len(photos) > 1:
-        thumbs = ('<div class="thumbs">' + "".join(
-            f'<img src="{html.escape(p)}" class="{"sel" if n == 0 else ""}"'
-            f' data-src="{html.escape(p)}" alt="" loading="lazy">'
-            for n, p in enumerate(photos)) + "</div>")
+    if len(tiles) > 1:
+        first = re.sub(r"^(<\w+)", r'\1 class="sel"', tiles[0], count=1)
+        thumbs = '<div class="thumbs">' + first + "".join(tiles[1:]) + "</div>"
     media = ""
     if photo:
         media = (f'<div class="m-media"><div class="m-hero">'
                  f'<img id="hero" src="{html.escape(photo)}"'
                  f' alt="{html.escape(d.name)}, {html.escape(breed)}">'
+                 f'<video id="hero-v" controls playsinline preload="metadata"'
+                 f" hidden></video>"
                  f"</div>{thumbs}</div>")
 
     home = rescue_home(d.source)
@@ -5287,7 +5415,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
 <div class="dpg-top">
   <a class="dpg-logo" href="{c.path}" aria-label="LUVD — every adoptable dog in {c.short}">
     <img src="/assets/luvd-logo.png" alt="LUVD" width="1400" height="607"></a>
-  <a class="dpg-all" href="{c.path}">See every {c.short} dog</a>
+  <a class="dpg-all" href="{c.path}">View {c.short} Dogs</a>
 </div>
 <main class="dpg">
   <div class="dpg-card">
@@ -5407,15 +5535,31 @@ var DOG = {dog_json};
         && typeof closeModal === 'function') closeModal(true);
   }});
 
-  // 5. Thumbnails swap the hero, same as the modal.
-  var hero = document.getElementById('hero');
-  document.querySelectorAll('.thumbs img').forEach(function (t) {{
-    t.addEventListener('click', function () {{
-      if (hero) hero.src = t.dataset.src;
-      document.querySelectorAll('.thumbs img').forEach(function (o) {{
-        o.classList.remove('sel');
-      }});
-      t.classList.add('sel');
+  // 5. The carousel, same behaviour as the modal's: a photo swaps the <img>,
+  //    a clip reveals the <video> in the same box, and picking anything else
+  //    stops whatever was playing.
+  var heroImg = document.getElementById('hero');
+  var heroVid = document.getElementById('hero-v');
+  var tiles = document.querySelectorAll('.thumbs [data-kind]');
+  function pickTile(t) {{
+    tiles.forEach(function (o) {{ o.classList.remove('sel'); }});
+    t.classList.add('sel');
+    if (!heroImg || !heroVid) return;
+    if (t.dataset.kind === 'vid') {{
+      heroVid.src = t.dataset.src;
+      heroVid.hidden = false; heroImg.hidden = true;
+      var p = heroVid.play();
+      if (p && p.catch) p.catch(function () {{}});
+    }} else {{
+      heroVid.pause(); heroVid.removeAttribute('src'); heroVid.load();
+      heroVid.hidden = true; heroImg.hidden = false;
+      heroImg.src = t.dataset.src;
+    }}
+  }}
+  tiles.forEach(function (t) {{
+    t.addEventListener('click', function () {{ pickTile(t); }});
+    t.addEventListener('keydown', function (e) {{
+      if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); pickTile(t); }}
     }});
   }});
 }})();

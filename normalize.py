@@ -129,21 +129,35 @@ def _tidy_weight(w: str) -> str:
     return f"{int(n)} lbs" if n == int(n) else f"{n:.1f} lbs"
 
 
-# Files that are not photographs, however a rescue filed them. Petstablished
-# lets a video be uploaded down an .../uploads/image/image/... path, so the URL
-# looks like a photo and only the extension gives it away — and one of those
-# reached a dog's og:image, where iMessage could not render it and fell back to
-# the site icon, and reached the grid, where the card was a broken image.
+# Petstablished lets a video be uploaded down an .../uploads/image/image/...
+# path, so the URL looks like a photo and only the extension gives it away. One
+# of those reached a dog's og:image, where iMessage could not render it and fell
+# back to the site icon, and reached the grid, where the card drew broken — in
+# Chrome. WebKit paints the first frame of an mp4 inside an <img>, so the same
+# listing looked fine in Safari, which is the worst way for it to fail.
 #
-# A blocklist rather than an allowlist of image types: plenty of CDNs serve
-# perfectly good photos from extensionless URLs, and rejecting those would throw
-# away far more than it saved.
-_NOT_A_PHOTO = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpg",
-                ".mpeg", ".ogv", ".3gp", ".mp3", ".wav", ".pdf")
+# So they are separated rather than dropped: `photos` is what anything needing a
+# still picture uses, `videos` is what the gallery offers as a clip.
+#
+# What plays is a narrower set than what is merely "not an image": .mp4 and .m4v
+# are safe everywhere, .webm outside Safari, and .mov is a container that
+# usually holds H.264 and usually plays. Anything else is neither — a PDF or an
+# audio file is not a photo and not a clip, and belongs in neither list.
+_VIDEO = (".mp4", ".m4v", ".mov", ".webm", ".ogv")
+_NOT_A_PHOTO = _VIDEO + (".avi", ".mkv", ".mpg", ".mpeg", ".3gp",
+                         ".mp3", ".wav", ".pdf")
+
+
+def _ext_is(url: str, exts: tuple) -> bool:
+    return urlsplit(url).path.lower().endswith(exts)
 
 
 def _is_image(url: str) -> bool:
-    return not urlsplit(url).path.lower().endswith(_NOT_A_PHOTO)
+    return not _ext_is(url, _NOT_A_PHOTO)
+
+
+def _is_video(url: str) -> bool:
+    return _ext_is(url, _VIDEO)
 
 
 def normalize(dogs: List[Dog]) -> List[Dog]:
@@ -162,8 +176,14 @@ def normalize(dogs: List[Dog]) -> List[Dog]:
             key=lambda t: order[t["kind"]],
         )
         d.attributes = [t["text"] for t in d.traits]
-        d.photos = [p for p in (d.photos or [])
-                    if p and p.startswith("http") and _is_image(p)]
+        # One pass over whatever the source called photos, split by what the
+        # file actually is. Videos already in d.videos are kept and de-duped.
+        media = [p for p in list(d.photos or []) + list(d.videos or [])
+                 if p and p.startswith("http")]
+        seen = set()
+        media = [p for p in media if not (p in seen or seen.add(p))]
+        d.photos = [p for p in media if _is_image(p)]
+        d.videos = [p for p in media if _is_video(p)]
         if not d.adopt_url:
             d.adopt_url = d.url
     return dogs

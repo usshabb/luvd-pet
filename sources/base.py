@@ -25,7 +25,15 @@ class Dog:
     url: str                      # link to this dog's listing
 
     # --- the headline facts (shown on the card) ---
+    # Images only. A rescue can upload a video down the same path as a photo —
+    # Petstablished does — and one reaching this list put an .mp4 in a dog's
+    # og:image and drew a broken tile in the grid. normalize() sorts them out;
+    # videos land in `videos` below, and everything that needs a still picture
+    # (card, og:image, digest, share canvas) can trust this field.
     photos: List[str] = field(default_factory=list)
+    # Clips the rescue posted, shown in the gallery beside the photos. Never
+    # used anywhere a still is required.
+    videos: List[str] = field(default_factory=list)
     breed: str = ""
     age: str = ""
     sex: str = ""
@@ -115,7 +123,8 @@ class Dog:
         return {
             "id": self.id, "name": self.name, "source": self.source,
             "source_label": self.source_label, "url": self.url,
-            "photos": self.photos, "breed": self.breed, "age": self.age,
+            "photos": self.photos, "videos": self.videos,
+            "breed": self.breed, "age": self.age,
             "sex": self.sex, "size": self.size, "weight": self.weight,
             "location": self.location, "description": self.description,
             "attributes": self.attributes, "traits": self.traits, "fee": self.fee,

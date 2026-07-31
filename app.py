@@ -187,27 +187,48 @@ def subscribe():
     # page, a form submitted without JavaScript, or a direct POST — and it still
     # has to mean New York, which is both the status quo and the only answer
     # that cannot file someone under a list that does not exist.
-    raw_city = (data.get("city") or "").strip()
-    city = cities.DEFAULT_CITY if not raw_city else cities.canon(raw_city)
-    # Never store free text. This value becomes a digest segment key and a tab
+    # The form offers a checkbox per live city, so a signup can name more than
+    # one. `city` (singular) is still accepted: an old cached page sends it, and
+    # so does a form submitted without JavaScript.
+    raw = data.get("cities")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not raw:
+        one = (data.get("city") or "").strip()
+        # The absent case still has to mean New York — the status quo, and the
+        # only answer that cannot file someone under a list that does not exist.
+        raw = [one] if one else [cities.DEFAULT_CITY]
+
+    # Never store free text. Each value becomes a digest segment key and a tab
     # name in the backup spreadsheet, so an unrecognised one is a group of people
     # nobody ever mails, and possibly a sync that fails outright.
-    if not city:
-        app.logger.info("subscribe refused unknown city %r", raw_city[:40])
-        return jsonify({"ok": False, "error": "unknown city"}), 400
-    # A registered but not-yet-live city would take the signup and then never
-    # send anything, because nothing scrapes it and no nightly run covers it.
-    # Refusing is the honest answer; `live = True` in cities.py is what opens it.
-    if not cities.is_live(city):
-        app.logger.info("subscribe refused city %s — not live yet", city)
-        return jsonify({"ok": False, "error": "city not open yet"}), 400
+    picked = []
+    for r in raw[:len(cities.all_codes())]:
+        code = cities.canon(str(r).strip())
+        if not code:
+            app.logger.info("subscribe refused unknown city %r", str(r)[:40])
+            return jsonify({"ok": False, "error": "unknown city"}), 400
+        # A registered but not-yet-live city would take the signup and then never
+        # send anything, because nothing scrapes it and no nightly run covers it.
+        # Refusing is the honest answer; `live = True` in cities.py opens it.
+        if not cities.is_live(code):
+            app.logger.info("subscribe refused city %s — not live yet", code)
+            return jsonify({"ok": False, "error": "city not open yet"}), 400
+        if code not in picked:
+            picked.append(code)
+
     # True only for a new address, someone opting back in after unsubscribing, or
     # an existing subscriber adding a city they were not on — so re-submitting an
     # active address for a city they already have doesn't mail them again.
-    if db.add_subscriber(email, city):
-        _mail_in_background("welcome", email, city=city)
+    added = [c for c in picked if db.add_subscriber(email, c)]
+    if added:
+        # One welcome, however many cities were ticked. Mailing per city would
+        # land two near-identical emails in the same second for a signup that
+        # felt like one action. It names the first city they picked, which on
+        # the page is the one whose checkbox was already ticked.
+        _mail_in_background("welcome", email, city=added[0])
         _sheet_sync_in_background()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "cities": picked})
 
 
 @app.route("/unsubscribe", methods=["GET", "POST"])
