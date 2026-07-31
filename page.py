@@ -2502,6 +2502,8 @@ def render(dated, for_date: date = None, city: str = None) -> str:
                   aria-selected="true"><span>Recently added</span></button>
           <button type="button" role="option" data-v="wait"
                   aria-selected="false"><span>Longest waiting</span></button>
+          <button type="button" role="option" data-v="views"
+                  aria-selected="false"><span>Most viewed</span></button>
         </span>
       </span>
     </div>
@@ -2628,15 +2630,29 @@ const modal = document.getElementById('modal');
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
   c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
 
+// Five words per row, and only the first and last are on screen — they are the
+// ends of the scale the heart sits on, so they carry the whole meaning now that
+// the answer is no longer spelled out beside it.
+//
+// The rule they follow, which the old set broke in three places: both ends
+// describe the SAME thing in the SAME voice, and both are about the dog.
+// "Needs a job" was working-dog jargon against a plain-English "Couch potato".
+// "Seasoned owner" described the reader while its left end described the animal.
+// "Needs real space" named an amount nobody can picture. Each row now reads as
+// one scale rather than asking you to switch frame halfway along it.
+//
+// The middle three only ever surface in two places — the pin's aria-label
+// ("Energy level: Low key") and the similar-dogs line, which appends ", too" —
+// so every word here has to still read as a sentence with that suffix.
 const SCALE = {{
   energy:     {{icon:'⚡', label:'Energy level',
-    words:['Couch potato','Low key','Middle of the road','Active','Needs a job']}},
+    words:['Couch potato','Low key','Middle of the road','Active','Zoomies']}},
   apartment:  {{icon:'🏙️', label:'Apartment fit',
-    words:['Needs real space','Tight fit','Workable','Good fit','Built for city life']}},
+    words:['Needs a yard','Tight in a flat','Workable','Good fit','Fine in a studio']}},
   experience: {{icon:'🎓', label:'Experience needed',
-    words:['Great first dog','Beginner friendly','Some experience','Experienced home','Seasoned owner']}},
+    words:['Great first dog','Beginner friendly','Some experience','Experienced home','Needs experience']}},
   alone: {{icon:'🏠', label:'Home alone',
-    words:['Needs company','Short days only','Half a day','Most of a workday','Full workday fine']}}
+    words:['Needs company','Short days only','Half a day','Most of a workday','Fine all day']}}
 }};
 
 function bars(d) {{
@@ -3506,6 +3522,11 @@ fetch('/views').then(r => r.ok ? r.json() : null).then(d => {{
   if (!d) return;
   paintViews(d.dogs || {{}});
   paintTotal(d.total);
+  // "Most viewed" is the one order that depends on data the page did not ship
+  // with. Somebody can choose it before this resolves — or reload while it is
+  // chosen — and would be looking at a grid sorted by nothing. Re-sorted only
+  // for that option, because re-appending cards restarts their animation.
+  if (sortBy === 'views') applySort();
 }}).catch(() => {{}});
 
 function countView(card) {{
@@ -4126,7 +4147,8 @@ function resetFilters() {{
 // in one glance. And "Recently added" genuinely means arrival on LUVD, which
 // is first_seen and nothing else; a dog can be newly added here and have been
 // waiting at its rescue for a year.
-const SORT_LABEL = {{new: 'Recently added', wait: 'Longest waiting'}};
+const SORT_LABEL = {{new: 'Recently added', wait: 'Longest waiting',
+                    views: 'Most viewed'}};
 let sortBy = 'new';
 
 // Sorting reorders the cards; applyView still owns which of them are visible.
@@ -4139,10 +4161,19 @@ function applySort() {{
   const dog = c => DOGS[+c.dataset.i] || {{}};
   const seen = c => dog(c).first_seen || '';
   const waited = c => dog(c).waiting_days || 0;
-  // Each direction tiebreaks on the other field, so the order is total and the
-  // result is deterministic rather than leaning on sort stability.
+  // Views are not in the page payload — they arrive from /views after load and
+  // land in VIEW_COUNTS, so this reads whatever has arrived. See the fetch, which
+  // re-runs applySort() once the real numbers are in; sorting on the empty object
+  // would otherwise silently order the whole grid by zero.
+  const views = c => VIEW_COUNTS[dog(c).id] || 0;
+  // Each direction tiebreaks on another field, so the order is total and the
+  // result is deterministic rather than leaning on sort stability. Most viewed
+  // tiebreaks on arrival, which matters more here than elsewhere: most dogs have
+  // no views at all, so without it the entire zero-view tail would be arbitrary.
   const cmp = sortBy === 'wait'
     ? (a, b) => waited(b) - waited(a) || seen(a).localeCompare(seen(b))
+    : sortBy === 'views'
+    ? (a, b) => views(b) - views(a) || seen(b).localeCompare(seen(a))
     : (a, b) => seen(b).localeCompare(seen(a)) || waited(a) - waited(b);
   const sorted = cards.slice().sort(cmp);
   // Re-appending a node restarts its CSS animation, so don't touch the DOM when
