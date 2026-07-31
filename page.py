@@ -2595,7 +2595,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     <div class="date">{for_date.strftime('%A, %B %-d, %Y')}</div>
     <nav class="foot-rescues" aria-label="Rescues on LUVD">
       <span class="foot-hd">Rescues on LUVD</span>
-      {footer_rescues} &middot; <a class="foot-all" href="/rescues">All rescues &rarr;</a>
+      {footer_rescues} &middot; <a class="foot-all" href="{c.rescues_path}">All {c.short} rescues &rarr;</a>
     </nav>
     <div style="margin-top:6px;">
       LUVD · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD">Contact</a>
@@ -4877,18 +4877,16 @@ def _rescue_structured_data(label: str, source: str, dogs: List[Dog],
     ]
     c = cities.resolve(_city_of(dogs))
     home_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
-    # /rescues is New York's index and only lists New York's rescues, because a
-    # per-city rescue index is a separate piece of design. So it is only a real
-    # ancestor of a New York rescue; for anywhere else the trail is city → rescue,
-    # rather than routing a visitor through another city's list.
-    crumbs = [{"@type": "ListItem", "position": 1,
-               "name": f"Adopt a dog in {c.short}", "item": home_url}]
-    if c.code == cities.DEFAULT_CITY:
-        crumbs.append({"@type": "ListItem", "position": 2,
-                       "name": f"{c.short} dog rescues",
-                       "item": f"{site}/rescues"})
-    crumbs.append({"@type": "ListItem", "position": len(crumbs) + 1,
-                   "name": label})
+    # city → that city's rescue index → this rescue. The middle step is the
+    # city's own index, so the trail never routes a visitor through another
+    # city's list.
+    crumbs = [
+        {"@type": "ListItem", "position": 1,
+         "name": f"Adopt a dog in {c.short}", "item": home_url},
+        {"@type": "ListItem", "position": 2, "name": f"{c.short} dog rescues",
+         "item": f"{site}{c.rescues_path}"},
+        {"@type": "ListItem", "position": 3, "name": label},
+    ]
     return {
         "@context": "https://schema.org",
         "@graph": [
@@ -4938,11 +4936,10 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     out = (f'<a class="out" href="{html.escape(home)}" target="_blank"'
            f' rel="noopener">Visit {html.escape(label)}&rsquo;s own site &rarr;</a>'
            if home else "")
-    # Only New York has a rescue index today, so only New York's rescue pages
-    # link to one. Sending an LA visitor to a list of New York rescues would be
-    # worse than not offering the link.
-    rescues_link = (f'<a href="/rescues">All {c.short} rescues on LUVD</a> &middot;'
-                    if c.code == cities.DEFAULT_CITY else "")
+    # Every city has its own index, so this always points at the one for the
+    # city this rescue is in — never at another city's list.
+    rescues_link = (f'<a href="{c.rescues_path}">All {c.short} rescues on LUVD'
+                    f'</a> &middot;')
     ld = json.dumps(_rescue_structured_data(label, source, dogs, site, slug, desc))
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -4966,17 +4963,26 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
 </body></html>"""
 
 
-def _rescues_page(by_rescue: dict, site: str, for_date: date) -> str:
-    """The rescue index — a page that can answer "which dog rescues are in NYC?".
+def _rescues_page(by_rescue: dict, site: str, for_date: date,
+                  city: str = None) -> str:
+    """One city's rescue index — a page that answers "which dog rescues are in LA?".
 
     A footer list can't rank for that and can't be cited; a page with the roster,
-    each rescue's dog count and a link to their own site can. It also gives the
-    seven rescue pages a single hub to be linked from.
+    each rescue's dog count and a link to their own site can. It also gives that
+    city's rescue pages a single hub to be linked from.
+
+    One page per city rather than a combined one. The question is local, so the
+    page that answers it should be too: a single page covering everywhere could
+    only be titled something like "Dog rescues in NYC and LA", which competes
+    with itself and reads as a worse answer to either question than a dedicated
+    page does. See `City.rescues_path`. The cross-links at the foot are what
+    give a visitor the whole-site view without asking one page to carry it.
     """
+    c = cities.resolve(city)
     labels = sorted(by_rescue)
     total = sum(len(v) for v in by_rescue.values())
-    title = "NYC dog rescues — every rescue LUVD tracks | LUVD"
-    desc = (f"The {len(labels)} New York City dog rescues LUVD checks every "
+    title = f"{c.short} dog rescues — every rescue LUVD tracks | LUVD"
+    desc = (f"The {len(labels)} {c.name} dog rescues LUVD checks every "
             f"morning, with all {total} of their adoptable dogs in one place.")
     # The meta description above already says what LUVD does with them, so the
     # on-page lead adds the part a visitor needs instead of repeating it.
@@ -4999,24 +5005,35 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date) -> str:
             f'<div class="card"><h2><a href="/rescue/{slug}">'
             f'{html.escape(label)}</a></h2>'
             f'<p class="meta">{n} dog{"" if n == 1 else "s"} available today'
-            f' &middot; New York City</p>'
+            f' &middot; {html.escape(c.name)}</p>'
             f'<p class="links">{" &middot; ".join(links)}</p></div>'
         )
+
+    # The other live cities' indexes. Every live city gets one, so this set is
+    # stable and the links can't point at a page that was never written.
+    others = [cities.CITIES[k] for k in cities.live_codes() if k != c.code]
+    also = "".join(f' &middot; <a href="{o.rescues_path}">Also in {html.escape(o.name)}'
+                   f' &rarr;</a>' for o in others)
+
+    # A city mid-launch can have no rescues yet. Keep the page — the city page's
+    # footer links to it — but don't ask Google to index an empty roster, and
+    # (in write()) don't submit it in the sitemap either.
+    robots = "" if labels else '\n<meta name="robots" content="noindex,follow">'
 
     ld = json.dumps({
         "@context": "https://schema.org",
         "@graph": [
             {
                 "@type": "CollectionPage",
-                "@id": f"{site}/rescues",
-                "url": f"{site}/rescues",
-                "name": "NYC dog rescues on LUVD",
+                "@id": f"{site}{c.rescues_path}",
+                "url": f"{site}{c.rescues_path}",
+                "name": f"{c.short} dog rescues on LUVD",
                 "description": desc,
                 "isPartOf": {"@id": f"{site}/#website"},
                 "dateModified": for_date.isoformat(),
                 "mainEntity": {
                     "@type": "ItemList",
-                    "name": "Dog rescues in New York City",
+                    "name": f"Dog rescues in {c.name}",
                     "numberOfItems": len(labels),
                     "itemListElement": [
                         {"@type": "ListItem", "position": i,
@@ -5024,7 +5041,7 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date) -> str:
                          "item": _shelter_ld(
                              label,
                              by_rescue[label][0].source if by_rescue[label] else "",
-                             site, slugify(label))}
+                             site, slugify(label), c.code)}
                         for i, label in enumerate(labels, 1)
                     ],
                 },
@@ -5032,9 +5049,11 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date) -> str:
             {
                 "@type": "BreadcrumbList",
                 "itemListElement": [
-                    {"@type": "ListItem", "position": 1, "name": "Adopt a dog in NYC",
-                     "item": f"{site}/"},
-                    {"@type": "ListItem", "position": 2, "name": "NYC dog rescues"},
+                    {"@type": "ListItem", "position": 1,
+                     "name": f"Adopt a dog in {c.short}",
+                     "item": f"{site}/" if c.path == "/" else f"{site}{c.path}"},
+                    {"@type": "ListItem", "position": 2,
+                     "name": f"{c.short} dog rescues"},
                 ],
             },
         ],
@@ -5042,18 +5061,18 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date) -> str:
     return f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">{robots}
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
-<link rel="canonical" href="{site}/rescues">
+<link rel="canonical" href="{site}{c.rescues_path}">
 <link rel="icon" href="/favicon.png" type="image/png">
 <script type="application/ld+json">{ld}</script>
 <style>{_STATIC_PAGE_CSS}</style></head><body>
-<a class="back" href="/">&larr; All adoptable dogs in NYC</a>
-<h1>NYC dog rescues</h1>
+<a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>
+<h1>{c.short} dog rescues</h1>
 <p class="lead">{html.escape(desc)} {intro}</p>
 {''.join(cards)}
-<footer><a href="/">Today&rsquo;s new dogs</a></footer>
+<footer><a href="{c.path}">Today&rsquo;s new dogs</a>{also}</footer>
 </body></html>"""
 
 
@@ -5257,10 +5276,17 @@ def write(pages, for_date: date = None) -> Path:
 
     primary, first_written = None, None
     all_flat, urls, per_city = [], [], []
+    # Every path this pass rendered, including the ones deliberately kept out of
+    # the sitemap. `urls` alone is not enough: a page withheld because it is
+    # noindex is also absent from `written_paths`, so the carry-over would find
+    # it in the previous sitemap and put it straight back — resubmitting the one
+    # page we just decided not to submit.
+    rendered = set()
     for code, dated in by_city.items():
         c = cities.resolve(code)
         out = OUT_DIR / c.file
         out.write_text(render(dated, for_date, c.code), encoding="utf-8")
+        rendered.add(c.path)
         first_written = first_written or out
         if code == cities.DEFAULT_CITY:
             primary = out
@@ -5281,19 +5307,22 @@ def write(pages, for_date: date = None) -> Path:
             (rdir / f"{slugify(label)}.html").write_text(
                 _rescue_page(label, dogs, site), encoding="utf-8")
 
-        # The rescue index is the default city's, and lists only its rescues: a
-        # per-city rescue index is a separate piece of design, and quietly mixing
-        # two cities' rescues into one page titled "NYC dog rescues" would be
-        # worse than waiting for it.
+        # One rescue index per city, at /rescues and /la/rescues, each listing
+        # only its own city's rescues.
+        rpath = OUT_DIR / c.rescues_file
+        rpath.parent.mkdir(parents=True, exist_ok=True)
+        rpath.write_text(_rescues_page(by_rescue, site, for_date, c.code),
+                         encoding="utf-8")
+        rendered.add(c.rescues_path)
+
         # A city with no dogs is rendered noindex, so it must not also be
         # submitted in the sitemap — that combination asks Google to crawl a page
-        # and then tells it not to keep it.
+        # and then tells it not to keep it. Its rescue index is empty for the
+        # same reason and gets the same treatment.
         if flat:
             urls.append(f"{site}/" if c.path == "/" else f"{site}{c.path}")
-        if code == cities.DEFAULT_CITY:
-            (OUT_DIR / "rescues.html").write_text(
-                _rescues_page(by_rescue, site, for_date), encoding="utf-8")
-            urls.append(f"{site}/rescues")
+        if by_rescue:
+            urls.append(f"{site}{c.rescues_path}")
         urls += [f"{site}/rescue/{slugify(l)}" for l in by_rescue]
         urls += [f"{site}{dog_path(d)}" for d in flat]
 
@@ -5302,7 +5331,7 @@ def write(pages, for_date: date = None) -> Path:
     # One sitemap, from the union of every city in this pass plus whatever the
     # last one published for a city that is not. A per-city sitemap would be a
     # sitemap announcing that the other city's URLs are gone.
-    written_paths = {u[len(site):] or "/" for u in urls}
+    written_paths = {u[len(site):] or "/" for u in urls} | rendered
     carried = _carried_sitemap_urls(site, owned, written_paths)
     if carried:
         print(f"  sitemap: carrying {len(carried)} URL(s) from the last run "
@@ -5322,6 +5351,7 @@ def write(pages, for_date: date = None) -> Path:
     (OUT_DIR / "404.html").write_text(_not_found_page(all_flat, site),
                                       encoding="utf-8")
 
+    indexes = ", ".join(cities.resolve(k).rescues_path for k in by_city)
     print(f"  {len(all_flat)} dog pages ({'; '.join(per_city)}), "
-          f"/rescues, sitemap, 404")
+          f"{indexes}, sitemap, 404")
     return primary or first_written

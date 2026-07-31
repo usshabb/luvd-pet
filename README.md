@@ -227,10 +227,20 @@ all of them.
 
 | URL | What it is |
 |---|---|
-| `/` | the daily page: one flat grid of every adoptable dog, newest first |
-| `/rescues` | the roster: every rescue, its dog count, and a link to its own site |
+| `/`, `/la` | the daily page: one flat grid of every adoptable dog, newest first |
+| `/rescues`, `/la/rescues` | that city's roster: every rescue, its dog count, and a link to its own site |
 | `/rescue/<slug>` | one rescue's full list — targets "muddy paws rescue dogs" |
 | `/dog/<rescue>/<slug>` | one dog, with the rescue's own write-up |
+
+One roster **per city**, not one combined page. "Which dog rescues are in LA?"
+is a local question, and a page covering everywhere could only be titled
+something like "Dog rescues in NYC and LA" — competing with itself and reading
+as a worse answer to either question than a dedicated page. Each roster links
+the others at its foot ("Also in Los Angeles →"), which is where the
+whole-site view lives. Every link into a roster — the city page's footer, each
+rescue page, the JSON-LD breadcrumb — points at the roster for *that page's*
+city; `tests/test_multicity.py` fails if any of them points at another city's,
+because that bug shipped twice.
 
 `/` and `/rescue/*` carry JSON-LD; each rescue page declares its rescue as an
 `AnimalShelter` so answer engines read them as organizations rather than list
@@ -239,7 +249,7 @@ link every rescue page — before that they were reachable only from individual
 dog pages, which left them effectively unlinked.
 
 Outbound links to a rescue's own site live on that rescue's page and on
-`/rescues`, deliberately not in the site-wide footer: repeating the same seven
+its city's roster, deliberately not in the site-wide footer: repeating the same
 external links across 230+ pages is a link-scheme pattern, and footer
 boilerplate is discounted anyway.
 

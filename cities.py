@@ -66,6 +66,25 @@ class City:
         return f"{self.name if self.code != 'NYC' else 'New York'}, {self.state}"
 
     @property
+    def rescues_path(self) -> str:
+        """Where this city's rescue index is published.
+
+        "/rescues" for the city at the root, "/la/rescues" for the rest. One page
+        per city rather than a combined one, because that page exists to answer
+        "which dog rescues are in Los Angeles?" — a local question, and a single
+        page trying to serve every city's version of it can only be titled
+        something like "Dog rescues in NYC and LA", which ranks worse for either
+        than a dedicated page does for its own. It also degrades as cities are
+        added, where a page each does not.
+        """
+        return "/rescues" if self.path == "/" else f"{self.path}/rescues"
+
+    @property
+    def rescues_file(self) -> str:
+        """The file in public/ that serves rescues_path."""
+        return self.rescues_path.lstrip("/") + ".html"
+
+    @property
     def title(self) -> str:
         return f"Adopt a dog in {self.short} — LUVD"
 

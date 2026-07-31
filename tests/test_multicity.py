@@ -28,6 +28,8 @@ What it is guarding, in order of how much damage it prevents:
 The Los Angeles source here is a fake defined in this file. It is never
 registered in `sources/registry.py`, so nothing in production can reach it.
 """
+import html
+import json
 import os
 import re
 import sqlite3
@@ -789,7 +791,14 @@ def test_events_email_points_at_its_own_city():
         html_body = emailer.build_events_html(evs, city)
         links = {u for u in re.findall(r'href="(https://luvd\.com[^"]*)"', html_body)
                  if "unsubscribe" not in u}
-        eq(f"{city}'s events mail links {city}'s page", links, {want})
+        # Only the links that name a city — the mail also links individual dogs
+        # and the rescue's own page, which are city-agnostic URLs. The claim
+        # being made is that no city page OTHER than this one is ever linked.
+        homes = {c.path if c.path == "/" else c.path
+                 for c in cities.CITIES.values()}
+        city_links = {u for u in links
+                      if (u[len("https://luvd.com"):] or "/") in homes}
+        eq(f"{city}'s events mail links {city}'s page", city_links, {want})
         text_body = emailer.build_events_text(evs, city)
         eq(f"{city}'s text part does too", want in text_body, True)
 
@@ -930,6 +939,75 @@ def test_filter_menus_cannot_be_clipped():
     # measuring the wrong thing, and it should say so rather than pass quietly.
     eq("the menus are still position:fixed somewhere",
        "position:fixed" in "".join(b for _, b in _rules_for(css, ".fmenu")), True)
+
+
+def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
+    """Every rescue-index link on a city's pages points at THAT city's index.
+
+    This has been reported twice: on the LA page, "All rescues" went to New
+    York's list. The mechanism both times was a hardcoded "/rescues" — easy to
+    write, and invisible unless you load the second city's page. So the check is
+    against rendered markup for every live city, over the city page, its rescue
+    pages and its index, and it fails on ANY href pointing at a foreign index.
+
+    The one deliberate exception is the cross-city row at the foot of an index
+    ("Also in Los Angeles →"), which is the whole-site view. It is recognised by
+    its "Also in" label rather than exempted wholesale, so a stray link cannot
+    hide behind the exemption.
+    """
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+
+    # Every path that serves a rescue index, so a link to any of them can be
+    # identified as "an index link" without guessing at the URL shape.
+    index_paths = {c.rescues_path: c.code for c in cities.CITIES.values()}
+    eq("more than one index to confuse", len(index_paths) > 1, True)
+
+    checked = 0
+    for code in cities.live_codes():
+        c = cities.CITIES[code]
+        d = _Dog(id=f"t:{code}", name="Test", source="t", source_label="T Rescue",
+                 url="https://example.org/1", photos=["https://example.org/p.jpg"],
+                 breed="Terrier", city=code)
+        d.first_seen = "2026-07-31"
+        dated = [("2026-07-31", [d])]
+        pages = {
+            f"{code} city page": _page.render(dated, _date(2026, 7, 31), code),
+            f"{code} rescue page": _page._rescue_page(
+                "T Rescue", [d], "https://luvd.com"),
+            f"{code} rescue index": _page._rescues_page(
+                {"T Rescue": [d]}, "https://luvd.com", _date(2026, 7, 31), code),
+        }
+        for what, markup in pages.items():
+            # Anchors only: an href is what a visitor follows. JSON-LD is
+            # checked separately below.
+            for href, label in re.findall(r'<a [^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                                          markup, re.S):
+                path = href.split("://")[-1]
+                path = path[path.index("/"):] if "://" in href else href
+                owner = index_paths.get(path.rstrip("/") or "/")
+                if owner is None:
+                    continue                      # not an index link at all
+                checked += 1
+                if owner != code and "Also in" in label:
+                    continue                      # the deliberate cross-link
+                eq(f"{what}: {href} belongs to", owner, code)
+
+        # And the breadcrumb trail, which is the same claim made to a crawler.
+        ld = json.loads(html.unescape(re.search(
+            r'application/ld\+json">(.*?)</script>',
+            pages[f"{code} rescue page"], re.S).group(1)))
+        trail = [n for n in ld["@graph"]
+                 if n["@type"] == "BreadcrumbList"][0]["itemListElement"]
+        crumb = [i for i in trail if str(i.get("item", "")).endswith("rescues")]
+        eq(f"{code} breadcrumb names one index", len(crumb), 1)
+        eq(f"{code} breadcrumb index", crumb[0]["item"],
+           f"https://luvd.com{c.rescues_path}")
+
+    # The premise: if the link vanished entirely the loop above would pass
+    # having examined nothing.
+    eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
 def _page_css() -> str:
