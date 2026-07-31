@@ -4800,27 +4800,34 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
 <meta name="twitter:description" content="{html.escape(desc)}">
 {f'<meta name="twitter:image" content="{html.escape(photo)}">' if photo else ''}
 <script type="application/ld+json">{json.dumps(ld)}</script>
+<!-- One level of brace escaping in this block, not two. It carried four
+     braces per rule for a long time; an f-string turns four into two, so
+     every rule reached the browser malformed and every dog page rendered as
+     unstyled HTML - including the page a shared link lands on. There is no
+     second format pass: _dog_page()'s return value is written straight to
+     disk by page.write(), so two braces here is the one brace CSS needs.
+     Guarded by tests/test_multicity.py::test_dog_page_css_not_double_escaped. -->
 <style>
-  body{{{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     max-width:720px;margin:0 auto;padding:28px 20px 60px;line-height:1.6;
-    background:#fbfbfd;color:#1d1d1f;}}}}
-  a{{{{color:#FF002E;}}}}
-  .dp-photo{{{{width:100%;border-radius:18px;margin-bottom:22px;}}}}
-  h1{{{{font-size:38px;letter-spacing:-.03em;margin:0 0 6px;}}}}
-  h2{{{{font-size:18px;margin:26px 0 6px;}}}}
-  .dp-sub{{{{color:#6e6e73;margin:0 0 4px;}}}}
-  .dp-facts{{{{color:#6e6e73;margin:0;}}}}
-  .dp-wait{{{{color:#a86500;font-weight:600;}}}}
-  .dp-prog{{{{background:#fff6e5;border-radius:12px;padding:12px 14px;
-    margin:16px 0 0;font-size:14.5px;}}}}
-  .dp-prog b{{{{color:#a86500;}}}}
-  .dp-cta{{{{display:inline-block;background:#FF002E;color:#fff;text-decoration:none;
-    padding:13px 22px;border-radius:12px;font-weight:600;margin-top:26px;}}}}
-  .dp-back{{{{display:block;margin-bottom:20px;font-size:14px;}}}}
-  @media (prefers-color-scheme:dark){{{{
-    body{{{{background:#000;color:#f5f5f7;}}}} .dp-sub,.dp-facts{{{{color:#98989d;}}}}
-    .dp-prog{{{{background:#2a2114;}}}} .dp-prog b{{{{color:#f0b357;}}}}
-  }}}}
+    background:#fbfbfd;color:#1d1d1f;}}
+  a{{color:#FF002E;}}
+  .dp-photo{{width:100%;border-radius:18px;margin-bottom:22px;}}
+  h1{{font-size:38px;letter-spacing:-.03em;margin:0 0 6px;}}
+  h2{{font-size:18px;margin:26px 0 6px;}}
+  .dp-sub{{color:#6e6e73;margin:0 0 4px;}}
+  .dp-facts{{color:#6e6e73;margin:0;}}
+  .dp-wait{{color:#a86500;font-weight:600;}}
+  .dp-prog{{background:#fff6e5;border-radius:12px;padding:12px 14px;
+    margin:16px 0 0;font-size:14.5px;}}
+  .dp-prog b{{color:#a86500;}}
+  .dp-cta{{display:inline-block;background:#FF002E;color:#fff;text-decoration:none;
+    padding:13px 22px;border-radius:12px;font-weight:600;margin-top:26px;}}
+  .dp-back{{display:block;margin-bottom:20px;font-size:14px;}}
+  @media (prefers-color-scheme:dark){{
+    body{{background:#000;color:#f5f5f7;}} .dp-sub,.dp-facts{{color:#98989d;}}
+    .dp-prog{{background:#2a2114;}} .dp-prog b{{color:#f0b357;}}
+  }}
 </style></head><body>
 <a class="dp-back" href="{c.path}">← All adoptable dogs in {c.short}</a>
 {''.join(body_bits)}

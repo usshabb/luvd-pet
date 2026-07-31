@@ -818,6 +818,53 @@ def test_events_email_points_at_its_own_city():
        ("View Event Details" in body) or ("See Adoptable Dogs" in body), False)
 
 
+def test_dog_page_css_not_double_escaped():
+    """Every generated page must emit CSS the browser can actually parse.
+
+    The dog pages shipped for a long time with four braces per rule in the
+    source. An f-string turns four into two, so the browser received
+    `body{{...}}`, treated every rule as malformed, and rendered the page as
+    unstyled HTML — Times New Roman and blue links. It was reported by someone
+    following a shared link, which is the worst place for it: a dog page is
+    exactly what a share resolves to.
+
+    Nothing in the pipeline formats these strings twice, so a doubled brace in
+    the output is always a bug. Asserted on the rendered CSS of every page kind
+    rather than on the source, because the source is where the escaping is easy
+    to get wrong and the output is where it matters.
+    """
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+
+    d = _Dog(id="t:1", name="Test", source="t", source_label="T Rescue",
+             url="https://example.org/1", photos=["https://example.org/p.jpg"],
+             breed="Mixed breed", age="2 years", sex="Male", weight="20 lbs",
+             location="New York, NY", description="A good dog.")
+    d.city = "NYC"
+    d.first_seen = "2026-07-31"
+    today = _date(2026, 7, 31)
+
+    pages = {
+        "city page": _page.render([("2026-07-31", [d])], today, "NYC"),
+        "dog page": _page._dog_page(d, "https://luvd.com", today),
+    }
+    for label, html_out in pages.items():
+        blocks = re.findall(r"<style>(.*?)</style>", html_out, re.S)
+        eq(f"{label} has a stylesheet", bool(blocks), True)
+        css = "\n".join(blocks)
+        # `{{` only. A doubled CLOSING brace is ordinary valid CSS — it is how a
+        # nested at-rule ends, e.g. `@keyframes x{from{...}to{...}}` — and the
+        # city page has three of them legitimately. Two adjacent OPENING braces
+        # never occur in valid CSS, which makes them an exact signal for an
+        # f-string that escaped one level too many.
+        eq(f"{label} CSS has no doubled opening braces", css.count("{{"), 0)
+        # A malformed rule can also leave the braces unbalanced, which is the
+        # other way a stylesheet silently stops applying.
+        eq(f"{label} CSS braces balance",
+           css.count("{") == css.count("}"), True)
+
+
 def test_filter_menus_cannot_be_clipped():
     """An open filter menu must never sit inside a clipping ancestor.
 
