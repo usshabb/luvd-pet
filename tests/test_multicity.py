@@ -1025,6 +1025,27 @@ def test_the_about_sheet_can_reach_its_own_bottom():
     Both halves are asserted: a scroller, and no centring to defeat it.
     """
     css = _page_css()
+
+    # The base rule first. The mobile-only version of this fix shipped and left
+    # desktop broken: .modal is capped at min(88vh,900px) at every width, so at
+    # 950x775 the 767px of content spilled 85px past a 682px card and the
+    # buttons rendered over the backdrop. About is scoped by nothing — it needs
+    # to be a scroller everywhere, not inside one media query.
+    # _rules_for hands back everything since the previous brace, so a rule with
+    # a comment above it arrives as "/* ... */ .about". Strip those before
+    # matching, or the selector never compares equal to anything.
+    def bare(sel):
+        return " ".join(re.sub(r"/\*.*?\*/", " ", sel, flags=re.S).split())
+
+    base = [(sel, body) for sel, body in _rules_for(css, ".about")
+            if bare(sel) == ".about"]
+    eq("About has a base rule at all", len(base), 1)
+    flat = base[0][1].replace(" ", "")
+    eq("it scrolls at every width", "overflow-y:auto" in flat, True)
+    # .modal is a column flex container; a flex child will not shrink below its
+    # content without this, so overflow-y alone would do nothing.
+    eq("and may shrink below its content", "min-height:0" in flat, True)
+
     rules = _rules_for(css, ".scrim.compact.sheet .about")
     own = [(sel, body) for sel, body in rules
            if sel.endswith(".about")]

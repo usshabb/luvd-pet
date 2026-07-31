@@ -2141,6 +2141,17 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     line-height:1.35;}}
 
   /* ---------- about modal ---------- */
+  /* About is the one modal whose content is not wrapped in .m-scroll, so it
+     needs to be its own scroller. Without this it was an unstyled div in a
+     .modal capped at min(88vh,900px) with overflow:visible — at 950x775 the
+     content is 767px against a 682px cap, and the buttons and the line under
+     them rendered *outside* the card, over the backdrop.
+     Same three properties .m-scroll uses, for the same reason: .modal is
+     already a column flex container, and a flex child will not shrink below
+     its content unless min-height says it may. This is the base rule, so it
+     holds at every width — the sheet rules further down only handle how the
+     content sits inside it once it fits. */
+  .about{{flex:1 1 auto;min-height:0;overflow-y:auto;}}
   .about-hero{{background:
       radial-gradient(120% 130% at 50% 0%, var(--accent-soft) 0%, transparent 68%);
     padding:52px 32px 34px;display:flex;justify-content:center;}}
