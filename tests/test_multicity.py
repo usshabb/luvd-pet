@@ -819,37 +819,68 @@ def test_events_email_points_at_its_own_city():
 
 
 def test_filter_menus_cannot_be_clipped():
-    """The filter menus must never sit inside a clipping or transformed ancestor.
+    """An open filter menu must never sit inside a clipping ancestor.
 
-    This bug shipped twice and both times looked like "the menus open behind the
-    dogs on Safari". The menus are position:fixed. WebKit clips a fixed
-    descendant to any scrolling ancestor's box, and makes a containing block out
-    of any ancestor carrying transform, filter, backdrop-filter, perspective,
-    contain or will-change. Either way the menu gets cut down to the pill row's
-    own height, which on a phone is indistinguishable from being painted under
-    the grid.
+    This shipped twice, both times reported as "the menus open behind the dogs on
+    Safari". The menus are position:fixed. WebKit clips a fixed descendant to any
+    *scrolling* ancestor's box, and makes a containing block out of any ancestor
+    carrying transform, filter, backdrop-filter, perspective, contain or
+    will-change. The pill row scrolls sideways on a phone, so while the menus were
+    its children each one was cut down to the row's own height.
 
-    The first fix removed -webkit-overflow-scrolling:touch. The bug returned
-    immediately from the plain overflow-x:auto that was left behind, because
-    z-index addresses paint order and this is clipping — no stacking value lifts
-    content out of an ancestor's clip rect. So the invariant is structural: the
-    row that holds the pills does not scroll, mask, or transform.
+    The first fix removed -webkit-overflow-scrolling:touch and added a z-index.
+    The bug returned from the plain overflow-x:auto left behind, because z-index
+    settles paint order and this is clipping — no stacking value lifts content out
+    of an ancestor's clip rect.
 
-    Asserted against the real generated CSS rather than the source, so it holds
-    however the rule gets written.
+    So there are two acceptable shapes and this test accepts either:
+
+      * the row does not scroll or transform, so nothing clips; or
+      * the row may do as it likes, because an open menu is moved out of it into
+        a body-level layer.
+
+    What it refuses is the combination that broke: a scrolling row with the menus
+    still inside it. Asserted against the real rendered page, so it holds however
+    the code is rewritten.
     """
+    import page as _page
     css = _page_css()
+    src = _page.__file__ and open(_page.__file__, encoding="utf-8").read()
+
+    clips = ("overflow", "mask-image", "transform", "filter", "backdrop-filter",
+             "perspective", "contain:", "will-change",
+             "-webkit-overflow-scrolling")
     rules = _rules_for(css, ".fbar-pills")
     eq("the pill row has rules to check", bool(rules), True)
+    found = sorted({p for _, body in rules for p in clips if p in body})
 
-    banned = ("overflow", "mask-image", "-webkit-mask-image", "transform",
-              "filter", "backdrop-filter", "perspective", "contain:",
-              "will-change", "-webkit-overflow-scrolling")
-    found = sorted({p for sel, body in rules for p in banned if p in body})
-    eq("nothing that clips or transforms the pill row", found, [])
+    html = _page_html()
+    has_layer = 'id="fmenu-layer"' in html
+    # The layer is only an escape hatch if something actually moves the menu into
+    # it, so the test asks for the move as well as the container.
+    # Asserted on the contract, not on one expression: that the mover is defined
+    # and that the open path calls it. Pinning this to a literal like
+    # `menuLayer.appendChild` made the test fail the moment the lookup was made
+    # lazy, which is churn rather than protection.
+    moves_menu = ("function openMenuInLayer" in src
+                  and "openMenuInLayer(pill, menu)" in src
+                  and "openMenuInLayer" in html)
 
-    # The menus are only fixed on phones; if that ever changes this test is
-    # measuring the wrong thing, so assert the premise it rests on.
+    if found:
+        eq(f"the row clips ({', '.join(found)}), so a menu layer must exist",
+           has_layer, True)
+        eq("...and an open menu must be moved into it", moves_menu, True)
+        # And the layer itself must not reintroduce the problem it exists to fix.
+        layer_rules = _rules_for(css, ".fmenu-layer")
+        eq("the layer has rules to check", bool(layer_rules), True)
+        layer_bad = sorted({p for _, body in layer_rules for p in clips
+                            if p in body})
+        eq("the layer itself clips nothing", layer_bad, [])
+    else:
+        eq("the row clips nothing, so no layer is required", True, True)
+
+    # The premise the whole test rests on. If the menus stop being fixed this is
+    # measuring the wrong thing, and it should say so rather than pass quietly.
     eq("the menus are still position:fixed somewhere",
        "position:fixed" in "".join(b for _, b in _rules_for(css, ".fmenu")), True)
 
@@ -865,6 +896,18 @@ def _page_css() -> str:
     d.first_seen = "2026-07-31"
     html_out = _page.render([("2026-07-31", [d])], _date(2026, 7, 31), "NYC")
     return "\n".join(re.findall(r"<style>(.*?)</style>", html_out, re.S))
+
+
+def _page_html() -> str:
+    """A real rendered page, for asserting on markup and script as shipped."""
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+    d = _Dog(id="t:1", name="Test", source="t", source_label="T",
+             url="https://example.org/1", photos=["https://example.org/p.jpg"],
+             breed="Terrier")
+    d.first_seen = "2026-07-31"
+    return _page.render([("2026-07-31", [d])], _date(2026, 7, 31), "NYC")
 
 
 def _rules_for(css: str, selector: str):

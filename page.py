@@ -1540,7 +1540,14 @@ def render(dated, for_date: date = None, city: str = None) -> str:
      the bar you close it from. Toggled by paintPillFade(), which already knows
      when a menu is open. Anything added here that draws outside the row's box
      now stays correct without a third special case. */
-  .fbar-pills.menu-open{{position:relative;z-index:49;}}
+  /* The layer that holds whichever menu is open. z-index 49 keeps it over the
+     grid and under the sticky nav at 50 — a menu should cover the dogs, not the
+     bar you close it from. inset:0 makes it exactly the viewport, so a menu's
+     own left/right/top resolve as they did when it was fixed to the viewport
+     directly. pointer-events pass through everywhere except the menu itself, so
+     an empty layer cannot swallow a tap on the page beneath it. */
+  .fmenu-layer{{position:fixed;inset:0;z-index:49;pointer-events:none;}}
+  .fmenu-layer > .fmenu{{pointer-events:auto;}}
   /* The results header: count left, sort right, sitting on top of the grid.
      The count is always on the page, never toggled. It used to appear only once
      a filter was applied, which pushed the whole grid down at the exact moment
@@ -1659,7 +1666,10 @@ def render(dated, for_date: date = None, city: str = None) -> str:
   :root[data-theme="dark"] .fmenu{{
     box-shadow:0 4px 12px rgba(0,0,0,.5),0 22px 60px rgba(0,0,0,.6);}}
   .fmenu[hidden]{{display:none;}}
-  .fpill.open .fmenu{{opacity:1;transform:none;}}
+  /* On the menu, not on `.fpill.open .fmenu`: an open menu is moved out of its
+     pill into #fmenu-layer, so a descendant selector stops matching exactly when
+     it is needed. */
+  .fmenu.open{{opacity:1;transform:none;}}
   .fmenu button{{all:unset;cursor:pointer;font-size:14.5px;font-weight:500;
     padding:9px 12px;border-radius:9px;text-align:left;color:var(--text);
     display:flex;justify-content:space-between;align-items:center;gap:16px;}}
@@ -2226,25 +2236,38 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        them centred until they overflow, then falls back to flex-start — plain
        `center` in a scroll container puts the first pill out of reach. */
     .fbar{{margin:22px 0 -4px;}}
-    /* THE PILL ROW MUST NOT SCROLL, MASK, OR TRANSFORM. Read this before adding
-       anything to it.
-       The filter menus are position:fixed and open over the grid. WebKit clips a
-       fixed descendant to any scrolling ancestor's box, and makes a containing
-       block out of any ancestor with a transform, filter, backdrop-filter,
-       perspective, contain or will-change. Give this row any of those and every
-       menu is cut off at the row's own height — which on a phone looks exactly
-       like the menu opening behind the dogs.
-       That bug shipped twice. First from -webkit-overflow-scrolling:touch, which
-       was removed. Then it came straight back from the plain overflow-x:auto
-       left behind, because z-index fixes paint ORDER and this is CLIPPING — no
-       stacking value can lift content out of an ancestor's clip rect.
-       So the row wraps instead of scrolling. Five pills go onto two lines at
-       375px, which also fixes what the scroller cost: Foster used to sit 19px
-       off the right edge behind a fade, discoverable only by swiping a row most
-       people never realised moved. Nothing is hidden now.
-       tests/test_multicity.py::test_filter_menus_cannot_be_clipped fails if any
-       of these properties comes back. */
-    .fbar-pills{{flex-wrap:wrap;justify-content:center;row-gap:8px;}}
+    /* The row scrolls sideways again, and that is only safe because an open menu
+       no longer lives inside it — see openMenuInLayer(). Read this before
+       touching either.
+       The menus are position:fixed. WebKit clips a fixed descendant to any
+       scrolling ancestor's box, and makes a containing block out of any ancestor
+       carrying transform, filter, backdrop-filter, perspective, contain or
+       will-change. While the menus were children of this row, that meant each
+       one was cut down to the row's own 87px — which on a phone is
+       indistinguishable from the menu opening behind the dogs.
+       That shipped twice: first from -webkit-overflow-scrolling:touch, then
+       straight back from the plain overflow-x:auto left behind, because z-index
+       fixes paint ORDER and clipping is not an ordering problem. The row can
+       scroll now because the menu is moved to a body-level layer when it opens,
+       where nothing above it clips.
+       So: scroll and mask this row as much as you like. What must not change is
+       that an open menu is NOT a descendant of it.
+       tests/test_multicity.py::test_filter_menus_cannot_be_clipped holds the
+       pair together — if this row scrolls, the layer and the move must exist. */
+    .fbar-pills{{flex-wrap:nowrap;justify-content:safe center;overflow-x:auto;
+      padding-bottom:2px;scrollbar-width:none;}}
+    .fbar-pills::-webkit-scrollbar{{display:none;}}
+    /* The fade that says the row keeps going. A mask, not an overlaid gradient,
+       for two reasons: a mask cannot intercept a touch, so the pills under it
+       stay tappable and the row stays scrollable; and it fades to *transparent*
+       rather than to a colour, so it is correct on whatever background the
+       current theme paints without knowing anything about it. The classes are
+       set by paintPillFade() — the edge only fades when there is something
+       behind it, so the cue disappears at the end of the scroll and never
+       appears at all if the pills happen to fit. */
+    .fbar-pills.fade-r{{-webkit-mask-image:linear-gradient(to right,#000
+      calc(100% - 34px),transparent);mask-image:linear-gradient(to right,#000
+      calc(100% - 34px),transparent);}}
     .fbar-meta{{margin:12px 0 -10px;}}
     /* 17px here, against 19px on desktop. 19px is exactly the phone size of the
        card dog names (.nm, 19px/700), so the count sat at the size and weight of
@@ -3940,7 +3963,7 @@ function fOptions(kind) {{
 function buildFilterMenus() {{
   document.querySelectorAll('.fpill[data-kind]').forEach(pill => {{
     const kind = pill.dataset.kind;
-    const menu = pill.querySelector('.fmenu');
+    const menu = menuOf(pill);
     if (!menu) return;
     // `detail` is the optional third element — the size ranges. Greyed, so the
     // name is what you read and the number is what you check.
@@ -3958,7 +3981,7 @@ function paintFilters(pool) {{
     const kind = pill.dataset.kind;
     const cur = FILTERS[kind];
     const base = pool.filter(d => fMatch(d, kind));
-    pill.querySelectorAll('.fmenu button').forEach(opt => {{
+    (menuOf(pill) || pill).querySelectorAll('button[data-v]').forEach(opt => {{
       const v = opt.dataset.v;
       const n = v ? base.filter(d => fieldOf(d, kind) === v).length : base.length;
       opt.querySelector('b').textContent = n;
@@ -3994,25 +4017,85 @@ function paintFilters(pool) {{
 // without a breakpoint deciding for it. Renaming the pill didn't make this
 // dead code; it moved the width where it starts to matter.
 const pillRow = document.getElementById('fbar-pills');
-// The row no longer scrolls, so there is no scroll position to track and no
-// edge fade to paint — both are gone along with the mask that used to draw it.
-// See .fbar-pills in the mobile block for why the scroller had to go.
-//
-// What remains is the stacking promotion. It is not what fixes the clipping —
-// nothing about z-index can — but it keeps the open menu painting above the grid
-// if anything above this row ever becomes a stacking context again.
+// Looked up lazily, not at parse time: this script runs before the end of the
+// body, and #fmenu-layer is declared after it. Resolving eagerly gave a silent
+// null, openMenuInLayer() returned early every time, and the menus stayed inside
+// the scrolling row — the exact bug this was written to fix, with no error to
+// show for it.
+let _menuLayer = null;
+function menuLayerEl() {{
+  if (!_menuLayer) _menuLayer = document.getElementById('fmenu-layer');
+  return _menuLayer;
+}}
+
+// The menu element for a pill, cached the first time it is asked for. Cached
+// because an open menu is moved out of its pill and into #fmenu-layer, so
+// pill.querySelector('.fmenu') stops finding it precisely while it is open —
+// which is exactly when the counts, the close and the aria all need it.
+function menuOf(pill) {{
+  if (!pill) return null;
+  if (!pill._fmenu) pill._fmenu = pill.querySelector('.fmenu');
+  return pill._fmenu;
+}}
+
+// Why this exists: the pill row scrolls sideways on a phone, and WebKit clips a
+// position:fixed descendant to a scrolling ancestor's box. While the menus were
+// children of that row every one was cut down to the row's own height and read
+// as having opened behind the dogs. No z-index undoes that — clipping is not an
+// ordering problem — so an open menu leaves the row for a body-level layer and
+// goes back when it closes. The row is then free to scroll and fade as it likes.
+function openMenuInLayer(pill, menu) {{
+  const layer = menuLayerEl();
+  if (!layer || menu.parentElement === layer) return;
+  menu._homePill = pill;
+  layer.appendChild(menu);
+}}
+
+function returnMenuHome(menu) {{
+  const home = menu && menu._homePill;
+  if (home && menu.parentElement !== home) home.appendChild(menu);
+}}
+// scrollWidth/clientWidth force layout, so they're read only when something
+// could have changed them: a resize, or a repaint that rewrote the pill labels
+// (Foster's count changes width as you filter). Scrolling itself reads only
+// scrollLeft, which is free.
+let pillSlack = 0;
 function paintPillFade() {{
   if (!pillRow) return;
-  pillRow.classList.toggle('menu-open',
-    !!pillRow.querySelector('.fpill.open'));
+  // A mask paints on the element's own box, so anything a descendant draws
+  // outside that box is masked away — and an open filter menu is fixed,
+  // full-width and far taller than this row, so it vanishes completely. The
+  // cue is pointless while a menu is covering the row anyway, so it stands
+  // down for as long as one is open. Anything else added here that escapes the
+  // row's box needs the same treatment.
+  const menuOpen = !!pillRow.querySelector('.fpill.open');
+  // The other half of the same problem: the row has to out-rank the grid while
+  // the menu is up, or it opens behind the dogs. See .fbar-pills.menu-open.
+  pillRow.classList.toggle('menu-open', menuOpen);
+  const room = !menuOpen && pillSlack > 1;
+  const x = pillRow.scrollLeft;
+  pillRow.classList.toggle('fade-r', room && x < pillSlack - 1);
+  pillRow.classList.toggle('fade-l', room && x > 1);
 }}
-function measurePillRow() {{ paintPillFade(); }}
+function measurePillRow() {{
+  if (!pillRow) return;
+  pillSlack = pillRow.scrollWidth - pillRow.clientWidth;
+  paintPillFade();
+}}
+if (pillRow) {{
+  pillRow.addEventListener('scroll', paintPillFade, {{passive: true}});
+  addEventListener('resize', measurePillRow, {{passive: true}});
+}}
 
 function closeFilterMenus() {{
   document.querySelectorAll('.fpill').forEach(p => {{
     p.classList.remove('open');
-    const menu = p.querySelector('.fmenu');
-    if (menu) menu.hidden = true;
+    const menu = menuOf(p);
+    if (menu) {{
+      menu.classList.remove('open');
+      menu.hidden = true;
+      returnMenuHome(menu);
+    }}
     const trigger = p.querySelector('button');
     if (trigger) trigger.setAttribute('aria-expanded', 'false');
   }});
@@ -4090,7 +4173,7 @@ function paintSort() {{
   // filled control here would read as "you've narrowed the list". The menu
   // carries the selection instead, in the accent colour the filter menus
   // already use for theirs.
-  pill.querySelectorAll('.fmenu button').forEach(opt =>
+  (menuOf(pill) || pill).querySelectorAll('button[data-v]').forEach(opt =>
     opt.setAttribute('aria-selected', opt.dataset.v === sortBy ? 'true' : 'false'));
 }}
 
@@ -4253,7 +4336,7 @@ function toggleSavedView() {{
 buildFilterMenus();
 document.querySelectorAll('.fpill').forEach(pill => {{
   const trigger = pill.querySelector('button');
-  const menu = pill.querySelector('.fmenu');
+  const menu = menuOf(pill);
   if (!trigger || !menu) return;
   trigger.addEventListener('click', e => {{
     e.stopPropagation();
@@ -4261,12 +4344,29 @@ document.querySelectorAll('.fpill').forEach(pill => {{
     closeFilterMenus();
     if (open) return;
     menu.hidden = false;
-    // Fixed on phones, so the top has to be measured rather than inherited.
-    menu.style.top = window.matchMedia('(max-width:680px)').matches
-      ? (trigger.getBoundingClientRect().bottom + 10) + 'px' : '';
+    const r = trigger.getBoundingClientRect();
+    const phone = window.matchMedia('(max-width:680px)').matches;
+    if (phone) {{
+      // Out of the pill and into the body-level layer. The row it came from
+      // scrolls sideways, and WebKit clips a fixed child to a scrolling
+      // ancestor — the whole reason the menus kept "opening behind the dogs".
+      openMenuInLayer(pill, menu);
+      // Fixed, so the top is measured rather than inherited. Left and right come
+      // from the mobile stylesheet: a full-width sheet, because a menu anchored
+      // to the last pill would otherwise open off the edge of the screen.
+      menu.style.top = (r.bottom + 10) + 'px';
+      menu.style.left = '';
+    }} else {{
+      // Desktop keeps it in the pill, where absolute positioning under the
+      // trigger is simplest and the row does not scroll, so nothing clips.
+      returnMenuHome(menu);
+      menu.style.top = '';
+      menu.style.left = '';
+    }}
     requestAnimationFrame(() => {{
       pill.classList.add('open');
-      paintPillFade();          // promote the row above the grid
+      menu.classList.add('open');
+      paintPillFade();
     }});
     trigger.setAttribute('aria-expanded', 'true');
   }});
@@ -4540,6 +4640,12 @@ const heroForm = document.getElementById('hero-form');
 if (heroForm) heroForm.onsubmit = e =>
   handleSubscribe(e, 'hero-email', 'hero-note', 'hero-form');
 </script>
+  <!-- Where an open filter menu lives. A direct child of <body> on purpose:
+       every ancestor between a menu and the document used to be a chance to clip
+       it, and one of them (the scrolling pill row) did exactly that on iOS twice.
+       Nothing here scrolls, masks or transforms, so a fixed child cannot be cut
+       off however the rest of the page is rebuilt. See openMenuInLayer(). -->
+  <div class="fmenu-layer" id="fmenu-layer"></div>
 </body>
 </html>"""
 
