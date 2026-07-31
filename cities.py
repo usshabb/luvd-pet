@@ -81,7 +81,19 @@ class City:
         `title` keeps the suffix, because a <title> has no site_name beside it:
         in a search result the brand is the only thing telling you whose page
         this is.
+
+        The root URL names no city. luvd.com is the address people paste without
+        thinking about it, often to someone who does not live where they do — and
+        "Adopt a dog in NYC" tells that person this is not for them, when the
+        header's city picker is right there. A city path is chosen deliberately,
+        so /la keeps its city and says so.
+
+        Keyed on the path rather than on being DEFAULT_CITY: what matters is that
+        this URL is the generic front door, not which city happens to be served
+        at it. Move the default elsewhere and the rule still holds.
         """
+        if self.path == "/":
+            return "Adopt a dog"
         return f"Adopt a dog in {self.short}"
 
 
