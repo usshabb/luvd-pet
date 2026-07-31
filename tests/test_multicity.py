@@ -29,6 +29,7 @@ The Los Angeles source here is a fake defined in this file. It is never
 registered in `sources/registry.py`, so nothing in production can reach it.
 """
 import html
+import inspect
 import json
 import os
 import re
@@ -1008,6 +1009,140 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     # The premise: if the link vanished entirely the loop above would pass
     # having examined nothing.
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
+
+
+def test_dog_page_and_modal_say_the_same_things():
+    """The per-dog page and the in-page modal describe a dog identically.
+
+    They are two renderers for one thing: `_dog_page()` builds the page in
+    Python, `renderDog()` builds the modal in JavaScript. That split is why a
+    shared dog link used to look like a different website, and the fix was to
+    put both on the same stylesheet and the same class names — which only holds
+    while both still say the same words.
+
+    Asserted on CONTENT, not markup: the two will never be byte-identical (one
+    has a close button and similar-dogs scored across the whole city, the other
+    has a header and its own rescue's dogs) and a test pinned to markup would
+    fail on every cosmetic change without ever catching a real divergence.
+    """
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+
+    d = _Dog(id="muddypaws:1", name="Timmy", source="muddypaws",
+             source_label="Muddy Paws Rescue", url="https://example.org/timmy",
+             photos=["https://example.org/a.jpg", "https://example.org/b.jpg"],
+             breed="Terrier", description="Timmy loves absolutely everyone.",
+             age="4 months", sex="Male", weight="11 lbs",
+             location="Brooklyn, NY", city="NYC")
+    d.first_seen = "2026-07-31"
+    d.fee = "$525"
+    d.scores = {"energy": 3, "apartment": 5, "experience": 2, "alone": 3}
+    d.traits = [{"text": "Good with cats", "kind": "good"},
+                {"text": "Needs a quiet home", "kind": "caution"}]
+    d.size_outlook = {"status": "growing", "line": "Should reach about 40 lbs.",
+                      "now": 11.0, "adult": 40.0}
+    d.monthly_cost = {"low": 120, "high": 230, "items": [["Food", 37, 64]]}
+    d.breed_info = {"name": "Terrier", "known": True,
+                    "temperament": "Bold and busy.", "exercise": "Plenty.",
+                    "grooming": "Brush weekly.", "nyc": "Fine in a flat."}
+
+    page_html = _page._dog_page(d, "https://luvd.com", _date(2026, 7, 31))
+    script = _page_html()          # the city page, which carries renderDog()
+
+    # 1. Every SCALE word the page prints is a word the modal could print. The
+    #    vocabulary is one Python dict now; this is what proves the script is
+    #    reading it rather than carrying its own stale copy.
+    for key, spec in _page.SCALE.items():
+        eq(f"modal knows the {key} axis", spec["label"] in script, True)
+        for word in (spec["words"][0], spec["words"][4]):
+            eq(f"modal knows {word!r}", word in script, True)
+    for key, spec in _page.SCALE.items():
+        v = d.scores[key]
+        eq(f"page prints the {key} axis", spec["label"] in page_html, True)
+        eq(f"page prints {key}'s ends",
+           spec["words"][0] in page_html and spec["words"][4] in page_html, True)
+        # The pin's position IS the rating, so a wrong position is a wrong claim.
+        eq(f"{key} pin sits at the rating", f'style="left:{(v - 1) * 25}%"'
+           in page_html, True)
+
+    # 2. The facts, the write-up and the money.
+    for what, text in (("name", "Timmy"), ("rescue", "Muddy Paws Rescue"),
+                       ("breed", "Terrier"), ("age", "4 months"),
+                       ("weight", "11 lbs"), ("location", "Brooklyn, NY"),
+                       ("write-up", "Timmy loves absolutely everyone."),
+                       ("good trait", "Good with cats"),
+                       ("caution trait", "Needs a quiet home"),
+                       ("size line", "Should reach about 40 lbs."),
+                       ("monthly cost", "$120–230"),
+                       ("adoption fee", "$525"),
+                       ("breed guide", "Bold and busy.")):
+        eq(f"page shows the {what}", text in page_html, True)
+
+    # 3. Both photos are reachable, not just the first.
+    for u in d.photos:
+        eq(f"page offers {u}", u in page_html, True)
+
+    # 4. The modules the modal has, by the class names the shared stylesheet
+    #    styles. A renamed class here is a module that silently lost its design.
+    for cls in ("topgrid", "m-media", "m-hero", "thumbs", "idcol", "m-name",
+                "m-save", "m-rescue", "chips", "chip", "scores", "sc-track",
+                "sc-pin", "sc-ends", "sizecost", "sc-block", "tlists",
+                "cost-list", "szscale", "tabs", "pane", "breed-tag", "fact",
+                "bio", "m-foot", "cta"):
+        eq(f"page uses .{cls}", f'class="{cls}' in page_html
+           or f' {cls}"' in page_html or f'{cls} ' in page_html, True)
+
+    # 5. The adopt button goes somewhere real, and the write-up is not hidden.
+    m = re.search(r'<a class="cta" href="([^"]+)"', page_html)
+    eq("page has one adopt button", bool(m), True)
+    eq("and it is not a dead href", m.group(1) not in ("", "#"), True)
+    open_pane = re.search(r'<div class="pane on" data-p="0">(.*?)</div>',
+                          page_html, re.S)
+    eq("the open pane is the rescue's own words",
+       "Timmy loves absolutely everyone." in open_pane.group(1), True)
+
+
+def test_dog_page_links_a_stylesheet_that_gets_written():
+    """The dog page links the city stylesheet, and write() actually writes it.
+
+    The page carries almost no CSS of its own — that is the point, it shares the
+    city page's. So a link to a file nothing writes is not a cosmetic bug, it is
+    a page with no styling at all, which is exactly what shipped before.
+    """
+    import page as _page
+    for code in cities.live_codes():
+        c = cities.CITIES[code]
+        href = "/app.css" if c.path == "/" else f"{c.path}/app.css"
+        eq(f"{code} stylesheet path", c.rescues_path.rsplit("/", 1)[0] + "/app.css"
+           if c.path != "/" else "/app.css", href)
+
+    # write() lifts the sheet out of the page it just rendered, and refuses to
+    # guess if that page ever grows a second <style> block.
+    src = inspect.getsource(_page.write)
+    eq("write() extracts the sheet from the rendered page",
+       "<style>" in src and "app.css" in src, True)
+    eq("and refuses to guess when there is more than one",
+       "expected one <style> block" in src, True)
+
+    # The dog page links it rather than inlining a second copy.
+    from datetime import date as _date
+    from sources.base import Dog as _Dog
+    d = _Dog(id="t:1", name="T", source="muddypaws", source_label="Muddy Paws Rescue",
+             url="https://example.org/1", photos=[], breed="Terrier", city="NYC")
+    d.first_seen = "2026-07-31"
+    out = _page._dog_page(d, "https://luvd.com", _date(2026, 7, 31),
+                          css_href="/app.css")
+    eq("dog page links the sheet", '<link rel="stylesheet" href="/app.css">'
+       in out, True)
+    inline = re.findall(r"<style>(.*?)</style>", out, re.S)
+    eq("dog page has exactly one style block of its own", len(inline), 1)
+    # The contract is "it does not inline the stylesheet", not a byte count: the
+    # page's own rules are the handful that replace the modal's overlay shell,
+    # so they should stay a rounding error against the sheet they sit on top of.
+    shared = len(_page_css())
+    eq("and it is a fraction of the shared sheet, not a copy of it",
+       len(inline[0]) < shared * 0.15, True)
 
 
 def _page_css() -> str:

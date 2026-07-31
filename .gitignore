@@ -21,4 +21,13 @@ public/welcome-montage.jpg
 public/dog/
 public/rescue/
 public/rescues.html
+# The shared stylesheet and share kit, plus every non-default city's
+# copy of them and its rescue index. Globs rather than one line per
+# city so adding a city doesn't quietly start committing build output;
+# public/assets/ is real source and matches none of these.
+public/app.css
+public/share.js
+public/*/app.css
+public/*/share.js
+public/*/rescues.html
 public/sitemap.xml

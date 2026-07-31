@@ -24,7 +24,7 @@ import shutil
 from datetime import date
 from pathlib import Path
 from typing import List
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import cities
 from sources.base import Dog
@@ -229,6 +229,82 @@ _STATIC_PAGE_CSS = """
   footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--hair);
     color:var(--muted);font-size:13.5px;}
 """
+
+
+# The four ratings, their icons and the words at each of the five stops.
+# Python rather than a JS literal because two renderers need them now: the
+# modal builds them in the browser, and the per-dog page builds the same rows
+# server-side. Two copies of these words would drift, and the words are the
+# whole point — they were rewritten once already for being unclear.
+SCALE = {
+    "energy": {"icon": "⚡", "label": "Energy level",
+               "words": ["Couch potato", "Low key", "Middle of the road",
+                         "Active", "Zoomies"]},
+    "apartment": {"icon": "🏙️", "label": "Apartment fit",
+                  "words": ["Needs a yard", "Tight in a flat", "Workable",
+                            "Good fit", "Fine in a studio"]},
+    "experience": {"icon": "🎓", "label": "Experience needed",
+                   "words": ["Great first dog", "Beginner friendly",
+                             "Some experience", "Experienced home",
+                             "Needs experience"]},
+    "alone": {"icon": "🏠", "label": "Home alone",
+              "words": ["Needs company", "Short days only", "Half a day",
+                        "Most of a workday", "Fine all day"]},
+}
+
+
+# The before-paint theme bootstrap. A module constant with %LAT%/%LON% holes
+# rather than an f-string, because the script is full of JS braces and
+# doubling every one of them to survive an f-string is how the dog page CSS
+# ended up with four braces per rule and no styling at all.
+_THEME_SCRIPT = """<script>
+// Dark mode follows the sun over the city this page is for, not a fixed clock.
+// A 7pm/7am window is wrong for most of the year: NYC sunrise swings from
+// 5:25am in June to 7:20am in January. Standard NOAA solar position, run before
+// paint so there is no flash of the wrong theme.
+(function () {
+  try {
+    var LAT = %LAT%, LON = %LON%, RAD = Math.PI / 180;
+    var now = new Date();
+    var start = Date.UTC(now.getUTCFullYear(), 0, 0);
+    var doy = Math.floor((now.getTime() - start) / 86400000);
+    var g = (2 * Math.PI / 365) * (doy - 1 + (now.getUTCHours() - 12) / 24);
+
+    var eq = 229.18 * (0.000075 + 0.001868 * Math.cos(g)
+      - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g)
+      - 0.040849 * Math.sin(2 * g));
+    var decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g)
+      - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g)
+      - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+
+    // 90.833° accounts for refraction and the sun's disc.
+    var cosHa = Math.cos(90.833 * RAD) / (Math.cos(LAT * RAD) * Math.cos(decl))
+      - Math.tan(LAT * RAD) * Math.tan(decl);
+    var theme;
+    if (cosHa >= 1) { theme = 'dark'; }          // sun never rises
+    else if (cosHa <= -1) { theme = 'light'; }   // sun never sets
+    else {
+      var ha = Math.acos(cosHa) / RAD;
+      var sunrise = 720 - 4 * (LON + ha) - eq;    // minutes UTC
+      var sunset  = 720 - 4 * (LON - ha) - eq;
+      var mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+      theme = (mins >= sunrise && mins < sunset) ? 'light' : 'dark';
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) { /* fall back to the OS preference */ }
+})();
+</script>"""
+
+
+def _theme_script(c) -> str:
+    """The theme bootstrap for one city, for any page that wants it.
+
+    Shared rather than copied: a per-dog page needs the same palette as its
+    city page, and a second copy would be a second place for the city's
+    coordinates to go stale.
+    """
+    return (_THEME_SCRIPT.replace("%LAT%", f"{c.lat:.4f}")
+                         .replace("%LON%", f"{c.lon:.4f}"))
 
 
 def logo_img(cls: str = "brand-logo") -> str:
@@ -893,6 +969,9 @@ def render(dated, for_date: date = None, city: str = None) -> str:
                            if rescue_links else "")
     footer_rescues = " &middot; ".join(rescue_links)
 
+    scale_json = json.dumps(SCALE, ensure_ascii=False)
+    theme_script = _theme_script(c)
+
     empty = "" if flat else """
       <div class="empty">
         <div class="empty-emoji">🦴</div>
@@ -903,43 +982,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     return f"""<!doctype html>
 <html lang="en">
 <head>
-<script>
-// Dark mode follows the sun over the city this page is for, not a fixed clock.
-// A 7pm/7am window is wrong for most of the year: NYC sunrise swings from
-// 5:25am in June to 7:20am in January. Standard NOAA solar position, run before
-// paint so there is no flash of the wrong theme.
-(function () {{
-  try {{
-    var LAT = {c.lat:.4f}, LON = {c.lon:.4f}, RAD = Math.PI / 180;
-    var now = new Date();
-    var start = Date.UTC(now.getUTCFullYear(), 0, 0);
-    var doy = Math.floor((now.getTime() - start) / 86400000);
-    var g = (2 * Math.PI / 365) * (doy - 1 + (now.getUTCHours() - 12) / 24);
-
-    var eq = 229.18 * (0.000075 + 0.001868 * Math.cos(g)
-      - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g)
-      - 0.040849 * Math.sin(2 * g));
-    var decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g)
-      - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g)
-      - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
-
-    // 90.833° accounts for refraction and the sun's disc.
-    var cosHa = Math.cos(90.833 * RAD) / (Math.cos(LAT * RAD) * Math.cos(decl))
-      - Math.tan(LAT * RAD) * Math.tan(decl);
-    var theme;
-    if (cosHa >= 1) {{ theme = 'dark'; }}          // sun never rises
-    else if (cosHa <= -1) {{ theme = 'light'; }}   // sun never sets
-    else {{
-      var ha = Math.acos(cosHa) / RAD;
-      var sunrise = 720 - 4 * (LON + ha) - eq;    // minutes UTC
-      var sunset  = 720 - 4 * (LON - ha) - eq;
-      var mins = now.getUTCHours() * 60 + now.getUTCMinutes();
-      theme = (mins >= sunrise && mins < sunset) ? 'light' : 'dark';
-    }}
-    document.documentElement.setAttribute('data-theme', theme);
-  }} catch (e) {{ /* fall back to the OS preference */ }}
-}})();
-</script>
+{theme_script}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{c.title}</title>
@@ -2625,10 +2668,10 @@ const CONTACTS = {json.dumps(RESCUE_CONTACTS)};
 const CONTACT = {json.dumps(CONTACT_EMAIL)};
 const TERMS_HTML = {json.dumps(_terms_html(CONTACT_EMAIL, for_date))};
 const PRIVACY_HTML = {json.dumps(_privacy_html(CONTACT_EMAIL, for_date))};
-const scrim = document.getElementById('scrim');
+/*KIT:dom-esc*/const scrim = document.getElementById('scrim');
 const modal = document.getElementById('modal');
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
-  c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
+  c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);/*KIT-END:dom-esc*/
 
 // Five words per row, and only the first and last are on screen — they are the
 // ends of the scale the heart sits on, so they carry the whole meaning now that
@@ -2644,16 +2687,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
 // The middle three only ever surface in two places — the pin's aria-label
 // ("Energy level: Low key") and the similar-dogs line, which appends ", too" —
 // so every word here has to still read as a sentence with that suffix.
-const SCALE = {{
-  energy:     {{icon:'⚡', label:'Energy level',
-    words:['Couch potato','Low key','Middle of the road','Active','Zoomies']}},
-  apartment:  {{icon:'🏙️', label:'Apartment fit',
-    words:['Needs a yard','Tight in a flat','Workable','Good fit','Fine in a studio']}},
-  experience: {{icon:'🎓', label:'Experience needed',
-    words:['Great first dog','Beginner friendly','Some experience','Experienced home','Needs experience']}},
-  alone: {{icon:'🏠', label:'Home alone',
-    words:['Needs company','Short days only','Half a day','Most of a workday','Fine all day']}}
-}};
+const SCALE = {scale_json};
 
 function bars(d) {{
   if (!d.scores || !d.scores.energy) return '';
@@ -2700,16 +2734,16 @@ function bars(d) {{
 // Builds a 1080x1920 story card on a canvas so it can be saved straight to a
 // phone and posted. Photos come back through /img so the canvas stays
 // same-origin and can actually be exported.
-const STORY_W = 1080, STORY_H = 1920;
-const STORY_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif';
+/*KIT:story-consts*/const STORY_W = 1080, STORY_H = 1920;
+const STORY_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif';/*KIT-END:story-consts*/
 
-function proxied(url) {{
+/*KIT:proxied*/function proxied(url) {{
   return '/img?u=' + encodeURIComponent(url);
-}}
+}}/*KIT-END:proxied*/
 
 // A hung /img fetch must not strand the modal on "Building…" forever: the
 // proxy allows 20s per upstream, and three photos are tried in turn.
-function loadImg(src, ms = 8000) {{
+/*KIT:loadimg*/function loadImg(src, ms = 8000) {{
   return new Promise((res, rej) => {{
     const im = new Image();
     im.crossOrigin = 'anonymous';
@@ -2720,13 +2754,13 @@ function loadImg(src, ms = 8000) {{
     im.onerror = () => {{ clearTimeout(stop); rej(new Error('failed to load')); }};
     im.src = src;
   }});
-}}
+}}/*KIT-END:loadimg*/
 
-function drawCover(ctx, im, x, y, w, h) {{
+/*KIT:drawcover*/function drawCover(ctx, im, x, y, w, h) {{
   const r = Math.max(w / im.width, h / im.height);
   const dw = im.width * r, dh = im.height * r;
   ctx.drawImage(im, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
-}}
+}}/*KIT-END:drawcover*/
 
 // Nine dogs have no photo at all, and a CDN can always fail. Either way the
 // card gets the same treatment the photoless tiles get on the page — a big
@@ -2734,7 +2768,7 @@ function drawCover(ctx, im, x, y, w, h) {{
 // software, and people don't post broken software. The caption still tells the
 // two cases apart: "coming soon" on a dog with no photo is true, but on a dog
 // whose photo we simply couldn't fetch it hides a broken /img proxy.
-function drawNoPhoto(ctx, d, failed) {{
+/*KIT:drawnophoto*/function drawNoPhoto(ctx, d, failed) {{
   const g = ctx.createLinearGradient(0, 0, STORY_W, STORY_H);
   g.addColorStop(0, '#31101a'); g.addColorStop(.6, '#170d11');
   g.addColorStop(1, '#0b0b0c');
@@ -2750,9 +2784,9 @@ function drawNoPhoto(ctx, d, failed) {{
   ctx.fillText(failed ? "Photo wouldn't load" : 'Photo coming soon',
                STORY_W / 2, 900);
   ctx.restore();
-}}
+}}/*KIT-END:drawnophoto*/
 
-async function buildStory(d) {{
+/*KIT:buildstory*/async function buildStory(d) {{
   const c = document.createElement('canvas');
   c.width = STORY_W; c.height = STORY_H;
   const ctx = c.getContext('2d');
@@ -2836,7 +2870,7 @@ async function buildStory(d) {{
   }}
 
   return c;
-}}
+}}/*KIT-END:buildstory*/
 
 // Every route to the same message, because one of them will be dead for any
 // given visitor: Gmail for webmail users, mailto for desktop clients, copy for
@@ -2882,7 +2916,7 @@ function openContact(d, act) {{
     () => copy(act.body, 'Message copied — paste it into any email.');
 }}
 
-async function openShare(d) {{
+/*KIT:openshare*/async function openShare(d) {{
   const url = dogUrl(d);
   showModal(`
     <button class="m-close" aria-label="Close">✕</button>
@@ -2943,7 +2977,7 @@ async function openShare(d) {{
     const ph = document.getElementById('story-ph');
     if (ph) ph.textContent = "Couldn't build the image — the link still works.";
   }}
-}}
+}}/*KIT-END:openshare*/
 
 // Two questions people ask after "is it cute": how big will it get, and what
 // will it cost me every month. Both are estimates and say so.
@@ -3152,7 +3186,7 @@ function simSection(d) {{
     </div>`;
 }}
 
-function showModal(inner, size) {{
+/*KIT:showmodal*/function showModal(inner, size) {{
   modal.classList.toggle('narrow', size === 'narrow');
   modal.classList.toggle('mid', size === 'mid');
   scrim.classList.remove('sheet');
@@ -3173,7 +3207,7 @@ function showModal(inner, size) {{
   }});
   const x = modal.querySelector('.m-close');
   if (x) x.onclick = closeModal;
-}}
+}}/*KIT-END:showmodal*/
 
 // Each rescue's real next step. Where they take email, we open a draft with
 // the dog named and the listing linked so nothing gets lost. Where they require
@@ -3463,14 +3497,14 @@ function openAbout() {{
   if (asb) asb.onclick = shareLuvd;
 }}
 
-function closeModal(fromHash) {{
+/*KIT:closemodal*/function closeModal(fromHash) {{
   if (!fromHash && /^#dog\//.test(location.hash)) {{
     history.pushState(null, '', location.pathname + location.search);
   }}
   scrim.classList.remove('vis');
   document.body.classList.remove('locked');
   setTimeout(() => scrim.classList.remove('on'), 280);
-}}
+}}/*KIT-END:closemodal*/
 
 // ---- real view counts -------------------------------------------------------
 // Counts come from actual clicks into a dog's modal, stored server-side. If the
@@ -3555,11 +3589,11 @@ function countView(card) {{
 // ---- one URL per dog --------------------------------------------------------
 // Hash routing keeps every dog shareable without needing a server that knows
 // about routes, and it survives being copied into an email or a text.
-function slugFor(d) {{
+/*KIT:slugfor*/function slugFor(d) {{
   return d.id.replace(/[^a-zA-Z0-9:_-]/g, '');
 }}
 
-// The link you hand to somebody else: the dog's own page, not a fragment of the
+// The link you hand to somebody else/*KIT-END:slugfor*/: the dog's own page, not a fragment of the
 // roster. This used to be `pathname + '#dog/' + id`, which shared and unfurled
 // as the whole city page — the recipient landed on 230 dogs and had to find the
 // one they were sent, and everything that reads a URL for meaning (link previews,
@@ -3572,9 +3606,9 @@ function slugFor(d) {{
 // from a link that leaves the building.
 //
 // Sharing the *site* is unchanged and still the city page — see shareLuvd().
-function dogUrl(d) {{
+/*KIT:dogurl*/function dogUrl(d) {{
   return location.origin + (d.path || (location.pathname + '#dog/' + slugFor(d)));
-}}
+}}/*KIT-END:dogurl*/
 
 function openDog(i, opts) {{
   const d = DOGS[i];
@@ -4681,16 +4715,404 @@ if (heroForm) heroForm.onsubmit = e =>
 </html>"""
 
 
-def _dog_page(d: Dog, site: str, today: date) -> str:
-    """A standalone, indexable page per dog.
+# The wordmark's heart, shared by the save button and the score pins. One copy
+# in Python because the per-dog page draws both server-side; the modal has its
+# own copies in the script it builds in the browser.
+_HEART_PATH = ("M12 21C8 18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 "
+               "12 8C12.9 6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 "
+               "16 18 12 21Z")
+
+# Only what a full page needs on top of the city stylesheet it links. Everything
+# that makes a dog *look* like a dog — the chips, the score pins, the size bands,
+# the cost list, the action bar — is already in that stylesheet and is used here
+# under the same class names, so there is nothing to keep in sync.
+#
+# What is genuinely different is the shell. In the modal the card is a floating
+# overlay: `.modal` is capped at 88vh and `.m-scroll` is an inner scroller. On a
+# page the page itself scrolls, so neither is used, and the few rules below
+# stand in for them.
+_DOG_PAGE_CSS = """
+  /* Wider than the modal's 880px. The modal is a card floating over a grid and
+     has to look like one; this is the whole page, so it can use the room. */
+  .dpg{max-width:1040px;margin:0 auto;padding:0 18px 40px;}
+  /* No overflow:hidden. It reads as the obvious way to clip the corners, and
+     it silently breaks the sticky action bar below: an ancestor that is not
+     `overflow:visible` becomes the bar's scroll container, and that container
+     never scrolls, so the bar just sits at the end of the page. The children
+     that could spill past a rounded corner clip themselves — .m-hero already
+     does — and the bar carries the bottom radius itself. */
+  .dpg-card{background:var(--surface);border-radius:26px;
+    box-shadow:var(--shadow);}
+  /* The site nav hides its logo until you scroll (nav.shrunk) and its buttons
+     open modals. Neither applies here, so the header is its own small thing:
+     a logo that goes home, and the same trip spelled out in words. */
+  .dpg-top{max-width:1040px;margin:0 auto;padding:18px 18px 14px;
+    display:flex;align-items:center;justify-content:space-between;gap:14px;}
+  .dpg-logo{display:block;line-height:0;}
+  .dpg-logo img{width:124px;height:auto;display:block;}
+  .dpg-all{font-size:13.5px;font-weight:600;color:#fff;background:var(--accent);
+    padding:8px 15px;border-radius:980px;text-decoration:none;white-space:nowrap;}
+  .dpg-all:hover{opacity:.88;}
+  /* In the modal the photo column is capped by the modal's own 88vh, so the
+     right-hand panels set the height and the photo fills what is left. A page
+     has no such cap, so a portrait photo drove the whole band instead — 700px
+     of top section for 626px of content, and the leftover pooled as dead space
+     under the last rating. Taking the image out of flow restores the modal's
+     intent: the right column decides, the photo fills it. */
+  .dpg-card .m-hero{min-height:180px;}
+  .dpg-card .m-hero img{position:absolute;inset:0;}
+  /* And spread whatever slack is left through the four rows rather than
+     letting it collect at the bottom of the panel. */
+  .dpg-card .scores{justify-content:space-between;}
+  /* The modal pins its action bar so the contact button is never scrolled out
+     of reach. The same reasoning applies harder here, because a page is taller
+     than a modal: it sticks to the bottom of the viewport while the card is on
+     screen, and comes to rest at the end of the card. */
+  .dpg-card .m-foot{border-radius:0 0 26px 26px;position:sticky;bottom:0;
+    z-index:2;box-shadow:0 -6px 20px rgba(0,0,0,.05);}
+  :root[data-theme="dark"] .dpg-card .m-foot{
+    box-shadow:0 -6px 20px rgba(0,0,0,.35);}
+  /* Compact enough that a pinned bar is not a banner: one row of buttons, and
+     nothing else in it. */
+  /* nowrap so a label can never become two lines: the bar's height is fixed
+     by design and a wrap is what made it look like a banner. */
+  .dpg-card .m-foot .cta{padding:11px 16px;font-size:14.5px;white-space:nowrap;}
+  .dpg-terms{margin-top:20px;}
+  .dpg-terms .act-note{margin-bottom:6px;}
+  /* The modal's tabs stretch to fill an 880px card. Here they sit at the top
+     of a 1040px page where two full-width buttons look like a form, so they
+     shrink to their labels and stay left. */
+  .dpg-card .dpg-tabs{display:inline-flex;margin-top:4px;}
+  .dpg-card .dpg-tabs .tab{flex:0 0 auto;padding:7px 15px;font-size:12.5px;}
+  .dpg-foot{max-width:1040px;margin:0 auto;padding:26px 18px 40px;
+    text-align:center;color:var(--muted);font-size:13.5px;}
+  .dpg-foot a{color:var(--muted);}
+  @media (max-width:720px){
+    .dpg{padding:0 0 30px;}
+    .dpg-card{border-radius:0;box-shadow:none;}
+    .dpg-card .m-foot{border-radius:0;}
+    /* Side by side on a phone too: stacked, the two buttons alone were 88px of
+       a bar that has to share an 812px screen with the dog. */
+    .dpg-card .foot-row{grid-template-columns:1fr 1fr;gap:8px;}
+    .dpg-card .m-foot .cta{padding:11px 10px;font-size:13.5px;}
+    .dpg-top{padding:14px 16px 12px;}
+    .dpg-logo img{width:108px;}
+  }
+"""
+
+
+def _dp_breed(d: Dog) -> str:
+    """"Mixed breed" rather than "Unknown", which is what the field often says."""
+    return (d.breed if d.breed and "unknown" not in d.breed.lower()
+            else "Mixed breed")
+
+
+def _dp_scores(d: Dog) -> str:
+    """The four ratings as heart pins. Mirrors `bars()` in the page script.
+
+    Same markup and same SCALE words, so the row reads identically whether it
+    was built here or in the browser. The pins are rendered already `in` —
+    `.sc-pin` is invisible until that class lands, and on a page with no script
+    running they would otherwise be four empty tracks.
+    """
+    scores = getattr(d, "scores", None) or {}
+    if not scores.get("energy"):
+        return ""
+    rows = []
+    for key, s in SCALE.items():
+        v = scores.get(key)
+        if not v:
+            continue
+        pos = (v - 1) * 25
+        lo = ' class="on"' if v == 1 else ""
+        hi = ' class="on"' if v == 5 else ""
+        word = html.escape(s["words"][v - 1])
+        rows.append(
+            f'<div class="sc">'
+            f'<div class="sc-top"><span class="sc-ic">{s["icon"]}</span>'
+            f'<span class="sc-lb">{html.escape(s["label"])}</span></div>'
+            f'<div class="sc-track">'
+            f'<span class="sc-pin in" data-p="{pos}" style="left:{pos}%"'
+            f' role="img" aria-label="{html.escape(s["label"])}: {word}">'
+            f'<svg viewBox="0 0 24 24" aria-hidden="true">'
+            f'<path d="{_HEART_PATH}"/></svg></span></div>'
+            f'<div class="sc-ends"><span{lo}>{html.escape(s["words"][0])}</span>'
+            f'<span{hi}>{html.escape(s["words"][4])}</span></div></div>')
+    if not rows:
+        return ""
+    return ('<div class="scores"><div class="sc-hd">Good to know</div>'
+            + "".join(rows) + "</div>")
+
+
+def _dp_trait_lists(good: list, warn: list) -> str:
+    """"What to expect" — greens then ambers. Mirrors `traitLists()`."""
+    if not good and not warn:
+        return ""
+    items = "".join(
+        f'<li class="{kind}"><i class="tl-ic">{icon}</i>'
+        f'<span>{html.escape(t["text"])}</span></li>'
+        for group, kind, icon in ((good, "good", "✓"), (warn, "warn", "!"))
+        for t in group)
+    return ('<div class="sc-block tlists"><div class="tl-hd">🐾 What to expect'
+            f'</div><ul>{items}</ul></div>')
+
+
+def _dp_size_cost(d: Dog, c) -> str:
+    """Size outlook and monthly cost. Mirrors `sizeAndCost()`."""
+    so = getattr(d, "size_outlook", None) or {}
+    mc = getattr(d, "monthly_cost", None) or {}
+    traits = getattr(d, "traits", None) or []
+    good = [t for t in traits if t.get("kind") == "good"]
+    warn = [t for t in traits if t.get("kind") == "caution"]
+    tl = _dp_trait_lists(good, warn)
+    if not so.get("line") and not mc.get("low") and not tl:
+        return ""
+
+    size_block = ""
+    if so.get("line"):
+        growing = so.get("status") == "growing"
+        w = so.get("adult") or so.get("now")
+        bands = (("Small", 0, 25), ("Medium", 25, 50),
+                 ("Large", 50, 90), ("Giant", 90, 10 ** 9))
+        scale = ""
+        if w:
+            idx = next((i for i, b in enumerate(bands)
+                        if b[1] <= w < b[2]), len(bands) - 1)
+            now_idx = (next((i for i, b in enumerate(bands)
+                             if b[1] <= so["now"] < b[2]), -1)
+                       if so.get("now") else -1)
+            cells = "".join(
+                f'<span class="szb{" on" if i == idx else ""}'
+                f'{" from" if growing and i == now_idx and now_idx != idx else ""}">'
+                f"<i></i><em>{b[0]}</em></span>"
+                for i, b in enumerate(bands))
+            cap = (f"Now {bands[now_idx][0].lower()}, growing into a "
+                   f"{bands[idx][0].lower()} dog"
+                   if growing and now_idx != idx and now_idx >= 0
+                   else f"A {bands[idx][0].lower()} dog by weight")
+            scale = (f'<div class="szscale">{cells}</div>'
+                     f'<div class="szcap">{html.escape(cap)}</div>')
+        bar = ""
+        if so.get("now") and so.get("adult") and so["adult"] > so["now"]:
+            pct = max(6, min(100, (so["now"] / so["adult"]) * 100))
+            bar = (f'<div class="gw"><span style="width:{pct:.0f}%"></span></div>'
+                   f'<div class="gw-l"><span>{round(so["now"])} lbs now</span>'
+                   f'<span>~{round(so["adult"])} lbs grown</span></div>')
+        size_block = (
+            f'<div class="sc-block"><div class="tl-hd">'
+            f'{"📈 Still growing" if growing else "📏 Full size"}</div>'
+            f'<p>{html.escape(so["line"])}</p>{bar}{scale}</div>')
+
+    cost_block = ""
+    if mc.get("low"):
+        rows = "".join(f"<li><span>{html.escape(it[0])}</span>"
+                       f"<b>${it[1]}–{it[2]}</b></li>"
+                       for it in (mc.get("items") or []))
+        cost_block = (
+            f'<div class="sc-block"><div class="tl-hd">💵 Typical monthly cost'
+            f'</div><div class="cost-big">${mc["low"]}–{mc["high"]}'
+            f"<span>/month</span></div>"
+            f'<ul class="cost-list">{rows}</ul>'
+            f'<p class="cost-note">A {html.escape(c.short)} estimate for a dog '
+            f"this size and coat. Excludes the adoption fee and anything "
+            f"unexpected.</p></div>")
+
+    right = (1 if size_block else 0) + (1 if tl else 0)
+    return (f'<div class="sizecost"><div class="sc-inner'
+            f'{" one-right" if right == 1 else ""}">{cost_block}'
+            f'<div class="sc-right">{size_block}{tl}</div></div></div>')
+
+
+def _dp_panes(d: Dog, c, breed: str) -> str:
+    """Breed guide and the rescue's own write-up. Mirrors `tabs()`.
+
+    Both are on the page rather than behind tabs. Tabs need a click handler, and
+    a crawler that never clicks should still get the write-up — it is the only
+    text on the page the rescue actually wrote.
+    """
+    bi = getattr(d, "breed_info", None) or {}
+    if d.description:
+        bio = f'<p class="bio">{html.escape(d.description)}</p>'
+    else:
+        bio = (f'<p style="color:var(--muted)">{html.escape(d.source_label)} '
+               f"hasn't posted a write-up for {html.escape(d.name)} yet — reach "
+               f"out and they'll tell you all about them.</p>")
+    if not bi.get("temperament"):
+        return f'<div class="pane on" data-p="0">{bio}</div>'
+
+    unknown = ("" if bi.get("known") else
+               '<p style="color:var(--muted);font-size:14px;'
+               'margin-bottom:15px;">This dog\'s breed isn\'t known, so here\'s '
+               'general guidance for mixes.</p>')
+    fr = bi.get("from_rescue") or {}
+
+    def first_sentence(t: str) -> str:
+        m = re.match(r"^[^.!?]+[.!?]", str(t))
+        return (m.group(0) if m else str(t)).strip()
+
+    def sect(icon: str, title: str, topic: str, generic: str) -> str:
+        said = fr.get(topic)
+        context = first_sentence(generic) if said else generic
+        line = (f"<b>{html.escape(re.sub(r'[.]$', '', said))}.</b> "
+                f"{html.escape(context)}" if said else html.escape(generic or ""))
+        return f"<div class=\"fact\"><h4>{icon} {title}</h4><p>{line}</p></div>"
+
+    guide = (f'<span class="breed-tag">{html.escape(bi.get("name", breed))}'
+             f"</span>{unknown}"
+             + sect("🧠", "Temperament", "temperament", bi.get("temperament", ""))
+             + sect("🎾", "Exercise", "exercise", bi.get("exercise", ""))
+             + sect("✂️", "Grooming", "grooming", bi.get("grooming", ""))
+             + sect("🏙️", html.escape(c.apartment_label), "nyc", bi.get("nyc", "")))
+    # Tabs, as in the modal: both write-ups are long, and stacking them made the
+    # page a wall of copy.
+    #
+    # The rescue's write-up opens, where the modal opens the breed guide. On a
+    # page that is deliberate. This is the URL people share, so it is where a
+    # stranger meets this particular dog, and the rescue's own words are the
+    # answer to why they clicked. They are also the only text on the page that
+    # is unique to it: the breed guide is the same paragraphs on every dog of
+    # that breed, and the write-up is truncated to 300 characters in the
+    # JSON-LD, so leaving it in a hidden pane would be the one thing worth
+    # indexing sitting behind `display:none`. Both panes ship in the HTML
+    # either way — hidden, not omitted — so nothing is unreachable.
+    return (f'<div class="tabs dpg-tabs">'
+            f'<button class="tab on" data-t="0" type="button">'
+            f'From {html.escape(d.source_label)}</button>'
+            f'<button class="tab" data-t="1" type="button">Breed guide</button>'
+            f'</div>'
+            f'<div class="pane on" data-p="0">{bio}</div>'
+            f'<div class="pane" data-p="1">{guide}</div>')
+
+
+def _dp_action(d: Dog, site: str) -> dict:
+    """Where the adopt button goes. Mirrors `contactAction()`.
+
+    The email branch resolves to a real `mailto:` with the same prefilled
+    message the modal composes, rather than the modal's contact sheet — a page
+    with no script still has to be able to send someone to the rescue.
+
+    `short` is what the pinned bar says. The modal's labels carry the dog's name
+    ("Apply to adopt Timmy →"), which is right in a card you opened deliberately
+    but wraps to two lines in half of a 375px bar — and "Contact NYC Second
+    Chance Rescue →" wraps on any screen. The bar is two buttons beside the dog
+    it belongs to, so naming it again buys nothing and costs the line.
+    """
+    contact = RESCUE_CONTACTS.get(d.source) or {}
+    if getattr(d, "program", "") and d.program_label:
+        return {"href": d.cta_url(),
+                "label": f"Apply to {d.program_label.lower()} {d.name} →",
+                "short": "Apply →",
+                "note": d.program_note or "", "program": d.program_label}
+    if contact.get("method") == "email" and contact.get("email"):
+        age = (f" ({d.age}{', ' + d.sex if d.sex else ''})" if d.age else "")
+        body = (
+            f"Hi {d.source_label},\n\n"
+            f"I'd like to adopt {d.name}{age}, who I found through LUVD.\n\n"
+            f"Your listing: {d.url}\n"
+            f"LUVD page: {site}{dog_path(d)}\n\n"
+            f"A bit about me:\n• Name:\n• Neighborhood:\n"
+            f"• Home (apartment/house, own or rent):\n"
+            f"• Who lives with me (adults, kids, other pets):\n"
+            f"• Experience with dogs:\n"
+            f"• Typical hours the dog would be alone:\n\n"
+            f"Could you let me know the next step?\n\nThank you!")
+        href = (f"mailto:{contact['email']}"
+                f"?subject={quote(f'Adoption inquiry: {d.name}')}"
+                f"&body={quote(body)}")
+        return {"href": href, "label": f"Email about {d.name} →",
+                "short": "Email the rescue →", "note": "", "program": ""}
+    if contact.get("apply_url"):
+        return {"href": contact["apply_url"],
+                "label": f"Apply to adopt {d.name} →",
+                "short": "Apply to adopt →",
+                "note": f"{d.source_label} asks for an application before they "
+                        f"can talk about a dog.", "program": ""}
+    return {"href": d.cta_url(), "label": f"Contact {d.source_label} →",
+            "short": "Contact the rescue →", "note": "", "program": ""}
+
+
+def _dp_siblings(d: Dog, siblings: List[Dog]) -> str:
+    """More dogs from the same rescue, using the modal's `.sim` classes.
+
+    Not the modal's "similar dogs": that scores against every dog in the city,
+    and this renderer is handed one rescue's list. Dogs from the same rescue is
+    a claim the page can actually support, and it is the link a visitor who
+    likes this dog is most likely to want.
+    """
+    others = [o for o in siblings if o.id != d.id and o.photos][:4]
+    if not others:
+        return ""
+    cards = "".join(
+        f'<a class="sim-card" href="{html.escape(dog_path(o))}">'
+        f'<img class="sim-ph" src="{html.escape(o.primary_photo())}"'
+        f' alt="{html.escape(o.name)}" loading="lazy">'
+        f'<div class="sim-nm">{html.escape(o.name)}</div>'
+        f'<div class="sim-rs">{html.escape(o.source_label)}</div>'
+        f'<div class="sim-why">{html.escape(_dp_breed(o))}</div>'
+        f"</a>" for o in others)
+    return (f'<div class="sim"><div class="sim-hd">More from '
+            f'{html.escape(d.source_label)}</div>'
+            f'<div class="sim-row">{cards}</div></div>')
+
+
+# The pieces of the page script the per-dog page reuses, in dependency order.
+# Marked with /*KIT:name*/ … /*KIT-END:name*/ comments in render()'s template and
+# lifted out of the RENDERED page, where the braces are already single — slicing
+# them from the source would mean un-doubling f-string braces by hand, which is
+# how the dog page's CSS ended up empty once already.
+#
+# Comments are the whole mechanism on purpose: nothing about the city page moves,
+# so extracting this cannot change what the city page does. What it buys is that
+# the share modal on a dog page is the SAME code as the one in the grid's modal —
+# the story canvas, the copy-link fallback, all of it — rather than a second
+# implementation that would drift from it.
+_SHARE_KIT = ("dom-esc", "slugfor", "dogurl", "showmodal", "closemodal",
+              "story-consts", "proxied", "loadimg", "drawcover", "drawnophoto",
+              "buildstory", "openshare")
+
+
+def _share_kit_js(page_html: str, city_code: str) -> str:
+    """The share kit, sliced out of a rendered city page."""
+    out = []
+    for name in _SHARE_KIT:
+        open_tag, close_tag = f"/*KIT:{name}*/", f"/*KIT-END:{name}*/"
+        i, j = page_html.find(open_tag), page_html.find(close_tag)
+        if i < 0 or j < 0 or j < i:
+            raise AssertionError(
+                f"{city_code}: share kit piece {name!r} not found in the "
+                f"rendered page. The dog pages load this file to open their "
+                f"share modal, so a missing piece is a share button that "
+                f"throws. Check the /*KIT:{name}*/ markers in render().")
+        out.append(page_html[i + len(open_tag):j])
+    js = "\n\n".join(out)
+    for bad in ("/*KIT:", "/*KIT-END:"):
+        if bad in js:
+            raise AssertionError(f"{city_code}: nested {bad} marker in the kit")
+    return ("// Generated from the city page — see page._share_kit_js.\n"
+            "// Edit the /*KIT:*/ regions in page.py, never this file.\n"
+            + js + "\n")
+
+
+def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
+              share_href: str = "/share.js",
+              siblings: List[Dog] = None) -> str:
+    """A standalone, indexable page per dog — the same modules as the modal.
 
     Server-rendered rather than a hash route, because Google can't index
     fragments. The title leads with rescue and breed — nobody searches a dog's
     name, they search "muddy paws rescue dogs" or "chihuahua adoption nyc".
+
+    It used to be a bare document with 1.5 KB of its own CSS, which was fine
+    while it existed only to be crawled. It isn't: a shared LUVD link is a dog
+    link, so this page is how most people meet the product, and it looked like a
+    different website. It now links the city page's own stylesheet and builds the
+    modal's modules — photo, chips, the four ratings, size, cost, what to expect,
+    breed guide, the write-up, the adopt bar — under the same class names, so the
+    two are styled by the same bytes rather than by two sets of rules that drift.
     """
     c = cities.resolve(getattr(d, "city", ""))
     facts = " · ".join(x for x in (d.age, d.sex, d.weight, d.location) if x)
-    breed = d.breed if d.breed and "unknown" not in d.breed.lower() else "Mixed breed"
+    breed = _dp_breed(d)
     # "LUVD" alone carries no city, so the title says the city itself — this is
     # the page's only geographic signal, and "adoption ... nyc" is what people
     # search. Rescues whose own name says their city don't need it twice.
@@ -4718,7 +5140,6 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
     # name. Saying so gives the dog page a parent to inherit authority from, and
     # gives a search result the "luvd.com › Muddy Paws Rescue › Poof" trail
     # instead of a bare URL. Every hop is a page this run actually writes.
-    c = cities.resolve(getattr(d, "city", None))
     city_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
     product = {
         "@type": "Product",
@@ -4748,43 +5169,77 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
         ],
     }
 
-    body_bits = []
+    # ---- the card, module by module, same classes as the modal ---------------
+    photos = list(d.photos or [])
+    thumbs = ""
+    if len(photos) > 1:
+        thumbs = ('<div class="thumbs">' + "".join(
+            f'<img src="{html.escape(p)}" class="{"sel" if n == 0 else ""}"'
+            f' data-src="{html.escape(p)}" alt="" loading="lazy">'
+            for n, p in enumerate(photos)) + "</div>")
+    media = ""
     if photo:
-        body_bits.append(f'<img class="dp-photo" src="{html.escape(photo)}" '
-                         f'alt="{html.escape(d.name)}, {html.escape(breed)}">')
-    body_bits.append(f"<h1>{html.escape(d.name)}</h1>")
-    body_bits.append(f'<p class="dp-sub">{html.escape(breed)} · '
-                     f'{html.escape(d.source_label)}</p>')
-    if facts:
-        body_bits.append(f'<p class="dp-facts">{html.escape(facts)}</p>')
-    if wd is not None and wd >= WAIT_BADGE_DAYS:
-        body_bits.append(f'<p class="dp-wait">Listed {wd} days</p>')
-    # High up the page, not buried under the bio: this decides whether the rest
-    # is even worth reading for this visitor.
-    if d.program_label and d.program_note:
-        body_bits.append(f'<p class="dp-prog"><b>{html.escape(d.program_label)}.</b> '
-                         f'{html.escape(d.program_note)}</p>')
-    if d.traits:
-        items = "".join(f"<li>{html.escape(t['text'])}</li>" for t in d.traits)
-        body_bits.append(f"<h2>What to expect</h2><ul>{items}</ul>")
-    if d.description:
-        body_bits.append("<h2>About " + html.escape(d.name) + "</h2><p>"
-                         + html.escape(d.description).replace("\n", "<br>") + "</p>")
-    bi = d.breed_info or {}
-    if bi.get("temperament"):
-        body_bits.append(f"<h2>{html.escape(bi.get('name', breed))} temperament</h2>"
-                         f"<p>{html.escape(bi['temperament'])}</p>"
-                         f"<h2>Exercise</h2><p>{html.escape(bi.get('exercise',''))}</p>"
-                         f"<h2>{html.escape(c.apartment_label)}</h2>"
-                         f"<p>{html.escape(bi.get('nyc',''))}</p>")
+        media = (f'<div class="m-media"><div class="m-hero">'
+                 f'<img id="hero" src="{html.escape(photo)}"'
+                 f' alt="{html.escape(d.name)}, {html.escape(breed)}">'
+                 f"</div>{thumbs}</div>")
 
-    cta_label = (f"Apply to {d.program_label.lower()} {d.name}" if d.program_label
-                 else f"Contact {d.source_label} about {d.name}")
+    home = rescue_home(d.source)
+    rescue_line = (
+        f'<a class="m-rescue" href="{html.escape(home)}" target="_blank"'
+        f' rel="noopener">{html.escape(d.source_label)}</a>' if home
+        else f'<p class="m-rescue">{html.escape(d.source_label)}</p>')
+
+    traits = getattr(d, "traits", None) or []
+    chips = "".join([
+        f'<span class="chip program">{html.escape(d.program_label)}</span>'
+        if d.program_label else "",
+        f'<span class="chip">{html.escape(d.breed)}</span>'
+        if d.breed and "unknown" not in d.breed.lower() else "",
+    ] + [f'<span class="chip">{html.escape(x)}</span>'
+         for x in (d.age, d.sex, d.weight, d.location) if x]
+      + ([f'<span class="chip wait">⏳ Listed {wd} days</span>']
+         if wd is not None and wd >= WAIT_BADGE_DAYS else [])
+      + [f'<span class="chip">{html.escape(t["text"])}</span>'
+         for t in traits if t.get("kind") == "info"])
+
+    idcol = (f'<div class="idcol"><div class="m-name-row">'
+             f'<h1 class="m-name">{html.escape(d.name)}</h1>'
+             f'<button class="save m-save" data-id="{html.escape(d.id)}"'
+             f' type="button" aria-pressed="false"'
+             f' aria-label="Save {html.escape(d.name)}">'
+             f'<svg class="hrt" viewBox="0 0 24 24" aria-hidden="true">'
+             f'<path d="{_HEART_PATH}"/></svg>'
+             f'<span class="burst" aria-hidden="true"></span></button></div>'
+             f'{rescue_line}<div class="chips">{chips}</div></div>')
+
+    act = _dp_action(d, site)
+    note = ""
+    if act["note"]:
+        note = (f'<div class="act-note{" prog" if act["program"] else ""}">'
+                + (f'<b>{html.escape(act["program"])}.</b> '
+                   if act["program"] else "")
+                + html.escape(act["note"]) + "</div>")
+    fee = (f'<div class="cta-sub">Adoption fee {html.escape(d.fee)}</div>'
+           if d.fee else "")
+    # What goes in the message body when someone shares this dog. json.dumps so
+    # a name with a quote or an apostrophe can't break out of the string.
+    share_text = json.dumps(
+        f"{d.name} is up for adoption at {d.source_label} in {c.short} — "
+        f"found on LUVD 🐶")
+    # openShare() and buildStory() take a dog straight out of the page payload,
+    # so this is the same dict the city page ships — to_dict() rather than a
+    # hand-built object, so the share modal can never be handed a shape the grid
+    # would not have handed it. `path` is what dogUrl() shares.
+    dog_json = json.dumps(dict(d.to_dict(),
+                               waiting_days=(wd or 0),
+                               path=dog_path(d)), ensure_ascii=False)
 
     return f"""<!doctype html>
 <html lang="en"><head>
+{_theme_script(c)}
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}{dog_path(d)}">
@@ -4800,41 +5255,148 @@ def _dog_page(d: Dog, site: str, today: date) -> str:
 <meta name="twitter:description" content="{html.escape(desc)}">
 {f'<meta name="twitter:image" content="{html.escape(photo)}">' if photo else ''}
 <script type="application/ld+json">{json.dumps(ld)}</script>
-<!-- One level of brace escaping in this block, not two. It carried four
-     braces per rule for a long time; an f-string turns four into two, so
-     every rule reached the browser malformed and every dog page rendered as
-     unstyled HTML - including the page a shared link lands on. There is no
-     second format pass: _dog_page()'s return value is written straight to
-     disk by page.write(), so two braces here is the one brace CSS needs.
-     Guarded by tests/test_multicity.py::test_dog_page_css_not_double_escaped. -->
-<style>
-  body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-    max-width:720px;margin:0 auto;padding:28px 20px 60px;line-height:1.6;
-    background:#fbfbfd;color:#1d1d1f;}}
-  a{{color:#FF002E;}}
-  .dp-photo{{width:100%;border-radius:18px;margin-bottom:22px;}}
-  h1{{font-size:38px;letter-spacing:-.03em;margin:0 0 6px;}}
-  h2{{font-size:18px;margin:26px 0 6px;}}
-  .dp-sub{{color:#6e6e73;margin:0 0 4px;}}
-  .dp-facts{{color:#6e6e73;margin:0;}}
-  .dp-wait{{color:#a86500;font-weight:600;}}
-  .dp-prog{{background:#fff6e5;border-radius:12px;padding:12px 14px;
-    margin:16px 0 0;font-size:14.5px;}}
-  .dp-prog b{{color:#a86500;}}
-  .dp-cta{{display:inline-block;background:#FF002E;color:#fff;text-decoration:none;
-    padding:13px 22px;border-radius:12px;font-weight:600;margin-top:26px;}}
-  .dp-back{{display:block;margin-bottom:20px;font-size:14px;}}
-  @media (prefers-color-scheme:dark){{
-    body{{background:#000;color:#f5f5f7;}} .dp-sub,.dp-facts{{color:#98989d;}}
-    .dp-prog{{background:#2a2114;}} .dp-prog b{{color:#f0b357;}}
+<!-- The city page's own stylesheet, linked rather than inlined: it is 78 KB and
+     identical across every dog page, so linking it means one download for a
+     visitor who opens two dogs, and one place where the styling is defined. -->
+<link rel="stylesheet" href="{html.escape(css_href)}">
+<style>{_DOG_PAGE_CSS}</style>
+</head><body>
+<div class="dpg-top">
+  <a class="dpg-logo" href="{c.path}" aria-label="LUVD — every adoptable dog in {c.short}">
+    <img src="/assets/luvd-logo.png" alt="LUVD" width="1400" height="607"></a>
+  <a class="dpg-all" href="{c.path}">See every {c.short} dog</a>
+</div>
+<main class="dpg">
+  <div class="dpg-card">
+    <div class="m-body">
+      <div class="topgrid{' with-photo' if photo else ''}">
+        {media}
+        {idcol}
+        {_dp_scores(d)}
+      </div>
+      {_dp_size_cost(d, c)}
+      {_dp_panes(d, c, breed)}
+      <div class="cta-sub" style="margin-top:18px;">
+        <a href="{html.escape(d.url)}" target="_blank" rel="noopener">View original listing</a></div>
+      {_dp_siblings(d, siblings or [])}
+      <!-- What applying involves, and what it costs. Context rather than
+           action, so it reads here at the end of the body instead of riding
+           along inside a bar that is pinned to the viewport — where it was
+           37px and 19px of a 190px bar on a phone, for two lines nobody needs
+           in front of them the whole way down the page. -->
+      <div class="dpg-terms">{note}{fee}</div>
+    </div>
+    <div class="m-foot">
+      <div class="foot-row">
+        <a class="cta" href="{html.escape(act['href'])}" target="_blank"
+           rel="noopener">{html.escape(act['short'])}</a>
+        <button class="cta cta2" id="share-btn" type="button">
+          <svg class="shr-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15V3M12 3 8.5 6.5M12 3l3.5 3.5"/>
+            <path d="M4.5 13.5v4.75A1.75 1.75 0 0 0 6.25 20h11.5a1.75 1.75 0
+                     0 0 1.75-1.75V13.5"/>
+          </svg><span id="share-t">Share</span></button>
+      </div>
+    </div>
+  </div>
+</main>
+<!-- The modal shell the share kit writes into. Same ids and classes the city
+     page uses, because it is the city page's own showModal() doing the writing. -->
+<div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
+<div class="dpg-foot">
+  <a href="{c.path}">Every adoptable dog in {c.short}, updated every morning</a>
+  &middot; <a href="{c.rescues_path}">All {c.short} rescues</a>
+</div>
+<script src="{share_href}"></script>
+<script>
+var SHARE_TEXT = {share_text};
+var DOG = {dog_json};
+// A few small jobs, all of which the stylesheet already assumes someone does.
+(function () {{
+  // 1. The score pins. `.sc-pin` is invisible until `.in` lands; they ship WITH
+  //    it so the page is right with no script at all, and this only takes it
+  //    away for a frame to replay the same staggered pop-in the modal does.
+  //    The remove happens INSIDE the rAF callback, never before it: a tab that
+  //    loads in the background has rAF suspended, and taking the class off
+  //    first would leave four empty tracks until the tab was looked at.
+  var pins = document.querySelectorAll('.sc-pin');
+  requestAnimationFrame(function () {{
+    pins.forEach(function (p, i) {{
+      p.classList.remove('in');
+      setTimeout(function () {{ p.classList.add('in'); }}, 40 + i * 70);
+    }});
+  }});
+
+  // 2. The heart, against the same localStorage key the grid and the saved
+  //    list use — so hearting a dog here shows up on the city page, which is
+  //    the whole reason to offer the button rather than a picture of one.
+  var KEY = 'luvd:saved';
+  function read() {{
+    try {{ return new Set(JSON.parse(localStorage.getItem(KEY) || '[]')); }}
+    catch (e) {{ return new Set(); }}
   }}
-</style></head><body>
-<a class="dp-back" href="{c.path}">← All adoptable dogs in {c.short}</a>
-{''.join(body_bits)}
-<a class="dp-cta" href="{html.escape(d.cta_url())}" target="_blank" rel="noopener">
-  {html.escape(cta_label)}</a>
-<p><a href="/rescue/{rescue_slug(d)}">More dogs from {html.escape(d.source_label)}</a>
- · <a href="{html.escape(d.url)}" target="_blank" rel="noopener">Original listing</a></p>
+  var btn = document.querySelector('.m-save');
+  if (!btn) return;
+  var id = btn.dataset.id;
+  function paint() {{
+    var on = read().has(id);
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }}
+  btn.addEventListener('click', function () {{
+    var set = read();
+    if (set.has(id)) set.delete(id); else {{ set.add(id); btn.classList.add('pop'); }}
+    try {{ localStorage.setItem(KEY, JSON.stringify([].concat(Array.from(set)))); }}
+    catch (e) {{}}
+    paint();
+    setTimeout(function () {{ btn.classList.remove('pop'); }}, 600);
+  }});
+  paint();
+
+  // 3. The two write-up tabs, same behaviour as the modal's.
+  var tabs = document.querySelectorAll('.dpg-tabs .tab');
+  tabs.forEach(function (tb) {{
+    tb.addEventListener('click', function () {{
+      tabs.forEach(function (o) {{ o.classList.remove('on'); }});
+      document.querySelectorAll('.pane').forEach(function (o) {{
+        o.classList.remove('on');
+      }});
+      tb.classList.add('on');
+      var pane = document.querySelector('.pane[data-p="' + tb.dataset.t + '"]');
+      if (pane) pane.classList.add('on');
+    }});
+  }});
+
+  // 4. Share opens the real thing — openShare() out of share.js, which is the
+  //    city page's own function, so the story card and the copy-link fallback
+  //    are the same code rather than a second version of it.
+  var share = document.getElementById('share-btn');
+  if (share) share.addEventListener('click', function () {{
+    if (typeof openShare === 'function') openShare(DOG);
+  }});
+  // Closing it: the scrim's backdrop and Escape. The kit wires the ✕ itself.
+  var scrimEl = document.getElementById('scrim');
+  if (scrimEl) scrimEl.addEventListener('click', function (e) {{
+    if (e.target === scrimEl && typeof closeModal === 'function') closeModal(true);
+  }});
+  document.addEventListener('keydown', function (e) {{
+    if (e.key === 'Escape' && scrimEl && scrimEl.classList.contains('on')
+        && typeof closeModal === 'function') closeModal(true);
+  }});
+
+  // 5. Thumbnails swap the hero, same as the modal.
+  var hero = document.getElementById('hero');
+  document.querySelectorAll('.thumbs img').forEach(function (t) {{
+    t.addEventListener('click', function () {{
+      if (hero) hero.src = t.dataset.src;
+      document.querySelectorAll('.thumbs img').forEach(function (o) {{
+        o.classList.remove('sel');
+      }});
+      t.classList.add('sel');
+    }});
+  }});
+}})();
+</script>
 </body></html>"""
 
 
@@ -5290,8 +5852,32 @@ def write(pages, for_date: date = None) -> Path:
     for code, dated in by_city.items():
         c = cities.resolve(code)
         out = OUT_DIR / c.file
-        out.write_text(render(dated, for_date, c.code), encoding="utf-8")
+        page_html = render(dated, for_date, c.code)
+        out.write_text(page_html, encoding="utf-8")
         rendered.add(c.path)
+
+        # The city page's stylesheet, written out so the per-dog pages can link
+        # it instead of carrying their own. Lifted from the page just rendered
+        # rather than kept as a separate constant: it lives inside render()'s
+        # template, and a second copy is exactly how the dog pages came to look
+        # like a different website. 78 KB inlined into 372 dog pages would also
+        # be 29 MB of identical bytes and a 78 KB download per shared link.
+        css_href = "/app.css" if c.path == "/" else f"{c.path}/app.css"
+        css_file = OUT_DIR / css_href.lstrip("/")
+        css_file.parent.mkdir(parents=True, exist_ok=True)
+        sheets = re.findall(r"<style>(.*?)</style>", page_html, re.S)
+        if len(sheets) != 1:
+            raise AssertionError(
+                f"{c.code}: expected one <style> block in the city page, found "
+                f"{len(sheets)} — the dog pages link this file, so a second "
+                f"block would silently ship them half a stylesheet.")
+        css_file.write_text(sheets[0], encoding="utf-8")
+        rendered.add(css_href)
+
+        share_href = "/share.js" if c.path == "/" else f"{c.path}/share.js"
+        (OUT_DIR / share_href.lstrip("/")).write_text(
+            _share_kit_js(page_html, c.code), encoding="utf-8")
+        rendered.add(share_href)
         first_written = first_written or out
         if code == cities.DEFAULT_CITY:
             primary = out
@@ -5299,15 +5885,20 @@ def write(pages, for_date: date = None) -> Path:
         flat = [d for _, group in dated for d in group]
         all_flat.extend(flat)
 
-        for d in flat:
-            path = OUT_DIR / dog_path(d).lstrip("/")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.with_suffix(".html").write_text(_dog_page(d, site, for_date),
-                                                 encoding="utf-8")
-
         by_rescue = {}
         for d in flat:
             by_rescue.setdefault(d.source_label, []).append(d)
+
+        # After by_rescue, so each dog page can offer the rest of its own
+        # rescue's dogs — the link someone who likes this dog actually wants.
+        for d in flat:
+            path = OUT_DIR / dog_path(d).lstrip("/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.with_suffix(".html").write_text(
+                _dog_page(d, site, for_date, css_href=css_href,
+                          share_href=share_href,
+                          siblings=by_rescue.get(d.source_label, [])),
+                encoding="utf-8")
         for label, dogs in by_rescue.items():
             (rdir / f"{slugify(label)}.html").write_text(
                 _rescue_page(label, dogs, site), encoding="utf-8")
