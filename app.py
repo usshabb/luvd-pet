@@ -422,4 +422,8 @@ def cities_endpoint():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8000, debug=True)
+    # PORT so a launcher can hand us a free one — 8000 is a busy default and a
+    # second copy of this server (or anything else on it) would otherwise just
+    # fail to bind. Production doesn't reach this block; Fly runs the app under
+    # its own server.
+    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 8000)), debug=True)

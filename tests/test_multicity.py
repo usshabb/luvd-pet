@@ -1011,6 +1011,44 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
+def test_the_about_sheet_can_reach_its_own_bottom():
+    """Full-screen About must be scrollable, and must not centre its overflow.
+
+    About is the only sheet with no `.m-scroll` inside it — Terms and Privacy
+    each have one — so the sheet element itself is the scroller. It was neither:
+    `justify-content:center` on a fixed-height box with `overflow:visible`. That
+    fit an 812px phone by three pixels and lost 51px off the bottom of a 667px
+    one, with no way to scroll to it, because centring pushes overflow past both
+    ends and a flex container will not scroll back to what it pushed off the
+    start. The buttons were cut in half on a shorter screen.
+
+    Both halves are asserted: a scroller, and no centring to defeat it.
+    """
+    css = _page_css()
+    rules = _rules_for(css, ".scrim.compact.sheet .about")
+    own = [(sel, body) for sel, body in rules
+           if sel.endswith(".about")]
+    eq("the About sheet has its own rule", len(own), 1)
+    body = own[0][1]
+
+    eq("it scrolls when the content is taller than the screen",
+       "overflow-y:auto" in body.replace(" ", ""), True)
+    # The specific thing that made the overflow unreachable. Auto margins on the
+    # first and last child centre it while it fits, which is what centring was
+    # for, and collapse when it does not.
+    eq("and does not centre with justify-content",
+       "justify-content:center" in body.replace(" ", ""), False)
+
+    joined = " ".join(b for _, b in rules).replace(" ", "")
+    eq("the hero carries the top auto margin", "margin-top:auto" in joined, True)
+    eq("the body carries the bottom auto margin",
+       "margin-bottom:auto" in joined, True)
+
+    # The premise: if these selectors stopped existing the checks above would be
+    # asserting about an empty string.
+    eq("the sheet rules were actually found", len(rules) >= 3, True)
+
+
 def test_dog_page_and_modal_say_the_same_things():
     """The per-dog page and the in-page modal describe a dog identically.
 

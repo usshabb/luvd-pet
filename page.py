@@ -2242,11 +2242,23 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       top:max(14px,env(safe-area-inset-top));right:14px;}}
     /* Centring the content leaves space above the hero, which showed the
        modal surface as a white band. Move the gradient onto the container so
-       it covers the whole sheet. */
+       it covers the whole sheet.
+       Centred with auto margins rather than justify-content, and scrollable.
+       About is the one sheet with no .m-scroll inside it — Terms and Privacy
+       both have one — so the sheet itself has to be the scroller. With
+       `justify-content:center` and no scroller it fit a 812px phone by three
+       pixels and lost 51px off the bottom on a 667px one, with no way to reach
+       it: centring overflow pushes it past BOTH ends of the box, and a flex
+       container will not let you scroll back to what it pushed off the start.
+       Auto margins centre it while it fits and collapse to zero when it does
+       not, which is the behaviour centring was reached for in the first
+       place. */
     .scrim.compact.sheet .about{{display:flex;flex-direction:column;
-      justify-content:center;min-height:100%;
+      justify-content:flex-start;min-height:100%;overflow-y:auto;
       background:radial-gradient(120% 60% at 50% 0%,
         var(--accent-soft) 0%, transparent 62%);}}
+    .scrim.compact.sheet .about-hero{{margin-top:auto;}}
+    .scrim.compact.sheet .about-body{{margin-bottom:auto;}}
     .scrim.compact.sheet .about-hero{{background:none;
       padding-top:max(58px,calc(env(safe-area-inset-top) + 46px));}}
     .scrim.compact.sheet .about-body{{padding-bottom:max(28px,
