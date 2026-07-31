@@ -1953,16 +1953,42 @@ def render(dated, for_date: date = None, city: str = None) -> str:
      so they never bunch at the top of a stretched card. */
   .sc{{margin-bottom:24px;}}
   .sc:last-of-type{{margin-bottom:0;}}
-  .scores .sc-note{{margin-top:auto;}}
   .sc-top{{display:flex;align-items:center;gap:8px;margin-bottom:9px;}}
   .sc-ic{{font-size:15px;width:20px;text-align:center;}}
   .sc-lb{{font-size:14px;font-weight:600;flex:1;}}
-  .sc-vl{{font-size:12.5px;color:var(--muted);font-weight:500;}}
-  .bar{{height:7px;border-radius:980px;background:var(--hair);overflow:hidden;}}
-  .bar span{{display:block;height:100%;border-radius:980px;background:var(--accent);
-    width:0;transition:width .85s cubic-bezier(.2,.8,.2,1);}}
-  .sc-note{{font-size:11.5px;color:var(--muted);line-height:1.45;padding-top:14px;
-    border-top:1px solid var(--hair);margin-top:22px;}}
+  /* A marker on a named axis, not a fill. The fill was unreadable, and not for
+     want of a label: its direction meant three different things down the four
+     rows. Energy is neutral, a full Apartment fit is good, a full Experience
+     needed is *harder*, a full Home alone is good again. So a long bar was
+     "better" on two rows and "more demanding" on a third, with no rule to learn
+     — and with both ends unlabelled there was nothing to say what 20% was 20%
+     of. A pin has no direction to misread: it says this dog is here, between
+     these two things, and the two things are now written underneath.
+     It also fixes the middle. At `v*20` a score of 3 filled 60%, which reads as
+     "quite a lot of"; centred, 3 sits dead centre and looks like the middle. */
+  .sc-track{{position:relative;height:6px;border-radius:980px;
+    background:var(--hair);margin:0 11px;}}
+  /* The heart from the save button. Same mark doing a second job, and it makes
+     the row feel like part of the page rather than a chart dropped into it. */
+  .sc-pin{{position:absolute;top:50%;width:22px;height:22px;
+    transform:translate(-50%,-50%) scale(.2);opacity:0;
+    transition:transform .5s cubic-bezier(.34,1.4,.64,1),opacity .28s ease;
+    filter:drop-shadow(0 1px 2px rgba(0,0,0,.22));}}
+  /* The wordmark's heart, outline and all: accent fill inside a white edge.
+     paint-order:stroke puts the stroke behind the fill so it reads as an outline
+     around the shape rather than a line drawn through it — without that, a 3px
+     stroke eats 1.5px of the heart from every side and the shape thins out. */
+  .sc-pin svg{{width:100%;height:100%;display:block;fill:var(--accent);
+    stroke:#fff;stroke-width:3.8;paint-order:stroke;
+    stroke-linejoin:round;overflow:visible;}}
+  /* Grows in when the modal opens, the same beat the fill used to animate on. */
+  .sc-pin.in{{transform:translate(-50%,-50%) scale(1);opacity:1;}}
+  .sc-ends{{display:flex;justify-content:space-between;gap:10px;
+    margin:9px 11px 0;font-size:11.5px;color:var(--muted);line-height:1.3;}}
+  /* The end the dog is actually at. Only ever one of the two, and never both:
+     a score of 3 leaves them both quiet, which is the honest answer. */
+  .sc-ends .on{{color:var(--text);font-weight:600;}}
+  .sc-ends span{{max-width:47%;}}
 
   /* ---------- size + cost ---------- */
   .sizecost{{margin-bottom:22px;background:var(--hair2);border-radius:18px;}}
@@ -1973,7 +1999,6 @@ def render(dated, for_date: date = None, city: str = None) -> str:
   .sc-right > * + *{{border-top:1px solid var(--hair);}}
   .sc-right > *{{flex:1;}}
   .sc-block{{padding:18px 20px 18px;display:flex;flex-direction:column;}}
-  .sc-block .sc-note{{margin-top:auto;padding-top:14px;}}
   .sc-block p{{font-size:14.5px;line-height:1.5;color:var(--text);margin:0;}}
   .gw{{height:8px;border-radius:980px;background:var(--hair);overflow:hidden;
     margin-top:14px;}}
@@ -2605,18 +2630,41 @@ function bars(d) {{
   if (!d.scores || !d.scores.energy) return '';
   const rows = Object.keys(SCALE).map(k => {{
     const v = d.scores[k], s = SCALE[k];
+    // Centred on the five stops rather than filled: 1 sits at 0%, 3 at 50%,
+    // 5 at 100%. The old v*20 put a 3 at 60%, which looked like most of the way
+    // to "needs a job" when it meant the middle.
+    const pos = (v - 1) * 25;
+    // No value on the right any more. The pin's position IS the answer, and the
+    // ends name the axis — saying the word again beside it was the duplication
+    // people were reading as two separate claims.
+    const lo = v === 1 ? ' class="on"' : '';
+    const hi = v === 5 ? ' class="on"' : '';
     return `<div class="sc">
         <div class="sc-top">
           <span class="sc-ic">${{s.icon}}</span>
           <span class="sc-lb">${{s.label}}</span>
-          <span class="sc-vl">${{esc(s.words[v-1])}}</span>
         </div>
-        <div class="bar"><span data-w="${{v*20}}"></span></div>
+        <div class="sc-track">
+          <span class="sc-pin" data-p="${{pos}}" style="left:${{pos}}%"
+                role="img" aria-label="${{esc(s.label)}}: ${{esc(s.words[v-1])}}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21C8 18 3
+              14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 12 8C12.9 6 14.5
+              4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18 12 21Z"/></svg>
+          </span>
+        </div>
+        <div class="sc-ends">
+          <span${{lo}}>${{esc(s.words[0])}}</span>
+          <span${{hi}}>${{esc(s.words[4])}}</span>
+        </div>
       </div>`;
   }}).join('');
-  return `<div class="scores"><div class="sc-hd">Good to know</div>${{rows}}
-    <div class="sc-note">Estimated from this dog's write-up and breed tendencies —
-      not a formal assessment. ${{esc(d.source_label)}} knows this dog best.</div></div>`;
+  // No qualifier here and no paragraph under the rows: the owner's call. Worth
+  // knowing if this is ever revisited — these four numbers come from the dog's
+  // write-up and its breed's tendencies, not from an assessment, so nothing on
+  // screen now says they are estimates. enrich._size_outlook and _score are
+  // where they are actually derived.
+  return `<div class="scores"><div class="sc-hd">Good to know</div>
+    ${{rows}}</div>`;
 }}
 
 // ---- share ------------------------------------------------------------------
@@ -3089,8 +3137,10 @@ function showModal(inner, size) {{
   document.body.classList.add('locked');
   requestAnimationFrame(() => {{
     scrim.classList.add('vis');
-    modal.querySelectorAll('.bar span').forEach(b =>
-      setTimeout(() => {{ b.style.width = b.dataset.w + '%'; }}, 90));
+    // The pins pop in one after another rather than all at once — the row is
+    // read top to bottom, and a stagger follows the eye down it.
+    modal.querySelectorAll('.sc-pin').forEach((p, i) =>
+      setTimeout(() => p.classList.add('in'), 110 + i * 70));
   }});
   const x = modal.querySelector('.m-close');
   if (x) x.onclick = closeModal;
