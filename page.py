@@ -1590,7 +1590,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     white-space:nowrap;transition:border-color .18s,background .18s,color .18s;}}
   .fpill > button:hover,.fpill-t:hover{{border-color:var(--muted);}}
   /* Drawn inside the pill, not around it. An offset outline was being sheared
-     off by .fbar-pills' overflow-x scroll container on phones, and on a pill
+     off by .fbar-pills' old overflow-x scroll container on phones, and on a pill
      already filled solid accent a red ring one gap away read as a broken double
      border. Inset can't be clipped; white reads as focus on a filled pill. */
   .fpill > button:focus-visible,.fpill-t:focus-visible{{
@@ -2226,35 +2226,25 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        them centred until they overflow, then falls back to flex-start — plain
        `center` in a scroll container puts the first pill out of reach. */
     .fbar{{margin:22px 0 -4px;}}
-    /* No -webkit-overflow-scrolling:touch. It used to be here for momentum, and
-       it is why every filter menu opened *behind* the dogs on iOS: that property
-       promotes the row to its own composited layer, which contains
-       position:fixed descendants — so the menu, fixed and z-index 48, was
-       trapped inside a row that paints before the grid, and the cards and the
-       results header drew straight over it. Momentum scrolling has been the
-       default for overflow containers since iOS 13, so nothing is lost.
-       .fbar-pills.menu-open is the belt to this braces; see it for why both. */
-    .fbar-pills{{flex-wrap:nowrap;justify-content:safe center;overflow-x:auto;
-      padding-bottom:2px;scrollbar-width:none;}}
-    .fbar-pills::-webkit-scrollbar{{display:none;}}
-    /* The fade that says the row keeps going. A mask, not an overlaid gradient,
-       for two reasons: a mask cannot intercept a touch, so the pills under it
-       stay tappable and the row stays scrollable; and it fades to *transparent*
-       rather than to a colour, so it is correct on whatever background the
-       current theme paints without knowing anything about it. The classes are
-       set by paintPillFade() — the edge only fades when there is something
-       behind it, so the cue disappears at the end of the scroll and never
-       appears at all if the pills happen to fit. */
-    .fbar-pills.fade-r{{-webkit-mask-image:linear-gradient(to right,#000
-      calc(100% - 34px),transparent);mask-image:linear-gradient(to right,#000
-      calc(100% - 34px),transparent);}}
-    .fbar-pills.fade-l{{-webkit-mask-image:linear-gradient(to left,#000
-      calc(100% - 34px),transparent);mask-image:linear-gradient(to left,#000
-      calc(100% - 34px),transparent);}}
-    .fbar-pills.fade-l.fade-r{{-webkit-mask-image:linear-gradient(to right,
-      transparent,#000 34px,#000 calc(100% - 34px),transparent);
-      mask-image:linear-gradient(to right,transparent,#000 34px,#000
-      calc(100% - 34px),transparent);}}
+    /* THE PILL ROW MUST NOT SCROLL, MASK, OR TRANSFORM. Read this before adding
+       anything to it.
+       The filter menus are position:fixed and open over the grid. WebKit clips a
+       fixed descendant to any scrolling ancestor's box, and makes a containing
+       block out of any ancestor with a transform, filter, backdrop-filter,
+       perspective, contain or will-change. Give this row any of those and every
+       menu is cut off at the row's own height — which on a phone looks exactly
+       like the menu opening behind the dogs.
+       That bug shipped twice. First from -webkit-overflow-scrolling:touch, which
+       was removed. Then it came straight back from the plain overflow-x:auto
+       left behind, because z-index fixes paint ORDER and this is CLIPPING — no
+       stacking value can lift content out of an ancestor's clip rect.
+       So the row wraps instead of scrolling. Five pills go onto two lines at
+       375px, which also fixes what the scroller cost: Foster used to sit 19px
+       off the right edge behind a fade, discoverable only by swiping a row most
+       people never realised moved. Nothing is hidden now.
+       tests/test_multicity.py::test_filter_menus_cannot_be_clipped fails if any
+       of these properties comes back. */
+    .fbar-pills{{flex-wrap:wrap;justify-content:center;row-gap:8px;}}
     .fbar-meta{{margin:12px 0 -10px;}}
     /* 17px here, against 19px on desktop. 19px is exactly the phone size of the
        card dog names (.nm, 19px/700), so the count sat at the size and weight of
@@ -4004,37 +3994,19 @@ function paintFilters(pool) {{
 // without a breakpoint deciding for it. Renaming the pill didn't make this
 // dead code; it moved the width where it starts to matter.
 const pillRow = document.getElementById('fbar-pills');
-// scrollWidth/clientWidth force layout, so they're read only when something
-// could have changed them: a resize, or a repaint that rewrote the pill labels
-// (Foster's count changes width as you filter). Scrolling itself reads only
-// scrollLeft, which is free.
-let pillSlack = 0;
+// The row no longer scrolls, so there is no scroll position to track and no
+// edge fade to paint — both are gone along with the mask that used to draw it.
+// See .fbar-pills in the mobile block for why the scroller had to go.
+//
+// What remains is the stacking promotion. It is not what fixes the clipping —
+// nothing about z-index can — but it keeps the open menu painting above the grid
+// if anything above this row ever becomes a stacking context again.
 function paintPillFade() {{
   if (!pillRow) return;
-  // A mask paints on the element's own box, so anything a descendant draws
-  // outside that box is masked away — and an open filter menu is fixed,
-  // full-width and far taller than this row, so it vanishes completely. The
-  // cue is pointless while a menu is covering the row anyway, so it stands
-  // down for as long as one is open. Anything else added here that escapes the
-  // row's box needs the same treatment.
-  const menuOpen = !!pillRow.querySelector('.fpill.open');
-  // The other half of the same problem: the row has to out-rank the grid while
-  // the menu is up, or it opens behind the dogs. See .fbar-pills.menu-open.
-  pillRow.classList.toggle('menu-open', menuOpen);
-  const room = !menuOpen && pillSlack > 1;
-  const x = pillRow.scrollLeft;
-  pillRow.classList.toggle('fade-r', room && x < pillSlack - 1);
-  pillRow.classList.toggle('fade-l', room && x > 1);
+  pillRow.classList.toggle('menu-open',
+    !!pillRow.querySelector('.fpill.open'));
 }}
-function measurePillRow() {{
-  if (!pillRow) return;
-  pillSlack = pillRow.scrollWidth - pillRow.clientWidth;
-  paintPillFade();
-}}
-if (pillRow) {{
-  pillRow.addEventListener('scroll', paintPillFade, {{passive: true}});
-  addEventListener('resize', measurePillRow, {{passive: true}});
-}}
+function measurePillRow() {{ paintPillFade(); }}
 
 function closeFilterMenus() {{
   document.querySelectorAll('.fpill').forEach(p => {{
@@ -4294,7 +4266,7 @@ document.querySelectorAll('.fpill').forEach(pill => {{
       ? (trigger.getBoundingClientRect().bottom + 10) + 'px' : '';
     requestAnimationFrame(() => {{
       pill.classList.add('open');
-      paintPillFade();          // the mask would otherwise swallow this menu
+      paintPillFade();          // promote the row above the grid
     }});
     trigger.setAttribute('aria-expanded', 'true');
   }});

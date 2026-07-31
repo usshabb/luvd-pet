@@ -818,6 +818,65 @@ def test_events_email_points_at_its_own_city():
        ("View Event Details" in body) or ("See Adoptable Dogs" in body), False)
 
 
+def test_filter_menus_cannot_be_clipped():
+    """The filter menus must never sit inside a clipping or transformed ancestor.
+
+    This bug shipped twice and both times looked like "the menus open behind the
+    dogs on Safari". The menus are position:fixed. WebKit clips a fixed
+    descendant to any scrolling ancestor's box, and makes a containing block out
+    of any ancestor carrying transform, filter, backdrop-filter, perspective,
+    contain or will-change. Either way the menu gets cut down to the pill row's
+    own height, which on a phone is indistinguishable from being painted under
+    the grid.
+
+    The first fix removed -webkit-overflow-scrolling:touch. The bug returned
+    immediately from the plain overflow-x:auto that was left behind, because
+    z-index addresses paint order and this is clipping — no stacking value lifts
+    content out of an ancestor's clip rect. So the invariant is structural: the
+    row that holds the pills does not scroll, mask, or transform.
+
+    Asserted against the real generated CSS rather than the source, so it holds
+    however the rule gets written.
+    """
+    css = _page_css()
+    rules = _rules_for(css, ".fbar-pills")
+    eq("the pill row has rules to check", bool(rules), True)
+
+    banned = ("overflow", "mask-image", "-webkit-mask-image", "transform",
+              "filter", "backdrop-filter", "perspective", "contain:",
+              "will-change", "-webkit-overflow-scrolling")
+    found = sorted({p for sel, body in rules for p in banned if p in body})
+    eq("nothing that clips or transforms the pill row", found, [])
+
+    # The menus are only fixed on phones; if that ever changes this test is
+    # measuring the wrong thing, so assert the premise it rests on.
+    eq("the menus are still position:fixed somewhere",
+       "position:fixed" in "".join(b for _, b in _rules_for(css, ".fmenu")), True)
+
+
+def _page_css() -> str:
+    """Every <style> block from a real rendered page."""
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+    d = _Dog(id="t:1", name="Test", source="t", source_label="T",
+             url="https://example.org/1", photos=["https://example.org/p.jpg"],
+             breed="Terrier")
+    d.first_seen = "2026-07-31"
+    html_out = _page.render([("2026-07-31", [d])], _date(2026, 7, 31), "NYC")
+    return "\n".join(re.findall(r"<style>(.*?)</style>", html_out, re.S))
+
+
+def _rules_for(css: str, selector: str):
+    """[(selector, body)] for every rule whose selector mentions `selector`."""
+    out = []
+    for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        sel = " ".join(sel.split())
+        if selector in sel:
+            out.append((sel, " ".join(body.split())))
+    return out
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
