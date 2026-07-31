@@ -6,6 +6,7 @@ get it wrong, so it happens once, here, after fetch.
 """
 import re
 from typing import List
+from urllib.parse import urlsplit
 
 import cities
 from sources.base import Dog
@@ -128,6 +129,23 @@ def _tidy_weight(w: str) -> str:
     return f"{int(n)} lbs" if n == int(n) else f"{n:.1f} lbs"
 
 
+# Files that are not photographs, however a rescue filed them. Petstablished
+# lets a video be uploaded down an .../uploads/image/image/... path, so the URL
+# looks like a photo and only the extension gives it away — and one of those
+# reached a dog's og:image, where iMessage could not render it and fell back to
+# the site icon, and reached the grid, where the card was a broken image.
+#
+# A blocklist rather than an allowlist of image types: plenty of CDNs serve
+# perfectly good photos from extensionless URLs, and rejecting those would throw
+# away far more than it saved.
+_NOT_A_PHOTO = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpg",
+                ".mpeg", ".ogv", ".3gp", ".mp3", ".wav", ".pdf")
+
+
+def _is_image(url: str) -> bool:
+    return not urlsplit(url).path.lower().endswith(_NOT_A_PHOTO)
+
+
 def normalize(dogs: List[Dog]) -> List[Dog]:
     for d in dogs:
         d.name = re.sub(r"\s+", " ", (d.name or "")).strip() or "Unknown"
@@ -144,7 +162,8 @@ def normalize(dogs: List[Dog]) -> List[Dog]:
             key=lambda t: order[t["kind"]],
         )
         d.attributes = [t["text"] for t in d.traits]
-        d.photos = [p for p in (d.photos or []) if p and p.startswith("http")]
+        d.photos = [p for p in (d.photos or [])
+                    if p and p.startswith("http") and _is_image(p)]
         if not d.adopt_url:
             d.adopt_url = d.url
     return dogs

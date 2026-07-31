@@ -1011,6 +1011,62 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
+def test_a_video_is_never_treated_as_a_photo():
+    """Videos are dropped, and we never lead with a format Chrome cannot show.
+
+    Petstablished accepts a video upload down an .../uploads/image/image/... path,
+    so the URL looks like a photo and only the extension says otherwise. One
+    reached a dog's og:image: iMessage could not render it and fell back to the
+    site icon, and the grid card was a broken image — but only in Chrome.
+    WebKit paints the first frame of an mp4 in an <img>, so it looked fine in
+    Safari and broken in Chrome, which is the worst way for this to fail.
+
+    HEIC is the same split and is handled differently: it is a real photograph,
+    so it stays in the gallery, but it is not what we lead with.
+    """
+    import normalize as _norm
+    from sources.base import Dog as _Dog
+
+    for url in ("https://s3.example.com/uploads/image/image/1/IMG_5331.mp4",
+                "https://x.example.com/a/trim.ABC.MOV",       # upper case
+                "https://x.example.com/a/clip.mp4?sig=abc",   # query string
+                "https://x.example.com/a/reel.webm"):
+        eq(f"rejected: {url.rsplit('/', 1)[-1]}", _norm._is_image(url), False)
+    for url in ("https://x.example.com/a/dog.jpg",
+                "https://x.example.com/a/dog.HEIC",
+                "https://x.example.com/photo/12345"):   # extensionless CDN URL
+        eq(f"kept: {url.rsplit('/', 1)[-1]}", _norm._is_image(url), True)
+
+    # End to end through normalize(), which is where every source's photos land.
+    d = _Dog(id="t:1", name="Cane", source="animalrescuemission",
+             source_label="The Animal Rescue Mission", url="https://e.org/1",
+             breed="American Bully", city="LA",
+             photos=["https://e.org/IMG_5331.mp4", "https://e.org/real.jpg"])
+    _norm.normalize([d])
+    eq("the video is gone", d.photos, ["https://e.org/real.jpg"])
+    eq("and the og:image is the real photo",
+       d.primary_photo(), "https://e.org/real.jpg")
+
+    # A dog with nothing but video ends up with no photo, not a broken one.
+    v = _Dog(id="t:2", name="V", source="s", source_label="S",
+             url="https://e.org/2", breed="", city="LA",
+             photos=["https://e.org/a.mp4"])
+    _norm.normalize([v])
+    eq("all-video means no photo at all", v.photos, [])
+    eq("and primary_photo says so", v.primary_photo(), "")
+
+    # Lead with what every browser can draw.
+    h = _Dog(id="t:3", name="H", source="s", source_label="S",
+             url="https://e.org/3", breed="", city="LA",
+             photos=["https://e.org/a.heic", "https://e.org/b.jpg"])
+    eq("a jpg outranks a heic", h.primary_photo(), "https://e.org/b.jpg")
+    only = _Dog(id="t:4", name="O", source="s", source_label="S",
+                url="https://e.org/4", breed="", city="LA",
+                photos=["https://e.org/a.heic"])
+    eq("but heic alone still beats nothing",
+       only.primary_photo(), "https://e.org/a.heic")
+
+
 def test_the_about_sheet_can_reach_its_own_bottom():
     """Full-screen About must be scrollable, and must not centre its overflow.
 

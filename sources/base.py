@@ -9,6 +9,7 @@ Sources are tried in PRIORITY ORDER (lowest number first). Direct rescue
 listings are preferred; Petfinder is the fallback.
 """
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 from typing import List, Optional
 
 from cities import DEFAULT_CITY
@@ -72,8 +73,24 @@ class Dog:
     size_outlook: dict = field(default_factory=dict)
     monthly_cost: dict = field(default_factory=dict)
 
+    # Formats every renderer handles. HEIC is a real photograph and stays in the
+    # gallery, but Chrome will not display it and link-preview bots vary, so it
+    # is not what we lead with when there is an alternative.
+    _SAFE_PHOTO = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
     def primary_photo(self) -> str:
-        return self.photos[0] if self.photos else ""
+        """The photo to lead with — card, og:image, email, share card.
+
+        Prefers a format that renders everywhere. Falls back to the first photo
+        rather than none: a HEIC that some browsers show beats no picture, and
+        an extensionless CDN URL is the common case and matches nothing here.
+        """
+        if not self.photos:
+            return ""
+        for p in self.photos:
+            if urlsplit(p).path.lower().endswith(self._SAFE_PHOTO):
+                return p
+        return self.photos[0]
 
     def cta_url(self) -> str:
         return self.adopt_url or self.url
