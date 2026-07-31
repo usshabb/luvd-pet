@@ -5011,9 +5011,15 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
 
     # The other live cities' indexes. Every live city gets one, so this set is
     # stable and the links can't point at a page that was never written.
+    #
+    # These are the only links in the foot. There was a "Today's new dogs" here
+    # too, pointing at the same place as the "All adoptable dogs in NYC" link at
+    # the top of the page — the same destination twice, so it earned nothing.
     others = [cities.CITIES[k] for k in cities.live_codes() if k != c.code]
-    also = "".join(f' &middot; <a href="{o.rescues_path}">Also in {html.escape(o.name)}'
-                   f' &rarr;</a>' for o in others)
+    also = " &middot; ".join(
+        f'<a href="{o.rescues_path}">Also in {html.escape(o.name)} &rarr;</a>'
+        for o in others)
+    foot = f"\n<footer>{also}</footer>" if also else ""
 
     # A city mid-launch can have no rescues yet. Keep the page — the city page's
     # footer links to it — but don't ask Google to index an empty roster, and
@@ -5071,8 +5077,7 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
 <a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>
 <h1>{c.short} dog rescues</h1>
 <p class="lead">{html.escape(desc)} {intro}</p>
-{''.join(cards)}
-<footer><a href="{c.path}">Today&rsquo;s new dogs</a>{also}</footer>
+{''.join(cards)}{foot}
 </body></html>"""
 
 
