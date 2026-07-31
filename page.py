@@ -315,6 +315,99 @@ def age_months(raw: str) -> int:
     return -1
 
 
+# Small / Medium / Large by the weight the dog will be GROWN, in pounds. Three
+# buckets rather than four because the fourth was 1% of the roster, and the
+# boundaries are stated on screen ("Medium · 25–50 lbs") rather than left for a
+# reader to infer — "medium" on its own means whatever the last dog they met
+# weighed.
+#
+# 25 and 50 are chosen against the actual distribution, not convention. The
+# obvious 25/55 split put 54% of dogs in Medium, which is half the roster behind
+# one option and a filter that barely filters. 25/50 gives 20/43/35.
+_SIZE_BUCKETS = (
+    ("Small", 0, 25),
+    ("Medium", 25, 50),
+    ("Large", 50, 10_000),
+)
+
+
+def _weight_lbs(text) -> float:
+    """A rescue's typed weight in pounds, or 0. Handles "22 lbs", "6.6", "9 kg"."""
+    m = re.search(r"(\d+(?:\.\d+)?)", str(text or ""))
+    if not m:
+        return 0.0
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return 0.0
+    if re.search(r"\bkgs?\b", str(text), re.I):
+        value *= 2.20462
+    return value if 0 < value < 300 else 0.0
+
+
+def adult_lbs(dog: Dog) -> float:
+    """What this dog will weigh grown, in pounds, or 0 if we genuinely can't say.
+
+    Grown weight rather than current, because a filter on current weight files a
+    4-month shepherd under Small and sends somebody home with a dog four times
+    the size they asked for. `enrich._size_outlook` already does the projecting;
+    this adds the fallbacks it declines to make.
+
+    Four sources, most trustworthy first:
+
+      1. ``size_outlook.adult`` — the measured weight of a grown dog, or the
+         midpoint of its breed's known adult range if it is still growing.
+      2. The rescue's typed weight, when `_size_outlook` returned nothing at all.
+         It does that whenever the age is unknown, since it cannot then say
+         "fully grown" or "still growing" — but an unknown age does not make a
+         real number on the page worthless, and most dogs in rescue are adults.
+      3. The matched breed's adult range, when there is no weight either.
+      4. Nothing. Deliberately NOT enrich's `_default` range of 30–45 lbs: that
+         would file every unidentifiable dog under Medium on no evidence, which
+         is a claim rather than a guess.
+
+    Notably absent: the rescue's own `size` field. Measured against weight it is
+    not usable — Animal Haven's "large" dogs have a median weight of 19 lbs
+    against their own "medium" at 44, and across the roster 15 of 50 "small"
+    dogs outweigh the lightest "large". Eleven rescues typing into four boxes
+    with no shared definition.
+    """
+    outlook = getattr(dog, "size_outlook", None) or {}
+    if outlook.get("adult"):
+        try:
+            return float(outlook["adult"])
+        except (TypeError, ValueError):
+            pass
+    typed = _weight_lbs(getattr(dog, "weight", ""))
+    if typed:
+        return typed
+    try:
+        from enrich import _BREEDS, _match_breed
+        key = _match_breed(dog.breed or "")
+        rng = _BREEDS.get(key, {}).get("adult_lbs") if key else None
+        if rng:
+            return sum(rng) / 2
+    except Exception:
+        pass
+    return 0.0
+
+
+def size_bucket(dog: Dog) -> str:
+    """Small / Medium / Large, or "Unknown" when there is nothing to go on.
+
+    "Unknown" rather than "" for the same reason age_bucket does it: every dog
+    lands in exactly one option, so the counts in the menu add up to "Any size"
+    and no dog sits in the roster while being unreachable by clicking.
+    """
+    lbs = adult_lbs(dog)
+    if lbs <= 0:
+        return "Unknown"
+    for name, low, high in _SIZE_BUCKETS:
+        if low <= lbs < high:
+            return name
+    return "Unknown"
+
+
 def age_bucket(dog: Dog) -> str:
     """Puppy / Young / Adult / Senior, or "Unknown" when the age is unreadable.
 
@@ -716,6 +809,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     payload = json.dumps([
         dict(d.to_dict(), waiting_days=(waiting_days(d, for_date) or 0),
              breed_group=breed_group(d), age_bucket=age_bucket(d),
+             size_bucket=size_bucket(d), adult_lbs=round(adult_lbs(d)) or None,
              path=dog_path(d))
         for d in flat
     ])
@@ -1381,6 +1475,43 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     font-weight:600;color:var(--accent);padding:6px 12px;border-radius:980px;
     background:var(--surface);white-space:nowrap;}}
   .fb-clear:hover{{opacity:.8;}}
+  /* The right-hand group: the URL, then the button. min-width:0 so the code
+     element can actually shrink — a flex child will not ellipsis without it. */
+  .fb-right{{display:flex;align-items:center;gap:12px;min-width:0;
+    margin-left:auto;}}
+  /* The link, shown rather than described. Monospace and muted: it is evidence,
+     not a control, and it should not compete with the button beside it.
+     Truncates from the right, host first. `direction:rtl` was tried to keep the
+     tail visible and is wrong for a URL: it reorders the string at the bidi
+     level rather than scrolling it, so "luvd.com/?saved=a,b" rendered as
+     "…,b/luvd.com" — a URL nobody could verify, which defeats showing it. */
+  .fb-url{{font:500 12.5px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:var(--accent);opacity:.72;background:rgba(255,255,255,.55);
+    border-radius:8px;padding:5px 9px;max-width:340px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+  .fb-url[hidden]{{display:none;}}
+  /* White, matching the bar's other pill, with a drawn icon rather than 🔗 —
+     that emoji renders as a different object on every platform and read as a
+     smudge at this size. It is the only button in the bar now, so it does not
+     need to shout to be found. */
+  .fb-copy{{padding:7px 14px;display:inline-flex;align-items:center;gap:6px;
+    flex:0 0 auto;box-shadow:0 1px 2px rgba(0,0,0,.07);}}
+  .fb-copy:hover{{opacity:.85;}}
+  .fb-copy svg{{width:14px;height:14px;flex:0 0 auto;fill:none;
+    stroke:var(--accent);stroke-width:2;stroke-linecap:round;
+    stroke-linejoin:round;}}
+  .fb-copy[hidden]{{display:none;}}
+  @media (max-width:680px){{
+    /* No room for a URL beside a button on a phone, and the button is the part
+       that does something. The link is still what gets shared — it is just not
+       recited first. */
+    .fb-url{{display:none;}}
+    /* 44px, because this is now the only thing to press in this bar and it was
+       coming out at 31. The label stays 13.5px; the height comes from padding,
+       so the pill grows without the type shouting. */
+    .fb-copy{{min-height:44px;padding:0 16px;}}
+    .filter-bar{{padding:10px 12px;}}
+  }}
 
   /* ---------- filter pills ---------- */
   /* One quiet row above the dogs, centred under the centred hero. No card, no
@@ -1539,6 +1670,15 @@ def render(dated, for_date: date = None, city: str = None) -> str:
      as two options. The menu widens to the longest label instead — "Bulldog &
      mastiff" and "Mixed / unknown" are the widest we have. */
   .fmenu button > span{{white-space:nowrap;}}
+  /* The pound range beside a size name. An <i> for brevity in the markup, so
+     font-style has to be reset — it is a quieter register, not an emphasis.
+     --muted against the row's --text is the same pairing the card facts and the
+     dog count use for "the number under the thing it describes". */
+  .fmenu .opt-d{{font-style:normal;font-weight:500;color:var(--muted);
+    margin-left:7px;}}
+  /* On the selected row the name turns accent; the range follows it rather than
+     staying grey, or it reads as disabled next to a chosen label. */
+  .fmenu button[aria-selected="true"] .opt-d{{color:var(--accent);opacity:.75;}}
   .fmenu button:hover{{background:var(--hair2);}}
   .fmenu button[aria-selected="true"]{{color:var(--accent);font-weight:700;}}
   /* Counted and dimmed rather than removed: seeing "Husky 0" is information,
@@ -1584,6 +1724,43 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     text-decoration-color:var(--hair);text-underline-offset:2px;
     white-space:nowrap;}}
   .faq p a:hover{{color:var(--accent);text-decoration-color:var(--accent);}}
+
+  /* ---------- shared list bar ---------- */
+  /* Sits above the grid rather than in the nav: it is about this visit, not a
+     permanent control, and it has to be able to say two lines without pushing
+     the nav around. Surface card on the page background, so it reads as a note
+     laid on the page rather than a piece of chrome. */
+  .shared-bar{{margin:22px 0 -4px;}}
+  .shared-bar[hidden]{{display:none;}}
+  .sb-in{{display:flex;align-items:center;gap:16px;background:var(--surface);
+    border:1px solid var(--hair);border-radius:18px;padding:16px 18px;
+    box-shadow:var(--shadow);}}
+  .sb-text{{min-width:0;flex:1 1 auto;}}
+  .sb-h{{font-size:17px;font-weight:700;letter-spacing:-.015em;color:var(--text);}}
+  /* The honest line: how many of the shared dogs are still listed, and how many
+     are not. A link outlives the dogs on it, so this is the difference between a
+     stale link degrading into information and degrading into a blank page. */
+  .sb-sub{{font-size:14px;color:var(--muted);margin-top:3px;}}
+  /* .cta is the page's full-width block button — display:block, width:100%,
+     margin-top:24px — which inside a flex row crushes the text beside it into a
+     one-word column. Overridden rather than a new class so the colour, radius,
+     focus ring and hover stay in one place. */
+  /* `.sb-in .sb-save`, not `.sb-save`: .cta is declared further down the sheet,
+     so at equal specificity it wins on source order and the button stays
+     display:block/width:100%, crushing the text beside it into a one-word
+     column. Two classes beats one regardless of order. */
+  .sb-in .sb-save{{flex:0 0 auto;width:auto;display:inline-block;margin-top:0;
+    padding:12px 20px;font-size:15.5px;white-space:nowrap;}}
+  @media (max-width:680px){{
+    .shared-bar{{margin:18px 0 -2px;}}
+    /* Stacked on a phone: side by side, the button either wrapped to two lines
+       or squeezed the count into an ellipsis. */
+    .sb-in{{flex-direction:column;align-items:stretch;gap:13px;padding:15px 16px;}}
+    /* min-height, not more padding: 12px top and bottom against a 19px line box
+       came out at 43px, one short of the touch floor, and nudging the padding to
+       fix a single pixel is the kind of number nobody can explain later. */
+    .sb-in .sb-save{{width:100%;min-height:44px;}}
+  }}
 
   /* ---------- footer ---------- */
   footer{{text-align:center;padding:52px 0 72px;color:var(--muted);font-size:13.5px;}}
@@ -2201,7 +2378,24 @@ def render(dated, for_date: date = None, city: str = None) -> str:
         d="M12 21C8 18 3 14.6 3 9.6C3 6.4 5.1 4.4 7.4 4.4C9.5 4.4 11.1 6 12 8C12.9
         6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18 12 21Z"/></svg>
       Saved dogs</span>
-    <button class="fb-clear" id="fb-clear">All dogs ✕</button>
+    <!-- The other half of ?saved=. A list in localStorage is one device's and
+         Safari drops it after seven days without a visit, so this is how it
+         leaves: a URL the reader keeps. Nothing is sent to us — the ids travel
+         in the link, which is what keeps the privacy page's promise true. -->
+    <!-- Right side: the link itself, then the button that takes it. Showing the
+         URL is what makes "Copy link" legible — you can see it is your own page
+         with your own dogs in it, not an account or an upload. Truncated from
+         the left of the id list, since the interesting part is the host.
+         No "All dogs ✕": the heart in the nav is already the way in and out, and
+         it highlights while you are in here, so a second exit in the bar was a
+         third white pill competing with the one action worth taking. -->
+    <div class="fb-right">
+      <code class="fb-url" id="fb-url" hidden></code>
+      <button class="fb-clear fb-copy" id="fb-copy" hidden><svg viewBox="0 0 24 24"
+          aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1
+          1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg
+        ><span class="fb-copy-t">Copy link</span></button>
+    </div>
   </div>
 
   <!-- Four filter pills, centred under the centred hero, and nothing else on
@@ -2227,6 +2421,16 @@ def render(dated, for_date: date = None, city: str = None) -> str:
         <button type="button" aria-haspopup="listbox" aria-expanded="false">
           <span class="fp-t">Age</span>{CHEVRON}</button>
         <span class="fmenu" role="listbox" aria-label="Filter by age" hidden></span>
+      </span>
+      <!-- Size sits after Age, which is the order somebody narrows in: what kind
+           of dog, then which one fits the life they have. It is the fifth pill on
+           a row that already scrolls sideways on a phone, so it lands just off
+           the right edge at 375px — reachable, and behind the fade cue that says
+           the row keeps going. -->
+      <span class="fpill" data-kind="size">
+        <button type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="fp-t">Size</span>{CHEVRON}</button>
+        <span class="fmenu" role="listbox" aria-label="Filter by size" hidden></span>
       </span>
       <!-- "Foster", not "Foster-to-adopt". The long form was 158.1px on a phone,
            wider than Breed and Age together and the entire reason the row
@@ -2285,6 +2489,20 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     <p>Tap the heart on any dog to keep them here. Your list stays on this
        device — no account, nothing sent to us.</p>
     <button class="cta" id="se-browse">Browse today's dogs</button>
+  </div>
+
+  <!-- Someone arrived on a ?saved= link. There are no accounts and the list was
+       never sent to us, so the link IS the list — which means this looks the
+       same whether it is your own link on a new phone or one a friend sent you.
+       Hidden until shared-list JS finds ids in the URL. -->
+  <div class="shared-bar" id="shared-bar" hidden>
+    <div class="sb-in">
+      <div class="sb-text">
+        <div class="sb-h" id="sb-h">A shared list</div>
+        <div class="sb-sub" id="sb-sub"></div>
+      </div>
+      <button class="cta sb-save" id="sb-save" type="button">Save these to my list</button>
+    </div>
   </div>
 
   <main id="dogs">
@@ -3527,6 +3745,18 @@ function paintSaved() {{
     chip.classList.toggle('has', n > 0);
     chip.classList.toggle('none', n === 0);
   }}
+  // Nothing saved, nothing to link to. Hidden rather than disabled: an empty
+  // list already has its own empty state saying what to do, and a dead button
+  // beside it is one more thing to read.
+  const copy = document.getElementById('fb-copy');
+  if (copy) copy.hidden = n === 0;
+  const urlEl = document.getElementById('fb-url');
+  if (urlEl) {{
+    const link = savedLink();
+    urlEl.hidden = !link;
+    // Without the scheme: it is there to be recognised, not typed.
+    if (link) urlEl.textContent = link.replace(/^https?:\/\//, '');
+  }}
 }}
 
 // Hearts drift up and out of the button. Positioned fixed so they're never
@@ -3590,11 +3820,29 @@ bindSaves();
 // purpose: 3-14% of our listings fill those fields in, so the results would
 // describe how thoroughly each rescue types rather than which dogs exist, and
 // two clicks would land on a confident, false zero.
-const FILTERS = {{breed: '', sex: '', age: ''}};
+const FILTERS = {{breed: '', sex: '', age: '', size: ''}};
 let fosterOnly = false;
 
-const F_LABEL = {{breed: 'Breed', sex: 'Gender', age: 'Age'}};
-const F_ANY = {{breed: 'Any breed', sex: 'Any gender', age: 'Any age'}};
+const F_LABEL = {{breed: 'Breed', sex: 'Gender', age: 'Age', size: 'Size'}};
+const F_ANY = {{breed: 'Any breed', sex: 'Any gender', age: 'Any age',
+              size: 'Any size'}};
+// Smallest first, and every row carries its pound range. "Medium" on its own
+// means whatever the last dog somebody met weighed; the numbers are the whole
+// point of the filter. These are the GROWN weights — see size_bucket() — so a
+// puppy sits in the bucket it will end up in, not the one it is in today.
+// Unknown last, reading as missing data rather than a size.
+//
+// Third element is the range, rendered separately and greyed: the word is what
+// you are choosing and the number is what tells you whether you chose right, so
+// they should not carry the same weight. "< 25" and "50 +" rather than "under
+// 25" and "50 and up" — a menu row is scanned, not read, and the symbols say it
+// in three characters instead of nine.
+const SIZE_ORDER = [
+  ['Small', 'Small', '< 25 lbs'],
+  ['Medium', 'Medium', '25–50 lbs'],
+  ['Large', 'Large', '50 lbs +'],
+  ['Unknown', 'Unknown', 'not listed'],
+];
 // Life order, not popularity: sorting these by count would put Adult above
 // Puppy and read as arbitrary. Abbreviated to "yr"/"yrs" so no row wraps to a
 // second line — "Senior · 8 years and up" was doing exactly that. Unknown sits
@@ -3616,13 +3864,14 @@ const OPT_LAST = ['Mixed / unknown', 'Other', 'Unknown'];
 // options total over the roster: a blank field would otherwise put a dog in
 // "Any" and in no option, i.e. in a list you can't click your way to.
 const fieldOf = (d, kind) => (kind === 'breed' ? d.breed_group
-  : kind === 'age' ? d.age_bucket : d.sex) || 'Unknown';
+  : kind === 'age' ? d.age_bucket
+  : kind === 'size' ? d.size_bucket : d.sex) || 'Unknown';
 
 // `skip` evaluates a menu's own options as if that pill were cleared. That's
 // what makes the counts inside it reachable numbers rather than a column of
 // zeroes, and it's the whole reason you can't click your way to an empty page.
 function fMatch(d, skip) {{
-  for (const kind of ['breed', 'sex', 'age']) {{
+  for (const kind of ['breed', 'sex', 'age', 'size']) {{
     if (FILTERS[kind] && skip !== kind && fieldOf(d, kind) !== FILTERS[kind]) return false;
   }}
   if (fosterOnly && skip !== 'foster' && d.program !== 'foster-to-adopt') return false;
@@ -3630,8 +3879,11 @@ function fMatch(d, skip) {{
 }}
 
 function fOptions(kind) {{
-  if (kind === 'age') {{
-    return AGE_ORDER.filter(([v]) => DOGS.some(d => fieldOf(d, 'age') === v));
+  // Fixed order for the two scales that have one. Sorting these by count would
+  // put Adult above Puppy, and Medium above Small, which reads as arbitrary.
+  if (kind === 'age' || kind === 'size') {{
+    const order = kind === 'age' ? AGE_ORDER : SIZE_ORDER;
+    return order.filter(([v]) => DOGS.some(d => fieldOf(d, kind) === v));
   }}
   const counts = new Map();
   DOGS.forEach(d => {{
@@ -3650,9 +3902,14 @@ function buildFilterMenus() {{
     const kind = pill.dataset.kind;
     const menu = pill.querySelector('.fmenu');
     if (!menu) return;
-    menu.innerHTML = [['', F_ANY[kind]]].concat(fOptions(kind)).map(([v, label]) =>
-      `<button type="button" role="option" data-v="${{esc(v)}}" aria-selected="false">` +
-      `<span>${{esc(label)}}</span><b></b></button>`).join('');
+    // `detail` is the optional third element — the size ranges. Greyed, so the
+    // name is what you read and the number is what you check.
+    menu.innerHTML = [['', F_ANY[kind]]].concat(fOptions(kind))
+      .map(([v, label, detail]) =>
+        `<button type="button" role="option" data-v="${{esc(v)}}" aria-selected="false">` +
+        `<span>${{esc(label)}}` +
+        (detail ? `<i class="opt-d">${{esc(detail)}}</i>` : '') +
+        `</span><b></b></button>`).join('');
   }});
 }}
 
@@ -3741,7 +3998,7 @@ function closeFilterMenus() {{
 }}
 
 function resetFilters() {{
-  FILTERS.breed = FILTERS.sex = FILTERS.age = '';
+  FILTERS.breed = FILTERS.sex = FILTERS.age = FILTERS.size = '';
   fosterOnly = false;
 }}
 
@@ -3821,6 +4078,74 @@ let showingSaved = false;
 // put them back. Null whenever we're not inside the saved view.
 let stashedFilters = null;
 
+// ---- shared lists -----------------------------------------------------------
+// A ?saved= link, so a list can leave the browser that made it. localStorage is
+// per-device and Safari evicts it after seven days without a visit, so without
+// this a saved list quietly disappears — and there is no account to fall back
+// on. The ids travel in the URL rather than to us: the privacy page promises the
+// list never leaves the device and is never sent to LUVD, and a link the reader
+// carries themselves keeps that true.
+//
+// `null` when this is an ordinary visit. A Set of ids when the URL carried some,
+// INCLUDING ids this page has no dog for — which is the point of keeping the raw
+// count separately below.
+let sharedIds = null;
+let sharedAsked = 0;
+// Set when the URL turned out to be the reader's own list. Handled at init by
+// calling toggleSavedView() rather than by setting showingSaved here, because
+// entering that view is more than a flag — it hides the pills, swaps in the
+// saved-dogs bar and drops the footer signup.
+let openSavedOnLoad = false;
+
+function savedLink() {{
+  const ids = [...savedSet()];
+  if (!ids.length) return '';
+  return location.origin + location.pathname + '?saved=' + ids.join(',');
+}}
+
+function readSharedList() {{
+  let raw = '';
+  try {{ raw = new URLSearchParams(location.search).get('saved') || ''; }}
+  catch (e) {{ return; }}
+  const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!ids.length) return;
+
+  // Your own link, opened by you, is just your saved list — so it opens as that,
+  // with no "a shared list / save these" bar offering you dogs you already have.
+  // The test is whether the link adds anything: every id already saved means
+  // there is nothing to adopt and nothing to explain. Same URL, both jobs.
+  const mine = savedSet();
+  if (ids.every(id => mine.has(id))) {{
+    openSavedOnLoad = true;
+    return;
+  }}
+  sharedAsked = new Set(ids).size;
+  sharedIds = new Set(ids);
+}}
+
+function paintSharedBar() {{
+  const bar = document.getElementById('shared-bar');
+  if (!bar) return;
+  if (!sharedIds) {{ bar.hidden = true; return; }}
+  const here = DOGS.filter(d => sharedIds.has(d.id)).length;
+  const gone = Math.max(0, sharedAsked - here);
+  const h = document.getElementById('sb-h');
+  const sub = document.getElementById('sb-sub');
+  if (h) h.textContent = 'A shared list';
+  if (sub) {{
+    // Never "3 adopted": forget_missing() deletes a dog's row rather than
+    // recording an outcome, so we know it is no longer listed and genuinely do
+    // not know why. Saying the true thing is also the warmer thing here.
+    const bits = [here === 1 ? '1 still looking' : `${{here}} still looking`];
+    if (gone) bits.push(gone === 1 ? '1 no longer listed'
+                                   : `${{gone}} no longer listed`);
+    sub.textContent = bits.join(' · ');
+  }}
+  const btn = document.getElementById('sb-save');
+  if (btn) btn.hidden = here === 0;
+  bar.hidden = false;
+}}
+
 // The single owner of what's on screen. Saved-view and the pills both run
 // through here, because two functions each setting card display would take
 // turns undoing each other.
@@ -3828,7 +4153,10 @@ function applyView() {{
   const soon = document.getElementById('soon');
   if (soon && !soon.hidden) return;      // a "coming soon" combo owns the grid
   const saved = savedSet();
-  const eligible = d => !showingSaved || saved.has(d.id);
+  // A shared list narrows the grid the same way the saved view does, and takes
+  // precedence: somebody who followed a link came to see those dogs.
+  const eligible = d => sharedIds ? sharedIds.has(d.id)
+                                  : (!showingSaved || saved.has(d.id));
   const pool = DOGS.filter(eligible);
 
   let shown = 0;
@@ -3850,11 +4178,15 @@ function applyView() {{
   // the controls were already saying.
   if (label) label.innerHTML = `<b>${{shown}}</b> dogs`;
 
+  paintSharedBar();
   const noSaves = showingSaved && saved.size === 0;
   const savedEmpty = document.getElementById('saved-empty');
   if (savedEmpty) savedEmpty.hidden = !noSaves;
   const filterEmpty = document.getElementById('filter-empty');
-  if (filterEmpty) filterEmpty.hidden = !(shown === 0 && !noSaves);
+  // A shared list whose dogs have all been placed is not an empty filter result,
+  // and "try loosening a filter" would be nonsense advice — the bar above says
+  // what happened, so the grid just stays empty under it.
+  if (filterEmpty) filterEmpty.hidden = !(shown === 0 && !noSaves && !sharedIds);
 
   // paintFilters() has just rewritten the option counts inside the pill labels,
   // which changes how far the row overruns, so the edge cue is re-derived here
@@ -3877,6 +4209,7 @@ function toggleSavedView() {{
     FILTERS.breed = stashedFilters.breed;
     FILTERS.sex = stashedFilters.sex;
     FILTERS.age = stashedFilters.age;
+    FILTERS.size = stashedFilters.size;
     fosterOnly = stashedFilters.fosterOnly;
     stashedFilters = null;
   }}
@@ -3948,10 +4281,77 @@ const savedChip = document.getElementById('saved-chip');
 if (savedChip) savedChip.onclick = toggleSavedView;
 const seBrowse = document.getElementById('se-browse');
 if (seBrowse) seBrowse.onclick = toggleSavedView;   // flip back to everything
-const fbClear = document.getElementById('fb-clear');
-if (fbClear) fbClear.onclick = toggleSavedView;
+
+// Share sheet on a phone, clipboard on a desktop. navigator.share is what puts
+// the link into Messages or Mail in one tap, which is how somebody actually
+// sends a list to themselves; clipboard is the fallback and the desktop path.
+const fbCopy = document.getElementById('fb-copy');
+if (fbCopy) fbCopy.onclick = async () => {{
+  const url = savedLink();
+  if (!url) return;
+  // The label lives in its own span: writing to the button's textContent would
+  // take the icon with it and never put it back.
+  const label = fbCopy.querySelector('.fb-copy-t');
+  const say = (msg) => {{
+    if (!label) return;
+    const was = label.textContent;
+    label.textContent = msg;
+    setTimeout(() => {{ label.textContent = was; }}, 2200);
+  }};
+  const n = savedSet().size;
+  // Clipboard first, then the share sheet, and the order is the whole point.
+  // Safari only allows a clipboard write while it still considers itself inside
+  // the tap that started it, and `await navigator.share(...)` spends that: the
+  // clipboard fallback after a share sheet the user dismisses is refused as not
+  // user-initiated, so the one path that reliably fails is the one somebody
+  // reaches by changing their mind. Writing first means the link is always taken
+  // — cancelling the sheet still leaves it on the clipboard rather than nothing.
+  let copied = false;
+  try {{
+    await navigator.clipboard.writeText(url);
+    copied = true;
+  }} catch (e) {{}}
+  if (navigator.share) {{
+    try {{
+      await navigator.share({{title: 'LUVD', url,
+        text: n === 1 ? 'A dog I saved on LUVD'
+                      : `${{n}} dogs I saved on LUVD`}});
+      return;
+    }} catch (e) {{ if (e && e.name === 'AbortError') {{
+      if (copied) say('Link copied');
+      return;
+    }} }}
+  }}
+  // No clipboard and no share sheet is an old browser or a page served over
+  // plain http. Showing the link is the last honest option — they can select it.
+  if (copied) {{ say('Link copied'); return; }}
+  const urlEl = document.getElementById('fb-url');
+  if (urlEl) {{ urlEl.hidden = false; urlEl.style.display = 'block'; }}
+  say('Copy the link →');
+}};
+
+// Merges, never replaces. If somebody sent you their list, adopting it must not
+// wipe the hearts you already had — so this adds, then leaves you in your own
+// saved view looking at the combined list, with the ?saved= param dropped so a
+// refresh doesn't put you back in somebody else's list.
+const sbSave = document.getElementById('sb-save');
+if (sbSave) sbSave.onclick = () => {{
+  if (!sharedIds) return;
+  const set = savedSet();
+  DOGS.forEach(d => {{ if (sharedIds.has(d.id)) set.add(d.id); }});
+  writeSaved(set);
+  sharedIds = null;
+  sharedAsked = 0;
+  try {{ history.replaceState(null, '', location.pathname); }} catch (e) {{}}
+  showingSaved = true;
+  paintSaved();
+  applyView();
+  if (window.luvdCelebrate) window.luvdCelebrate('saved!');
+}};
+
+readSharedList();
 paintSaved();
-applyView();
+if (openSavedOnLoad) toggleSavedView(); else applyView();
 // ---- logo easter egg --------------------------------------------------------
 // Paws drift up while you hover; clicking sets off a burst, and the fifth click
 // gets a woof. Purely decorative — nothing depends on it.
