@@ -1120,6 +1120,60 @@ def test_every_page_has_an_icon_a_browser_will_actually_fetch():
            '<link rel="icon" href="/favicon.ico"' in markup, True)
 
 
+def test_one_quiet_rescue_cannot_reset_its_dogs_dates():
+    """A source returning nothing must not look like every one of its dogs left.
+
+    record_seen() uses INSERT OR IGNORE, so a first_seen is never overwritten —
+    the only way a date moves is if the row was DELETED and re-inserted later.
+    forget_missing() is the only thing that deletes. So one bad morning at one
+    rescue — site down, markup changed, pagination short — deleted that whole
+    roster, and the next run stamped every one of them with that day: all marked
+    NEW HERE, all mailed to subscribers as new arrivals.
+
+    check.py's city-wide floor does not catch it. One rescue of seven going dark
+    drops the city total ~15%, nowhere near the floor, so the prune proceeds and
+    removes precisely that rescue's dogs.
+    """
+    fresh_db("quiet_source.db")
+    from sources.base import Dog as _Dog
+
+    def dog(i, source):
+        return _Dog(id=f"{source}:{i}", name=f"D{i}", source=source,
+                    source_label=source.title(), url=f"https://e.org/{i}",
+                    breed="", city="NYC")
+
+    monday = [dog(i, "muddypaws") for i in range(1, 6)] + \
+             [dog(i, "waggytail") for i in range(1, 4)]
+    db.record_seen(monday, "2026-06-01")
+    eq("all eight recorded", db.count_seen("NYC"), 8)
+
+    # Tuesday: waggytail's site is down. Its dogs are simply absent.
+    tuesday = [dog(i, "muddypaws") for i in range(1, 6)]
+    reported = {d.source for d in tuesday}
+    gone = db.forget_missing((d.id for d in tuesday), city="NYC",
+                             sources=reported)
+    eq("nothing was forgotten", gone, 0)
+    eq("waggytail's dogs are still on record", db.count_seen("NYC"), 8)
+
+    # Wednesday: waggytail is back with the same dogs. Their dates must be the
+    # originals, not Wednesday's — that is what NEW HERE and the digest read.
+    db.record_seen(monday, "2026-06-03")
+    seen = db.first_seen_map(d.id for d in monday)
+    eq("every date survived", sorted(set(seen.values())), ["2026-06-01"])
+
+    # And a dog whose source DID report, but which that source no longer lists,
+    # is still forgotten — the feature has to keep working.
+    thursday = [dog(i, "muddypaws") for i in range(1, 4)]
+    gone = db.forget_missing((d.id for d in thursday) , city="NYC",
+                             sources={"muddypaws"})
+    eq("adopted muddypaws dogs are forgotten", gone, 2)
+    eq("and waggytail is untouched", db.count_seen("NYC"), 6)
+
+    # sources=None keeps the old behaviour for callers with the full picture.
+    gone = db.forget_missing((d.id for d in thursday), city="NYC")
+    eq("unscoped still prunes everything absent", gone, 3)
+
+
 def test_a_video_is_a_video_and_never_a_photo():
     """Clips play in the gallery; nothing that needs a still ever gets one.
 

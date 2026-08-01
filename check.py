@@ -257,7 +257,18 @@ def run(dry_run=False, city=None):
                    f"city's timeline and mail it back as new tomorrow, so "
                    f"nothing was deleted. Check the scrapers.")
         else:
-            adopted = db.forget_missing((d.id for d in dogs), city=city)
+            # Only rescues that actually reported can have their dogs pruned.
+            # A source that returned nothing has told us nothing, and treating
+            # its silence as "every one of these dogs was adopted" is what reset
+            # a whole roster's first_seen dates and mailed them out as new.
+            reported = {d.source for d in dogs}
+            adopted = db.forget_missing((d.id for d in dogs), city=city,
+                                        sources=reported)
+            quiet = [s.name for s in sources_for_city(city)
+                     if s.name not in reported]
+            if quiet:
+                print(f"  {len(quiet)} source(s) returned nothing — their dogs "
+                      f"were left alone: {', '.join(quiet)}")
             if adopted:
                 print(f"  {adopted} dog(s) no longer listed — removed from the timeline.")
 

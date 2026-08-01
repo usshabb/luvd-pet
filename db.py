@@ -317,7 +317,7 @@ def count_seen(city: str = None) -> int:
         ).fetchone()["n"]
 
 
-def forget_missing(current_ids, city: str = None) -> int:
+def forget_missing(current_ids, city: str = None, sources=None) -> int:
     """Drop dogs no rescue lists any more — they've been adopted or pulled.
 
     Without this the table grows forever and a dog relisted months later would
@@ -334,17 +334,41 @@ def forget_missing(current_ids, city: str = None) -> int:
     column existed, so New York's run must still be able to prune them, and
     another city's run must not be able to touch them. The COALESCE says exactly
     that, and holds even if the backfill has not run yet.
+
+    `sources` narrows it further, and this is the important one. A dog is only
+    forgettable if the rescue that lists it actually reported this morning.
+    Absence from the scrape is evidence of adoption only when we know we asked
+    and got an answer — a rescue whose site was down, or paginated short, or
+    changed its markup, returns nothing, and every one of its dogs then looks
+    adopted.
+
+    The consequence was not a missing row. record_seen() uses INSERT OR IGNORE,
+    so a first_seen is never overwritten — but a deleted one comes back on the
+    next run stamped with that day. So one bad morning at one rescue silently
+    reset its whole roster's arrival dates, marked them all NEW HERE, and mailed
+    them to every subscriber as new arrivals.
+
+    check.py's city-wide floor does not catch this. One rescue of seven going
+    dark drops the city total by about 15%, nowhere near the floor, so the prune
+    goes ahead and deletes exactly that rescue's dogs. The floor guards against
+    everything failing at once; this guards against one thing failing quietly.
+
+    None means "every source reported" — the old behaviour, kept for callers
+    that genuinely have the full picture.
     """
     current = set(current_ids)
     with connect() as conn:
         if city is None:
-            rows = conn.execute("SELECT dog_id FROM seen_dogs").fetchall()
+            rows = conn.execute("SELECT dog_id, source FROM seen_dogs").fetchall()
         else:
             rows = conn.execute(
-                "SELECT dog_id FROM seen_dogs WHERE COALESCE(city, ?) = ?",
+                "SELECT dog_id, source FROM seen_dogs WHERE COALESCE(city, ?) = ?",
                 (cities.DEFAULT_CITY, cities.canon(city) or city),
             ).fetchall()
-        gone = [r["dog_id"] for r in rows if r["dog_id"] not in current]
+        keep_sources = None if sources is None else {s for s in sources if s}
+        gone = [r["dog_id"] for r in rows
+                if r["dog_id"] not in current
+                and (keep_sources is None or r["source"] in keep_sources)]
         for i in range(0, len(gone), 400):
             chunk = gone[i:i + 400]
             conn.execute(
