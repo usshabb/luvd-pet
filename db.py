@@ -190,6 +190,16 @@ def _migrate(conn):
         # definition means New York; the backfill below settles it, and every
         # read COALESCEs so a half-migrated file still answers correctly.
         ("seen_dogs", "city", "TEXT"),
+        # The day a dog stopped being listed anywhere. NULL means still listed.
+        # This replaces deleting the row, which threw away the only record that
+        # the dog had ever been here — and with it every share link anyone had
+        # sent, which started 404ing the morning the dog left.
+        ("seen_dogs", "gone_on", "TEXT"),
+        # The dog as last seen, as JSON. seen_dogs keeps a name and a URL, which
+        # is not enough to rebuild a page: no photos, no write-up, no breed, no
+        # ratings. Without this an archived dog would be a headline and nothing
+        # else, so the whole point of keeping it would be lost.
+        ("seen_dogs", "payload", "TEXT"),
     ):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column in cols:
@@ -283,6 +293,13 @@ def first_seen_map(dog_ids) -> dict:
     return out
 
 
+# How long a dog can be missing before coming back counts as a NEW listing
+# rather than a scrape that blinked. A rescue's site being down for a night, or
+# paginating short, must not reset a dog's arrival date — but a dog genuinely
+# relisted months later is a new arrival and should read as one.
+RELIST_IS_NEW_DAYS = 30
+
+
 def record_seen(dogs, today_iso: str) -> dict:
     """Insert any dog we haven't recorded, then return the full first-seen map.
 
@@ -290,6 +307,7 @@ def record_seen(dogs, today_iso: str) -> dict:
     is UTC — after 8pm Eastern that rolls to tomorrow and today's arrivals stop
     counting as new. Everything here runs on one New York clock.
     """
+    import json as _json
     with connect() as conn:
         conn.executemany(
             "INSERT OR IGNORE INTO seen_dogs(dog_id, source, name, url, matched, "
@@ -297,11 +315,47 @@ def record_seen(dogs, today_iso: str) -> dict:
             [(d.id, d.source, d.name, d.url, today_iso,
               getattr(d, "city", "") or cities.DEFAULT_CITY) for d in dogs],
         )
+        # Keep the latest version of every dog, so one that leaves can still be
+        # rendered. Cheap, and it is the only copy we will have once the rescue
+        # takes the listing down.
+        conn.executemany(
+            "UPDATE seen_dogs SET payload = ?, name = ?, url = ? WHERE dog_id = ?",
+            [(_json.dumps(d.to_dict()), d.name, d.url, d.id) for d in dogs],
+        )
+        # A dog that is listed again is not gone. If it was away long enough to
+        # be a genuine relisting, it also gets today's date and reads as new;
+        # if it blinked for a night it keeps the date it always had.
+        back = conn.execute(
+            "SELECT dog_id, gone_on FROM seen_dogs WHERE gone_on IS NOT NULL "
+            f"AND dog_id IN ({','.join('?' * len(dogs))})",
+            [d.id for d in dogs],
+        ).fetchall() if dogs else []
+        for row in back:
+            away = _days_between(row["gone_on"], today_iso)
+            if away is not None and away >= RELIST_IS_NEW_DAYS:
+                conn.execute("UPDATE seen_dogs SET gone_on = NULL, first_seen = ? "
+                             "WHERE dog_id = ?", (today_iso, row["dog_id"]))
+            else:
+                conn.execute("UPDATE seen_dogs SET gone_on = NULL WHERE dog_id = ?",
+                             (row["dog_id"],))
     return first_seen_map(d.id for d in dogs)
 
 
+def _days_between(a: str, b: str):
+    from datetime import date as _date
+    try:
+        return (_date.fromisoformat(b) - _date.fromisoformat(a)).days
+    except Exception:
+        return None
+
+
 def count_seen(city: str = None) -> int:
-    """How many dogs we have on record, optionally for one city.
+    """How many dogs are still listed, optionally in one city.
+
+    Still listed, not on record. This feeds check.py's prune floor, which
+    compares what a run just found against what it expects — and once dogs
+    are kept after they leave, "on record" grows forever and the comparison
+    would drift further from the truth every day.
 
     Read before a scoped delete, to compare what a run just found against what
     that city already has — see the floor in check.py.
@@ -309,19 +363,30 @@ def count_seen(city: str = None) -> int:
     with connect() as conn:
         if city is None:
             return conn.execute(
-                "SELECT COUNT(*) AS n FROM seen_dogs"
+                "SELECT COUNT(*) AS n FROM seen_dogs WHERE gone_on IS NULL"
             ).fetchone()["n"]
         return conn.execute(
-            "SELECT COUNT(*) AS n FROM seen_dogs WHERE COALESCE(city, ?) = ?",
+            "SELECT COUNT(*) AS n FROM seen_dogs WHERE gone_on IS NULL AND COALESCE(city, ?) = ?",
             (cities.DEFAULT_CITY, cities.canon(city) or city),
         ).fetchone()["n"]
 
 
-def forget_missing(current_ids, city: str = None, sources=None) -> int:
-    """Drop dogs no rescue lists any more — they've been adopted or pulled.
+def forget_missing(current_ids, city: str = None, sources=None,
+                   gone_on: str = None) -> int:
+    """Mark dogs no rescue lists any more. They are kept, not deleted.
 
-    Without this the table grows forever and a dog relisted months later would
-    be filed under its original date instead of reading as new.
+    Deleting threw away the only record the dog had ever been here. Every link
+    anyone had shared started 404ing the morning the rescue took the listing
+    down, and the site could not say a single true thing about the thousands of
+    dogs that had passed through it.
+
+    `gone_on` is a date, not a claim. We know the dog is no longer listed; we do
+    not know why. Most have been adopted, but a listing can also be pulled,
+    transferred, or the dog can have died, and nothing here can tell those
+    apart — so nothing here says "adopted".
+
+    A dog listed again is un-marked by record_seen(), which also decides whether
+    it reads as new: see RELIST_IS_NEW_DAYS.
 
     `city` is the blast radius, and it is not optional in practice. This deletes
     every row it was NOT just handed, so a Los Angeles run that passed only its
@@ -358,24 +423,83 @@ def forget_missing(current_ids, city: str = None, sources=None) -> int:
     """
     current = set(current_ids)
     with connect() as conn:
+        # Only dogs still considered listed. One that left last week has
+        # already been marked and must not be reported as leaving again every
+        # morning for the rest of time.
         if city is None:
-            rows = conn.execute("SELECT dog_id, source FROM seen_dogs").fetchall()
+            rows = conn.execute(
+                "SELECT dog_id, source FROM seen_dogs WHERE gone_on IS NULL"
+            ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT dog_id, source FROM seen_dogs WHERE COALESCE(city, ?) = ?",
+                "SELECT dog_id, source FROM seen_dogs "
+                "WHERE gone_on IS NULL AND COALESCE(city, ?) = ?",
                 (cities.DEFAULT_CITY, cities.canon(city) or city),
             ).fetchall()
         keep_sources = None if sources is None else {s for s in sources if s}
         gone = [r["dog_id"] for r in rows
                 if r["dog_id"] not in current
                 and (keep_sources is None or r["source"] in keep_sources)]
+        stamp = gone_on or _today_iso()
         for i in range(0, len(gone), 400):
             chunk = gone[i:i + 400]
             conn.execute(
-                f"DELETE FROM seen_dogs WHERE dog_id IN ({','.join('?' * len(chunk))})",
-                chunk,
+                "UPDATE seen_dogs SET gone_on = ? WHERE gone_on IS NULL AND "
+                f"dog_id IN ({','.join('?' * len(chunk))})",
+                [stamp] + chunk,
             )
     return len(gone)
+
+
+def _today_iso() -> str:
+    from datetime import date as _date
+    return _date.today().isoformat()
+
+
+def gone_dogs(city: str = None, limit: int = None) -> list:
+    """Dogs that are no longer listed, most recently gone first.
+
+    Each row is the dog exactly as we last saw it, plus the day it left. This is
+    what the archive pages are built from — the rescue's listing is gone, so
+    this is the only copy of the photos and the write-up that exists.
+
+    Rows recorded before `payload` existed have nothing to render and are left
+    out rather than published as an empty page.
+    """
+    import json as _json
+    sql = ("SELECT dog_id, city, first_seen, gone_on, payload FROM seen_dogs "
+           "WHERE gone_on IS NOT NULL AND payload IS NOT NULL")
+    args = []
+    if city:
+        sql += " AND COALESCE(city, ?) = ?"
+        args += [cities.DEFAULT_CITY, cities.canon(city) or city]
+    sql += " ORDER BY gone_on DESC, dog_id"
+    if limit:
+        sql += " LIMIT ?"
+        args.append(int(limit))
+    out = []
+    with connect() as conn:
+        for r in conn.execute(sql, args):
+            try:
+                d = _json.loads(r["payload"])
+            except Exception:
+                continue
+            d["first_seen"] = r["first_seen"]
+            d["gone_on"] = r["gone_on"]
+            d["city"] = r["city"] or cities.DEFAULT_CITY
+            out.append(d)
+    return out
+
+
+def gone_count(city: str = None) -> int:
+    """How many dogs have passed through, for the "so far" line."""
+    sql = "SELECT COUNT(*) AS n FROM seen_dogs WHERE gone_on IS NOT NULL"
+    args = []
+    if city:
+        sql += " AND COALESCE(city, ?) = ?"
+        args += [cities.DEFAULT_CITY, cities.canon(city) or city]
+    with connect() as conn:
+        return conn.execute(sql, args).fetchone()["n"]
 
 
 def photo_state(dog_ids) -> dict:

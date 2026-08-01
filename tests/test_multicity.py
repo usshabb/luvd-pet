@@ -169,14 +169,24 @@ def seed(dogs, city, when):
 
 
 def rows(city=None):
+    """The dogs a city still lists, {id: first_seen}.
+
+    Still lists, not every row. A dog that leaves is now marked with gone_on
+    rather than deleted, so it survives in the table on purpose — the archive
+    pages are built from it. Every caller here is asserting about the roster,
+    which is what these tests have always meant, so the filter keeps their
+    meaning rather than changing it. That a departed row still EXISTS is
+    asserted separately, in test_dogs_are_kept_after_they_leave.
+    """
     with db.connect() as conn:
         if city is None:
             r = conn.execute("SELECT dog_id, city, date(first_seen) d "
-                             "FROM seen_dogs ORDER BY dog_id").fetchall()
+                             "FROM seen_dogs WHERE gone_on IS NULL "
+                             "ORDER BY dog_id").fetchall()
         else:
             r = conn.execute("SELECT dog_id, city, date(first_seen) d "
-                             "FROM seen_dogs WHERE city = ? ORDER BY dog_id",
-                             (city,)).fetchall()
+                             "FROM seen_dogs WHERE gone_on IS NULL AND city = ? "
+                             "ORDER BY dog_id", (city,)).fetchall()
     return {x["dog_id"]: x["d"] for x in r}
 
 
@@ -1118,6 +1128,70 @@ def test_every_page_has_an_icon_a_browser_will_actually_fetch():
     for what, markup in pages.items():
         eq(f"{what} declares the .ico",
            '<link rel="icon" href="/favicon.ico"' in markup, True)
+
+
+def test_dogs_are_kept_after_they_leave():
+    """A dog that stops being listed is marked, not deleted.
+
+    Deleting threw away the only record the dog had ever been here — every
+    shared link 404ed the morning the rescue took the listing down, and the site
+    could say nothing true about the thousands of dogs that had passed through.
+
+    `gone_on` is a date, not a claim: we know the dog is no longer listed, not
+    why. Most are adopted; a listing can also be pulled or transferred. Nothing
+    in the data says "adopted" and nothing built on it may either.
+    """
+    fresh_db("gone_on.db")
+    from sources.base import Dog as _Dog
+
+    def dog(i):
+        d = _Dog(id=f"muddypaws:{i}", name=f"D{i}", source="muddypaws",
+                 source_label="Muddy Paws Rescue", url=f"https://e.org/{i}",
+                 photos=[f"https://e.org/{i}.jpg"], breed="Terrier",
+                 description=f"D{i} is lovely.", city="NYC")
+        return d
+
+    all_three = [dog(1), dog(2), dog(3)]
+    db.record_seen(all_three, "2026-06-01")
+    eq("three listed", db.count_seen("NYC"), 3)
+
+    # Dog 3 is adopted. Its source reported, so it can be marked.
+    left = db.forget_missing([d.id for d in all_three[:2]], city="NYC",
+                             sources={"muddypaws"}, gone_on="2026-06-10")
+    eq("one dog left", left, 1)
+    # count_seen means STILL LISTED — it feeds check.py's prune floor, which
+    # would drift further from the truth every day if the archive counted.
+    eq("two still listed", db.count_seen("NYC"), 2)
+    eq("but three are on record", db.gone_count("NYC") + db.count_seen("NYC"), 3)
+
+    # And the dog survives in full, so a page can still be built for it.
+    archive = db.gone_dogs("NYC")
+    eq("one dog in the archive", len(archive), 1)
+    eq("with its name", archive[0]["name"], "D3")
+    eq("its photos", archive[0]["photos"], ["https://e.org/3.jpg"])
+    eq("its write-up", archive[0]["description"], "D3 is lovely.")
+    eq("and the day it left", archive[0]["gone_on"], "2026-06-10")
+
+    # Running again must not re-report the same dog as leaving every morning.
+    again = db.forget_missing([d.id for d in all_three[:2]], city="NYC",
+                              sources={"muddypaws"}, gone_on="2026-06-11")
+    eq("it does not leave twice", again, 0)
+    eq("and keeps the date it actually left",
+       db.gone_dogs("NYC")[0]["gone_on"], "2026-06-10")
+
+    # Back within the blink window: same dog, same arrival date.
+    db.record_seen(all_three, "2026-06-12")
+    eq("it is listed again", db.count_seen("NYC"), 3)
+    eq("nothing is archived", db.gone_dogs("NYC"), [])
+    eq("and its arrival date is untouched",
+       db.first_seen_map(["muddypaws:3"])["muddypaws:3"], "2026-06-01")
+
+    # Gone again, and back much later: that is a new listing, not the old one.
+    db.forget_missing([d.id for d in all_three[:2]], city="NYC",
+                      sources={"muddypaws"}, gone_on="2026-06-13")
+    db.record_seen(all_three, "2026-09-01")
+    eq("a relisting months later reads as new",
+       db.first_seen_map(["muddypaws:3"])["muddypaws:3"], "2026-09-01")
 
 
 def test_one_quiet_rescue_cannot_reset_its_dogs_dates():

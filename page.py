@@ -5023,6 +5023,25 @@ _DOG_PAGE_CSS = """
   /* nowrap so a label can never become two lines: the bar's height is fixed
      by design and a wrap is what made it look like a banner. */
   .dpg-card .m-foot .cta{padding:11px 16px;font-size:14.5px;white-space:nowrap;}
+  /* The "no longer listed" banner. Warm, not an error state — the dog most
+     likely went home, and this page exists so the link someone shared still
+     lands somewhere kind. */
+  .dpg-gone{display:flex;gap:12px;align-items:flex-start;
+    margin:0;padding:16px 22px;border-bottom:1px solid var(--hair);
+    background:var(--accent-soft);font-size:14.5px;line-height:1.5;
+    border-radius:26px 26px 0 0;}
+  .dpg-gone-em{font-size:20px;line-height:1.2;flex:0 0 auto;}
+  /* A rescue that takes a listing down eventually deletes the photo with it,
+     so an archive page will outlive its own images. Rather than a broken-image
+     icon forever, the hero falls back to the initial-on-a-wash treatment the
+     grid already uses for a dog with no photo. Live pages get it too, for a
+     CDN having a bad morning. */
+  .m-hero.no-img img{display:none;}
+  .m-hero.no-img::after{content:attr(data-initial);position:absolute;inset:0;
+    display:flex;align-items:center;justify-content:center;
+    font-size:58px;font-weight:800;letter-spacing:-.04em;
+    color:var(--accent);background:var(--accent-soft);}
+  @media (max-width:720px){.dpg-gone{border-radius:0;padding:14px 16px;}}
   .dpg-terms{margin-top:20px;}
   .dpg-terms .act-note{margin-bottom:6px;}
   /* The modal's tabs stretch to fill an 880px card. Here they sit at the top
@@ -5353,7 +5372,7 @@ def _share_kit_js(page_html: str, city_code: str) -> str:
 
 def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
               share_href: str = "/share.js",
-              siblings: List[Dog] = None) -> str:
+              siblings: List[Dog] = None, gone_on: str = None) -> str:
     """A standalone, indexable page per dog — the same modules as the modal.
 
     Server-rendered rather than a hash route, because Google can't index
@@ -5486,9 +5505,12 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
         thumbs = '<div class="thumbs">' + first + "".join(tiles[1:]) + "</div>"
     media = ""
     if photo:
-        media = (f'<div class="m-media"><div class="m-hero">'
+        media = (f'<div class="m-media"><div class="m-hero"'
+                 f' data-initial="{html.escape((d.name or chr(63))[:1].upper())}">'
                  f'<img id="hero" src="{html.escape(photo)}"'
-                 f' alt="{html.escape(d.name)}, {html.escape(breed)}">'
+                 f' alt="{html.escape(d.name)}, {html.escape(breed)}"'
+                 f" onerror=\"this.closest('.m-hero')"
+                 f".classList.add('no-img')\">"
                  f'<video id="hero-v" controls playsinline preload="metadata"'
                  f" hidden></video>"
                  f"</div>{thumbs}</div>")
@@ -5523,6 +5545,35 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
              f'{rescue_line}<div class="chips">{chips}</div></div>')
 
     act = _dp_action(d, site)
+    # A dog that is no longer listed keeps its page. The rescue took the
+    # listing down, so this is the only copy of the photos and the write-up
+    # left — and every link anyone ever shared used to 404 the morning the dog
+    # went. What it must NOT do is claim an adoption: we know the dog is not
+    # listed, we do not know why. Most leave because they found a home, some
+    # are pulled or transferred. Same line the 404 page has always taken.
+    gone_note, foot_cta = "", ""
+    if gone_on:
+        when = ""
+        try:
+            when = date.fromisoformat(gone_on).strftime("%B %-d")
+        except ValueError:
+            pass
+        # Two plain sentences and a date, in that order. An earlier draft
+        # tried to explain why the page still exists, which is our problem
+        # and not the reader's — they clicked a link about a dog.
+        seen = f" Last listed here on {when}." if when else ""
+        gone_note = (
+            '<div class="dpg-gone"><span class="dpg-gone-em">🏡</span><div>'
+            f'<b>{html.escape(d.name)} is no longer listed at '
+            f'{html.escape(d.source_label)}.</b> Most dogs leave the list '
+            "because they found a home &mdash; we hope that is the case "
+            f"here.{seen}</div></div>")
+        foot_cta = (f'<a class="cta" href="{c.path}">See dogs still waiting '
+                    "&rarr;</a>")
+    else:
+        foot_cta = (f'<a class="cta" href="{html.escape(act["href"])}" '
+                    f'target="_blank" rel="noopener">'
+                    f'{html.escape(act["short"])}</a>')
     note = ""
     if act["note"]:
         note = (f'<div class="act-note{" prog" if act["program"] else ""}">'
@@ -5543,6 +5594,14 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
     dog_json = json.dumps(dict(d.to_dict(),
                                waiting_days=(wd or 0),
                                path=dog_path(d)), ensure_ascii=False)
+
+    if gone_on:
+        # Say it where a search result and an unfurl will show it too.
+        title = f"{d.name} — no longer listed at {d.source_label}"
+        desc = (f"{d.name} is no longer listed at {d.source_label} in "
+                f"{c.name}. Most dogs leave the list because they found a "
+                f"home. See their photos and write-up, and the dogs still "
+                f"waiting.")
 
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -5578,6 +5637,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
 </div>
 <main class="dpg">
   <div class="dpg-card">
+    {gone_note}
     <div class="m-body">
       <div class="topgrid{' with-photo' if photo else ''}">
         {media}
@@ -5598,8 +5658,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
     </div>
     <div class="m-foot">
       <div class="foot-row">
-        <a class="cta" href="{html.escape(act['href'])}" target="_blank"
-           rel="noopener">{html.escape(act['short'])}</a>
+        {foot_cta}
         <button class="cta cta2" id="share-btn" type="button">
           <svg class="shr-ic" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 15V3M12 3 8.5 6.5M12 3l3.5 3.5"/>
@@ -6239,6 +6298,34 @@ def write(pages, for_date: date = None) -> Path:
         by_rescue = {}
         for d in flat:
             by_rescue.setdefault(d.source_label, []).append(d)
+
+        # Dogs this city has lost. Their pages are rewritten every run, because
+        # the clear above wipes the whole rescue directory — so an archived page
+        # that is not re-emitted here goes back to 404ing, which is the thing
+        # this is meant to stop.
+        try:
+            import db as _db
+            departed = _db.gone_dogs(c.code)
+        except Exception as e:                       # no database: skip quietly
+            print(f"  {c.code}: archive unavailable ({type(e).__name__}: {e})")
+            departed = []
+        for row in departed:
+            try:
+                gd = Dog(**{k: v for k, v in row.items()
+                            if k in Dog.__dataclass_fields__})
+            except Exception:
+                continue
+            gd.first_seen = row.get("first_seen") or ""
+            path = OUT_DIR / dog_path(gd).lstrip("/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.with_suffix(".html").write_text(
+                _dog_page(gd, site, for_date, css_href=css_href,
+                          share_href=share_href,
+                          siblings=by_rescue.get(gd.source_label, []),
+                          gone_on=row.get("gone_on")),
+                encoding="utf-8")
+        if departed:
+            print(f"  {c.code}: {len(departed)} archived dog page(s) kept alive")
 
         # After by_rescue, so each dog page can offer the rest of its own
         # rescue's dogs — the link someone who likes this dog actually wants.
