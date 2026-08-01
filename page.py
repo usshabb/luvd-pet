@@ -2028,6 +2028,40 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     background:var(--hair2);border-radius:10px;padding:12px;margin-top:9px;
     max-height:190px;overflow:auto;font-family:inherit;line-height:1.5;}}
 
+  /* ---------- modal paging ---------- */
+  /* Outside the card on a desktop, where there is room either side and putting
+     them on top of the photo would cover the dog. */
+  .mnav{{all:unset;position:fixed;top:50%;transform:translateY(-50%);
+    width:46px;height:46px;border-radius:50%;cursor:pointer;z-index:3;
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.92);box-shadow:var(--shadow);
+    transition:opacity .18s,transform .18s;}}
+  .mnav svg{{width:22px;height:22px;fill:none;stroke:#1d1d1f;stroke-width:2.2;
+    stroke-linecap:round;stroke-linejoin:round;}}
+  .mnav:hover{{transform:translateY(-50%) scale(1.06);}}
+  .mnav[hidden]{{display:none;}}
+  .mnav-p{{left:max(14px,calc(50vw - 520px));}}
+  .mnav-n{{right:max(14px,calc(50vw - 520px));}}
+  @media (max-width:720px){{
+    /* A phone has no room beside a full-screen sheet, so these sit over the
+       photo — the usual place for gallery controls, and translucent enough to
+       read against one.
+       NOT along the bottom, which was the first attempt: the pinned action bar
+       is taller in the modal than on the dog page (it still carries the note
+       and the fee), so they landed on top of Apply and Share. Anchored to the
+       top instead, which nothing else occupies.
+       Swiping is the real gesture here; these are the visible hint that paging
+       exists at all. */
+    .mnav{{top:34%;bottom:auto;transform:translateY(-50%);
+      width:40px;height:40px;
+      background:rgba(0,0,0,.5);backdrop-filter:blur(8px);
+      -webkit-backdrop-filter:blur(8px);}}
+    .mnav svg{{stroke:#fff;width:19px;height:19px;}}
+    .mnav:hover{{transform:translateY(-50%);}}
+    .mnav-p{{left:12px;}}
+    .mnav-n{{right:12px;}}
+  }}
+
   /* ---------- share sheet ---------- */
   .share{{padding:26px 24px 24px;}}
   .story-wrap{{display:flex;justify-content:center;margin:14px 0 16px;}}
@@ -2839,7 +2873,13 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 </div>
 
 <div class="scrim" id="scrim" role="dialog" aria-modal="true">
+  <button class="mnav mnav-p" id="mnav-p" type="button" aria-label="Previous dog" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
   <div class="modal" id="modal"></div>
+  <button class="mnav mnav-n" id="mnav-n" type="button" aria-label="Next dog" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
 </div>
 
 <script>
@@ -3591,6 +3631,7 @@ function renderDog(d) {{
     a.addEventListener('click', () => trackOut(d, 'listing')));
   bindSaves(modal);
   paintSaved();
+  paintDogNav(d);
 
   modal.querySelectorAll('.sim-card').forEach(sc => sc.onclick = () => {{
     openDog(+sc.dataset.i);
@@ -3734,6 +3775,7 @@ function openAbout() {{
   // Stop anything playing. The modal keeps its markup until the next open, so
   // a clip left running would go on making noise behind a closed dialog.
   modal.querySelectorAll('video').forEach(v => {{ try {{ v.pause(); }} catch (e) {{}} }});
+  paintDogNav(null);
   scrim.classList.remove('vis');
   document.body.classList.remove('locked');
   setTimeout(() => scrim.classList.remove('on'), 280);
@@ -3853,12 +3895,99 @@ function openDog(i, opts) {{
   }}
 }}
 
+// ---- paging between dogs ----------------------------------------------------
+// The order is whatever the grid is currently showing: applyView() hides cards
+// with style.display and applySort() reorders them, so the DOM already holds the
+// filtered, sorted sequence. Reading it back means the arrows walk the list the
+// visitor is actually looking at — filter to small dogs and you page through
+// small dogs — rather than the full roster, which would feel broken.
+function visibleCards() {{
+  return [...document.querySelectorAll('.grid .card')]
+    .filter(c => c.style.display !== 'none');
+}}
+
+let navPrev = null, navNext = null;
+
+function paintDogNav(d) {{
+  const p = document.getElementById('mnav-p');
+  const n = document.getElementById('mnav-n');
+  if (!p || !n) return;
+  navPrev = navNext = null;
+  // Only when a dog is open. The subscribe, about and share modals share this
+  // scrim, and arrows on them would page a grid nobody is looking at.
+  if (d) {{
+    const cards = visibleCards();
+    const at = cards.findIndex(c => DOGS[+c.dataset.i] && DOGS[+c.dataset.i].id === d.id);
+    if (at >= 0) {{
+      navPrev = cards[at - 1] || null;
+      navNext = cards[at + 1] || null;
+    }}
+  }}
+  // Hidden at the ends rather than disabled. Wrapping around would silently
+  // start the list again and there is nothing on screen to say it did.
+  p.hidden = !navPrev;
+  n.hidden = !navNext;
+}}
+
+function stepDog(delta) {{
+  const card = delta < 0 ? navPrev : navNext;
+  if (!card) return;
+  openDog(+card.dataset.i);
+  countView(card);          // same as opening it from the grid
+}}
+
 function openFromHash() {{
   const m = (location.hash || '').match(/^#dog\\/(.+)$/);
   if (!m) {{ if (scrim.classList.contains('on')) closeModal(true); return; }}
   const i = DOGS.findIndex(d => slugFor(d) === m[1]);
   if (i >= 0) openDog(i, {{silent: true}});
 }}
+
+(function () {{
+  const p = document.getElementById('mnav-p');
+  const n = document.getElementById('mnav-n');
+  if (p) p.onclick = () => stepDog(-1);
+  if (n) n.onclick = () => stepDog(1);
+
+  document.addEventListener('keydown', e => {{
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (!scrim.classList.contains('on')) return;
+    // Never steal the key from something the visitor is typing in, and leave
+    // modifier combos to the browser (alt+arrow is Back).
+    // t.matches, not just t: a keydown can target the document itself, which is
+    // not an Element and has no matches() — the guard would throw and swallow
+    // the keypress.
+    const t = e.target;
+    if (t && t.matches && (t.matches('input, textarea, select')
+                           || t.isContentEditable)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!navPrev && !navNext) return;       // not a dog modal
+    e.preventDefault();
+    stepDog(e.key === 'ArrowLeft' ? -1 : 1);
+  }});
+
+  // Swipe, which is the gesture people actually reach for on a phone. Bound to
+  // the modal rather than the scrim so a swipe outside the card does nothing,
+  // and ignored when it starts on the thumbnail strip — that scrolls sideways
+  // itself and stealing from it would make the photos unreachable.
+  let x0 = null, y0 = null, fromStrip = false;
+  modal.addEventListener('touchstart', e => {{
+    if (e.touches.length !== 1) {{ x0 = null; return; }}
+    x0 = e.touches[0].clientX;
+    y0 = e.touches[0].clientY;
+    fromStrip = !!(e.target.closest && e.target.closest('.thumbs'));
+  }}, {{passive: true}});
+  modal.addEventListener('touchend', e => {{
+    if (x0 === null || fromStrip || (!navPrev && !navNext)) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = null;
+    // Horizontal, and clearly so: the sheet scrolls vertically, and a lazy
+    // diagonal while reading must not fire.
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    stepDog(dx > 0 ? -1 : 1);
+  }}, {{passive: true}});
+}})();
 
 window.addEventListener('popstate', openFromHash);
 window.addEventListener('hashchange', openFromHash);
