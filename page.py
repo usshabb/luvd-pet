@@ -2053,13 +2053,19 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        Swiping is the real gesture here; these are the visible hint that paging
        exists at all. */
     .mnav{{top:34%;bottom:auto;transform:translateY(-50%);
-      width:40px;height:40px;
-      background:rgba(0,0,0,.5);backdrop-filter:blur(8px);
-      -webkit-backdrop-filter:blur(8px);}}
-    .mnav svg{{stroke:#fff;width:19px;height:19px;}}
+      width:36px;height:36px;
+      background:rgba(0,0,0,.42);backdrop-filter:blur(8px);
+      -webkit-backdrop-filter:blur(8px);
+      transition:opacity .45s ease;}}
+    .mnav svg{{stroke:#fff;width:18px;height:18px;}}
     .mnav:hover{{transform:translateY(-50%);}}
-    .mnav-p{{left:12px;}}
-    .mnav-n{{right:12px;}}
+    .mnav-p{{left:10px;}}
+    .mnav-n{{right:10px;}}
+    /* Shown on open, then out of the way. Two circles parked over the dog's
+       face for as long as the modal is open is chrome on top of the product,
+       and swipe is the real gesture here — these exist to say the gesture is
+       there, which they only need to do once. Any touch brings them back. */
+    .mnav.dim{{opacity:0;pointer-events:none;}}
   }}
 
   /* ---------- share sheet ---------- */
@@ -3927,6 +3933,21 @@ function paintDogNav(d) {{
   // start the list again and there is nothing on screen to say it did.
   p.hidden = !navPrev;
   n.hidden = !navNext;
+  if (d) wakeDogNav(); else clearTimeout(navFade);
+}}
+
+// Fade the phone's arrows out shortly after they have made their point, and
+// bring them back on any touch. Desktop keeps them: a pointer has no swipe, and
+// there they sit outside the card where they cover nothing.
+let navFade = null;
+
+function wakeDogNav() {{
+  const els = [document.getElementById('mnav-p'),
+               document.getElementById('mnav-n')].filter(Boolean);
+  els.forEach(el => el.classList.remove('dim'));
+  clearTimeout(navFade);
+  if (!COARSE) return;                    // only phones fade
+  navFade = setTimeout(() => els.forEach(el => el.classList.add('dim')), 2400);
 }}
 
 function stepDog(delta) {{
@@ -3972,6 +3993,7 @@ function openFromHash() {{
   // itself and stealing from it would make the photos unreachable.
   let x0 = null, y0 = null, fromStrip = false;
   modal.addEventListener('touchstart', e => {{
+    wakeDogNav();
     if (e.touches.length !== 1) {{ x0 = null; return; }}
     x0 = e.touches[0].clientX;
     y0 = e.touches[0].clientY;
