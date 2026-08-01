@@ -1011,6 +1011,53 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
+def test_every_page_has_an_icon_a_browser_will_actually_fetch():
+    """/favicon.ico must exist, because browsers ask for it whether we link it or not.
+
+    A <link rel="icon"> does not stop the implicit request for /favicon.ico, and
+    ours answered it with the 4.6 KB HTML 404 page. A browser that cannot fetch
+    an icon keeps showing whatever it last cached for the origin — which for
+    luvd.com meant a previous deployment's logo surviving on some machines long
+    after the site changed. Nothing in the repo produced that icon, and nothing
+    in the repo could remove it either; only a request that succeeds does.
+    """
+    from pathlib import Path as _Path
+    import page as _page
+
+    pub = _Path(_page.OUT_DIR)
+    for name, magic in (("favicon.ico", b"\x00\x00\x01\x00"),   # ICONDIR
+                        ("favicon.png", b"\x89PNG"),
+                        ("apple-touch-icon.png", b"\x89PNG"),
+                        # Older iOS asks for this exact name first.
+                        ("apple-touch-icon-precomposed.png", b"\x89PNG")):
+        f = pub / name
+        eq(f"{name} exists", f.is_file(), True)
+        if f.is_file():
+            eq(f"{name} is really that format",
+               f.read_bytes()[:len(magic)], magic)
+
+    # And every page type declares it, so a browser that honours the tag gets
+    # the .ico too rather than relying on the implicit path alone.
+    from datetime import date as _date
+    from sources.base import Dog as _Dog
+    d = _Dog(id="t:1", name="T", source="muddypaws",
+             source_label="Muddy Paws Rescue", url="https://e.org/1",
+             photos=["https://e.org/p.jpg"], breed="Terrier", city="NYC")
+    d.first_seen = "2026-07-31"
+    pages = {
+        "city page": _page.render([("2026-07-31", [d])], _date(2026, 7, 31), "NYC"),
+        "dog page": _page._dog_page(d, "https://luvd.com", _date(2026, 7, 31)),
+        "rescue page": _page._rescue_page("Muddy Paws Rescue", [d],
+                                          "https://luvd.com"),
+        "rescue index": _page._rescues_page({"Muddy Paws Rescue": [d]},
+                                            "https://luvd.com",
+                                            _date(2026, 7, 31), "NYC"),
+    }
+    for what, markup in pages.items():
+        eq(f"{what} declares the .ico",
+           '<link rel="icon" href="/favicon.ico"' in markup, True)
+
+
 def test_a_video_is_a_video_and_never_a_photo():
     """Clips play in the gallery; nothing that needs a still ever gets one.
 

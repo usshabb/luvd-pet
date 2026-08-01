@@ -1001,6 +1001,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 <title>{c.title}</title>
 <meta name="description" content="{meta_desc}">
 <link rel="canonical" href="{page_url}">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
@@ -5394,6 +5395,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}{dog_path(d)}">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="LUVD">
@@ -5677,6 +5679,7 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}/rescue/{slug}">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
 <script type="application/ld+json">{ld}</script>
 <style>{_STATIC_PAGE_CSS}</style></head><body>
@@ -5800,6 +5803,7 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}{c.rescues_path}">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
 <script type="application/ld+json">{ld}</script>
 <style>{_STATIC_PAGE_CSS}</style></head><body>
@@ -5836,6 +5840,7 @@ def _not_found_page(dogs: List[Dog], site: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>This dog has moved on — LUVD</title>
 <meta name="robots" content="noindex">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
 <style>
   :root{{--bg:#fbfbfd;--surface:#fff;--text:#1d1d1f;--muted:#6e6e73;
