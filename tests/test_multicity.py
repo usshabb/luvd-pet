@@ -1020,6 +1020,59 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
+def test_titles_lead_with_the_page_and_never_repeat_the_brand():
+    """No brand suffix in <title>, and every page names the site once.
+
+    A search result renders the site name on its own line above the title, so
+    "Adopt a dog in NYC — LUVD" under a heading reading LUVD said the brand
+    twice. og:site_name is where the brand belongs, and it was missing entirely
+    from the rescue pages and the rescue indexes.
+
+    The brand also does not move to the FRONT. The leading words carry the most
+    relevance weight and are what a person scans; the city and the dog's name
+    are what people search, and "LUVD" is not a term anyone searches yet.
+    """
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+
+    d = _Dog(id="t:1", name="Timmy", source="muddypaws",
+             source_label="Muddy Paws Rescue", url="https://e.org/1",
+             photos=["https://e.org/p.jpg"], breed="Terrier", city="NYC")
+    d.first_seen = "2026-07-31"
+    pages = {
+        "city page": _page.render([("2026-07-31", [d])], _date(2026, 7, 31), "NYC"),
+        "dog page": _page._dog_page(d, "https://luvd.com", _date(2026, 7, 31)),
+        "rescue page": _page._rescue_page("Muddy Paws Rescue", [d],
+                                          "https://luvd.com"),
+        "rescue index": _page._rescues_page({"Muddy Paws Rescue": [d]},
+                                            "https://luvd.com",
+                                            _date(2026, 7, 31), "NYC"),
+    }
+    for what, markup in pages.items():
+        title = re.search(r"<title>(.*?)</title>", markup, re.S).group(1)
+        eq(f"{what}: no brand suffix",
+           bool(re.search(r"(\s[|—-]\s*LUVD)\s*$", title)), False)
+        eq(f"{what}: does not lead with the brand",
+           title.strip().startswith("LUVD"), False)
+        # Titles are short here, but a runaway one gets truncated in a result.
+        eq(f"{what}: title fits a result ({len(title)}ch)", len(title) <= 70, True)
+        # The brand belongs here instead — on every page type, not just two.
+        eq(f"{what}: declares og:site_name",
+           '<meta property="og:site_name" content="LUVD">' in markup, True)
+
+    # And the signals Google reads to print "LUVD" rather than the bare domain.
+    home = pages["city page"]
+    graph = []
+    for b in re.findall(r'application/ld\+json">(.*?)</script>', home, re.S):
+        node = json.loads(b)
+        graph += (node.get("@graph") or [node])
+    site = [n for n in graph if n["@type"] == "WebSite"][0]
+    eq("WebSite names the site", site.get("name"), "LUVD")
+    eq("and offers the domain as an alternate", site.get("alternateName"),
+       "luvd.com")
+
+
 def test_every_page_has_an_icon_a_browser_will_actually_fetch():
     """/favicon.ico must exist, because browsers ask for it whether we link it or not.
 

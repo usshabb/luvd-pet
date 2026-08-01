@@ -808,7 +808,12 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
                 "@type": "WebSite",
                 "@id": f"{site}/#website",
                 "url": f"{site}/",
+                # The site-name line above a result was rendering as "luvd.com"
+                # — the domain fallback Google uses when it is not confident.
+                # name plus alternateName on the home page, matching
+                # og:site_name, is what it reads to decide.
                 "name": "LUVD",
+                "alternateName": "luvd.com",
                 # The SITE's description, not this page's. It used to be
                 # meta_desc, which is city-specific — so one @id was described
                 # as "228 dogs from 7 New York City rescues" on one page and
@@ -5333,10 +5338,11 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
         for alias in c.aliases)
     where = "" if label_has_city else f" in {c.short}"
     headline = f"{d.name} — {breed} for adoption at {d.source_label}{where}"
-    # Brand in the <title>, not in the share tags: og:site_name renders as its
-    # own line above og:title, so repeating "LUVD" there says it twice and eats
-    # width a dog's name and breed need. Same split as City.share_title.
-    title = f"{headline} | LUVD"
+    # No brand in either any more. A search result renders the site name on its
+    # own line above the title, the same way a share card renders og:site_name
+    # above og:title — so the suffix was saying "LUVD" twice in both places, and
+    # on a dog page it was competing with the name, breed and rescue for width.
+    title = headline
     desc = (f"{d.name} is a {breed.lower()} available for adoption from "
             f"{d.source_label} in {c.name}."
             + (f" {facts}." if facts else "")
@@ -5728,7 +5734,7 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     slug = slugify(label)
     source = dogs[0].source if dogs else ""
     c = cities.resolve(_city_of(dogs))
-    title = f"{label} — adoptable dogs in {c.short} | LUVD"
+    title = f"{label} — adoptable dogs in {c.short}"
     n = len(dogs)
     desc = (f"All {n} dog{'' if n == 1 else 's'} currently available for "
             f"adoption from {label} in {c.name}, updated daily.")
@@ -5759,6 +5765,10 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
 <link rel="canonical" href="{site}/rescue/{slug}">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
+<meta property="og:site_name" content="LUVD">
+<meta property="og:title" content="{html.escape(label)} &mdash; adoptable dogs in {html.escape(c.short)}">
+<meta property="og:description" content="{html.escape(desc)}">
+<meta property="og:url" content="{site}/rescue/{slug}">
 <script type="application/ld+json">{ld}</script>
 <style>{_STATIC_PAGE_CSS}</style></head><body>
 <a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>
@@ -5791,7 +5801,7 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
     c = cities.resolve(city)
     labels = sorted(by_rescue)
     total = sum(len(v) for v in by_rescue.values())
-    title = f"{c.short} dog rescues — every rescue LUVD tracks | LUVD"
+    title = f"{c.short} dog rescues — every rescue LUVD tracks"
     desc = (f"The {len(labels)} {c.name} dog rescues LUVD checks every "
             f"morning, with all {total} of their adoptable dogs in one place.")
     # The meta description above already says what LUVD does with them, so the
@@ -5884,6 +5894,10 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
 <link rel="canonical" href="{site}{c.rescues_path}">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.png" type="image/png">
+<meta property="og:site_name" content="LUVD">
+<meta property="og:title" content="{html.escape(c.short)} dog rescues">
+<meta property="og:description" content="{html.escape(desc)}">
+<meta property="og:url" content="{site}{c.rescues_path}">
 <script type="application/ld+json">{ld}</script>
 <style>{_STATIC_PAGE_CSS}</style></head><body>
 <a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>

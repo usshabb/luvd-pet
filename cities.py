@@ -86,7 +86,19 @@ class City:
 
     @property
     def title(self) -> str:
-        return f"Adopt a dog in {self.short} — LUVD"
+        """The <title>. No brand suffix — Google renders the site name itself.
+
+        Every result already carries a site-name line above the title, so
+        "Adopt a dog in NYC — LUVD" under a heading that reads LUVD said the
+        brand twice and spent characters doing it. Same reasoning as
+        `share_title`, which dropped the suffix for og:site_name.
+
+        The city stays at the FRONT. The leading words carry the most relevance
+        weight and are what a person scans; "Adopt a dog in NYC" is a phrase
+        people search and "LUVD" is not one yet, so leading with the brand would
+        spend the best position on the least useful word.
+        """
+        return f"Adopt a dog in {self.short}"
 
     @property
     def share_title(self) -> str:
