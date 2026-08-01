@@ -312,6 +312,12 @@ def robots():
     # Keep crawlers out of the write/counter endpoints.
     body += ("Disallow: /view\nDisallow: /subscribe\nDisallow: /subscribers\n"
              "Disallow: /unsubscribe\n")
+    # The image proxy. Every photo on the site is reachable through it with an
+    # arbitrary upstream URL in the query string, so a crawler left to itself
+    # would spend budget re-fetching every rescue's CDN through us and index
+    # nothing worth having. The photos themselves are indexable at their own
+    # origin, which is where they belong.
+    body += "Disallow: /img\n"
     if site:
         body += f"\nSitemap: {site}/sitemap.xml\n"
     return Response(body, mimetype="text/plain")

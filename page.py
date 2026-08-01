@@ -136,8 +136,15 @@ def _privacy_html(email: str, for_date) -> str:
       </ul>
 
       <h3>2. Your saved dogs stay on your device</h3>
-      <p>The dogs you heart are stored locally in your browser. That list never
-        leaves your device and is never sent to us.</p>
+      <p>The dogs you heart are stored locally in your browser. We never receive
+        that list and never store it.</p>
+      <p>The one exception is one you make yourself: the <b>Copy link</b> button
+        on your saved list builds a web address with those dogs&rsquo; IDs in it,
+        so you can move the list to another device or send it to someone. That
+        link works for anyone who has it, so treat it like any other link you
+        share &mdash; and note that our server sees the address of every page it
+        serves, this one included. Don&rsquo;t use it and your saved list never
+        leaves the browser you made it in.</p>
 
       <h3>3. How we use it</h3>
       <p>To send the digest you asked for, to understand which dogs draw interest,
@@ -924,13 +931,41 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     # card's href and the sitemap entry, so a shared link cannot address a page
     # this run didn't write. Rebuilding the slug in JS would be a second
     # implementation of dog_slug() free to drift from the first.
-    payload = json.dumps([
-        dict(d.to_dict(), waiting_days=(waiting_days(d, for_date) or 0),
-             breed_group=breed_group(d), age_bucket=age_bucket(d),
-             size_bucket=size_bucket(d), adult_lbs=round(adult_lbs(d)) or None,
-             path=dog_path(d))
-        for d in flat
-    ])
+    # The breed guide is the same paragraphs for every dog of a breed — 226 KB
+    # of the payload across 362 dogs, for 83 distinct guides. Sharing it costs
+    # one array and a two-line shim in the browser, and takes ~176 KB off a page
+    # a phone has to parse before it can do anything.
+    #
+    # Only the generic half is shared. `from_rescue` is what THIS rescue said
+    # about THIS dog and `rescue_name` names them, so both stay on the dog —
+    # deduping those would put one dog's write-up on another's page.
+    _SHARED_BI = ("name", "known", "temperament", "exercise", "grooming", "nyc")
+    breeds, breed_ix = [], {}
+
+    def _split_breed_info(bi: dict):
+        bi = bi or {}
+        shared = {k: bi[k] for k in _SHARED_BI if k in bi}
+        key = json.dumps(shared, sort_keys=True)
+        if key not in breed_ix:
+            breed_ix[key] = len(breeds)
+            breeds.append(shared)
+        own = {k: v for k, v in bi.items() if k not in _SHARED_BI and v}
+        return breed_ix[key], own
+
+    rows = []
+    for d in flat:
+        row = dict(d.to_dict(), waiting_days=(waiting_days(d, for_date) or 0),
+                   breed_group=breed_group(d), age_bucket=age_bucket(d),
+                   size_bucket=size_bucket(d),
+                   adult_lbs=round(adult_lbs(d)) or None,
+                   path=dog_path(d))
+        ix, own = _split_breed_info(row.pop("breed_info", None))
+        row["b"] = ix
+        if own:
+            row["bi"] = own
+        rows.append(row)
+    payload = json.dumps(rows)
+    breeds_json = json.dumps(breeds, ensure_ascii=False)
     subscribe_url = os.getenv("SUBSCRIBE_URL", "/subscribe")
 
     today_iso = for_date.isoformat()
@@ -2802,7 +2837,14 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 </div>
 
 <script>
+// The breed guides, shared. Each dog carries an index into this and, when the
+// rescue said something itself, its own half in `bi`. Put back together below
+// so nothing downstream has to know the payload was ever split.
+const BREEDS = {breeds_json};
 const DOGS = {payload};
+DOGS.forEach(d => {{
+  d.breed_info = Object.assign({{}}, BREEDS[d.b] || {{}}, d.bi || {{}});
+}});
 const SUBSCRIBE_URL = {json.dumps(subscribe_url)};
 // You subscribe to one city, and it's the city whose page you're on. Baked in at
 // render time rather than read from the URL, so it's right even on a cached copy
@@ -3421,11 +3463,12 @@ function contactAction(d) {{
     }};
   }}
   if (c.apply_url) {{
-    return {{
-      href: c.apply_url,
-      label: `Apply to adopt ${{d.name}} →`,
-      note: `${{d.source_label}} asks for an application before they can talk about a dog.`
-    }};
+    // No note. It said the same sentence above every dog from a rescue that
+    // takes applications, which is nearly all of them — a line that never
+    // varies is not information, and the button underneath already says
+    // "Apply". A program note still shows, because that one is about THIS dog
+    // and changes what the adopter is agreeing to.
+    return {{href: c.apply_url, label: `Apply to adopt ${{d.name}} →`, note: null}};
   }}
   return {{href: d.cta_url, label: `Contact ${{d.source_label}} →`, note: null}};
 }}
@@ -5237,11 +5280,11 @@ def _dp_action(d: Dog, site: str) -> dict:
         return {"href": href, "label": f"Email about {d.name} →",
                 "short": "Email the rescue →", "note": "", "program": ""}
     if contact.get("apply_url"):
+        # No note — see contactAction() in the page script. The same sentence
+        # above every dog is not information.
         return {"href": contact["apply_url"],
                 "label": f"Apply to adopt {d.name} →",
-                "short": "Apply to adopt →",
-                "note": f"{d.source_label} asks for an application before they "
-                        f"can talk about a dog.", "program": ""}
+                "short": "Apply to adopt →", "note": "", "program": ""}
     return {"href": d.cta_url(), "label": f"Contact {d.source_label} →",
             "short": "Contact the rescue →", "note": "", "program": ""}
 
@@ -5373,6 +5416,38 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
     }
     if photo:
         product["image"] = photo
+
+    # A clip the rescue posted, declared so Google knows it exists. Nothing on
+    # the page said so before: the markup is a <video> built by the carousel,
+    # and a crawler reading HTML sees a thumbnail strip and no video at all.
+    #
+    # thumbnailUrl is the dog's own photo rather than a frame grab. Google wants
+    # one and we have no frame extractor — the poster in the browser is the clip
+    # painting its own first frame, which is not a URL we can hand over. The
+    # photo is honest: it is the same dog, and it is what the page shows first.
+    #
+    # uploadDate is required. We do not know when the rescue filmed it, so it is
+    # the day the listing first appeared here — the earliest date we can stand
+    # behind rather than a guess at the real one.
+    clips = list(getattr(d, "videos", None) or [])
+    videos = [
+        {
+            "@type": "VideoObject",
+            "name": f"{d.name} — {breed} at {d.source_label}",
+            "description": clean_meta(d.description) or desc,
+            "contentUrl": v,
+            "embedUrl": f"{site}{dog_path(d)}",
+            "uploadDate": getattr(d, "first_seen", None) or today.isoformat(),
+            **({"thumbnailUrl": [photo]} if photo else {}),
+        }
+        for v in clips
+    ]
+    if videos:
+        product["subjectOf"] = [{"@id": f"{site}{dog_path(d)}#video-{i}"}
+                                for i, _ in enumerate(videos, 1)]
+        for i, v in enumerate(videos, 1):
+            v["@id"] = f"{site}{dog_path(d)}#video-{i}"
+
     ld = {
         "@context": "https://schema.org",
         "@graph": [
@@ -5388,7 +5463,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
                     {"@type": "ListItem", "position": 3, "name": d.name},
                 ],
             },
-        ],
+        ] + videos,
     }
 
     # ---- the card, module by module, same classes as the modal ---------------
@@ -6033,6 +6108,11 @@ def _carried_sitemap_urls(site: str, owned: set, written_paths: set) -> list:
     except OSError:
         return []
     keep = []
+    # (loc, lastmod) so a carried URL keeps the date it actually had. Restamping
+    # it with today would claim a page changed on a morning its city did not
+    # even run.
+    stamped = dict(re.findall(
+        r"<loc>(.*?)</loc><lastmod>(.*?)</lastmod>", raw))
     for url in re.findall(r"<loc>(.*?)</loc>", raw):
         url = html.unescape(url)
         # Only URLs on this site. Anything else is a leftover from a different
@@ -6051,7 +6131,7 @@ def _carried_sitemap_urls(site: str, owned: set, written_paths: set) -> list:
             slug = path[len("/rescue/"):]
         if slug and slug in owned:
             continue                      # this pass has rewritten it, or dropped it
-        keep.append(url)
+        keep.append((url, stamped.get(html.escape(url)) or stamped.get(url)))
     return keep
 
 
@@ -6108,6 +6188,12 @@ def write(pages, for_date: date = None) -> Path:
 
     primary, first_written = None, None
     all_flat, urls, per_city = [], [], []
+    # url -> the date that URL last meaningfully changed. Every URL used to
+    # claim today, all 379 of them, which is the fastest way to teach Google to
+    # ignore lastmod entirely — and then it is not there on the morning a dog
+    # genuinely is new. A roster page does change daily; a dog's page dates
+    # from the day that dog appeared.
+    lastmod = {}
     # Every path this pass rendered, including the ones deliberately kept out of
     # the sitemap. `urls` alone is not enough: a page withheld because it is
     # noindex is also absent from `written_paths`, so the carry-over would find
@@ -6180,12 +6266,26 @@ def write(pages, for_date: date = None) -> Path:
         # submitted in the sitemap — that combination asks Google to crawl a page
         # and then tells it not to keep it. Its rescue index is empty for the
         # same reason and gets the same treatment.
+        today_iso = for_date.isoformat()
         if flat:
-            urls.append(f"{site}/" if c.path == "/" else f"{site}{c.path}")
+            u = f"{site}/" if c.path == "/" else f"{site}{c.path}"
+            urls.append(u)
+            lastmod[u] = today_iso           # the roster really is rebuilt daily
         if by_rescue:
-            urls.append(f"{site}{c.rescues_path}")
-        urls += [f"{site}/rescue/{slugify(l)}" for l in by_rescue]
-        urls += [f"{site}{dog_path(d)}" for d in flat]
+            u = f"{site}{c.rescues_path}"
+            urls.append(u)
+            lastmod[u] = today_iso
+        for label in by_rescue:
+            u = f"{site}/rescue/{slugify(label)}"
+            urls.append(u)
+            lastmod[u] = today_iso           # its list of dogs changes daily
+        for d in flat:
+            u = f"{site}{dog_path(d)}"
+            urls.append(u)
+            # The day this dog was first seen. The page is about one dog and
+            # stops changing once it exists, so claiming it changed this morning
+            # is false for a dog listed six months ago — which is most of them.
+            lastmod[u] = getattr(d, "first_seen", None) or today_iso
 
         per_city.append(f"{c.code}: {len(flat)} dogs, {len(by_rescue)} rescues")
 
@@ -6197,10 +6297,15 @@ def write(pages, for_date: date = None) -> Path:
     if carried:
         print(f"  sitemap: carrying {len(carried)} URL(s) from the last run "
               f"for cities not in this pass")
-    today_iso = for_date.isoformat()
+    fallback = for_date.isoformat()
+    # changefreq is gone with it: Google has said for years that it ignores the
+    # tag, and it was making the same daily claim for a dog page that had not
+    # changed since March.
+    entries = ([(u, lastmod.get(u, fallback)) for u in urls]
+               + [(u, d or fallback) for u, d in carried])
     body = "".join(
-        f"<url><loc>{html.escape(u)}</loc><lastmod>{today_iso}</lastmod>"
-        f"<changefreq>daily</changefreq></url>" for u in urls + carried)
+        f"<url><loc>{html.escape(u)}</loc><lastmod>{d}</lastmod></url>"
+        for u, d in entries)
     (OUT_DIR / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'

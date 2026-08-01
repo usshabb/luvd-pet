@@ -84,17 +84,42 @@ render() {
   # montage, but takes first_seen_map() instead of record_seen(), skips
   # forget_missing()/update_photo_state(), and returns before the subscriber
   # digest — so no boot, first ever or otherwise, can mail the list.
+  # Which build produced the page currently on the volume. FLY_IMAGE_REF is the
+  # same across every restart of one deploy and different for the next one, so
+  # it answers the question the age check could only guess at: is this new code,
+  # or the same code coming back up?
+  #
+  # That distinction is the whole point. RENDER_FRESH_MIN exists to stop a crash
+  # loop re-scraping seven rescues, but on its own it cannot tell a restart from
+  # a deploy — so a push landing within the window deployed green and rendered
+  # nothing, and the site quietly served the old page. That happened three times
+  # in one afternoon before it was noticed.
+  #
+  # If FLY_IMAGE_REF is not set — running this script anywhere but Fly — the
+  # stamp is a constant, every boot matches it, and the age check decides on its
+  # own exactly as it did before.
+  BUILD_STAMP=/data/public/.rendered-by
+  BUILD_ID="${FLY_IMAGE_REF:-unknown}"
+  RENDERED_BY="$(cat "$BUILD_STAMP" 2>/dev/null || true)"
+
   if [ ! -f /data/public/index.html ]; then
     echo "boot: no page on the volume — rendering now"
     render check.py --dry-run
+    printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+  elif [ "$RENDERED_BY" != "$BUILD_ID" ]; then
+    # New code. Render regardless of how recently the last one ran — a deploy
+    # that does not reach the volume is a deploy that did nothing.
+    echo "boot: page was built by a different release — re-rendering"
+    render check.py --dry-run
+    printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
   elif [ -n "$(find /data/public/index.html -mmin -"$RENDER_FRESH_MIN" 2>/dev/null)" ]; then
-    # Fly restarts on crashes and failed health checks, and a render scrapes
-    # seven rescue sites. Don't hammer them re-rendering a page that is
-    # already current; the next boot outside this window will pick it up.
-    echo "boot: page is under ${RENDER_FRESH_MIN}m old — skipping the render"
+    # Same code, rendered moments ago: a restart, a failed health check, a
+    # machine move. Don't hammer the rescues for a page that is already current.
+    echo "boot: same release and page is under ${RENDER_FRESH_MIN}m old — skipping"
   else
     echo "boot: re-rendering so this deploy's changes go live"
     render check.py --dry-run
+    printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
   fi
 
   # Sleep until the next city's 05:30, run that city, repeat. Mondays also send
