@@ -2095,6 +2095,12 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     border-bottom:7px solid transparent;
     filter:drop-shadow(0 1px 3px rgba(0,0,0,.55));}}
   .m-hero video[hidden],.m-hero img[hidden]{{display:none;}}
+  /* The photo spans the identity card AND the ratings panel, which is what
+     makes it tall enough to see the dog. A dog with no ratings — most archived
+     ones, and any listing too thin to score — leaves that second row empty, and
+     the photo then hangs below the card beside it. With nothing to span, it
+     takes one row and the two match. */
+  .topgrid.no-scores .m-media{{grid-row:auto;}}
   .thumbs img{{width:60px;height:60px;object-fit:cover;object-position:center;
     border-radius:10px;cursor:pointer;
     flex:0 0 auto;opacity:.5;transition:opacity .2s;border:2px solid transparent;}}
@@ -3526,7 +3532,8 @@ function renderDog(d) {{
     <button class="m-close" aria-label="Close">✕</button>
     <div class="m-scroll${{hasPhoto ? '' : ' no-hero'}}">
     <div class="m-body">
-      <div class="topgrid${{hasPhoto ? ' with-photo' : ''}}">
+      <div class="topgrid${{hasPhoto ? ' with-photo' : ''}}${{
+        bars(d) ? '' : ' no-scores'}}">
         ${{media}}
         <div class="idcol">
           <div class="m-name-row">
@@ -5544,6 +5551,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
              f'<span class="burst" aria-hidden="true"></span></button></div>'
              f'{rescue_line}<div class="chips">{chips}</div></div>')
 
+    scores_html = _dp_scores(d)
     act = _dp_action(d, site)
     # A dog that is no longer listed keeps its page. The rescue took the
     # listing down, so this is the only copy of the photos and the write-up
@@ -5639,10 +5647,10 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
   <div class="dpg-card">
     {gone_note}
     <div class="m-body">
-      <div class="topgrid{' with-photo' if photo else ''}">
+      <div class="topgrid{' with-photo' if photo else ''}{'' if scores_html else ' no-scores'}">
         {media}
         {idcol}
-        {_dp_scores(d)}
+        {scores_html}
       </div>
       {_dp_size_cost(d, c)}
       {_dp_panes(d, c, breed)}
