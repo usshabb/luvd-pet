@@ -5,11 +5,13 @@ load_dotenv()
 import logging
 import os
 import re
+from urllib.parse import urlunsplit
 import threading
 from html import escape as html_escape
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import (Flask, Response, jsonify, redirect, request,
+                   send_from_directory)
 
 import cities
 import db
@@ -18,6 +20,37 @@ PUBLIC = Path(__file__).parent / "public"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
 
 app = Flask(__name__, static_folder=None)
+
+@app.before_request
+def _one_hostname():
+    """Send www to the bare domain, once, permanently.
+
+    Both hostnames answered 200 with identical content and a canonical pointing
+    at the apex. A canonical is a hint; Google was indexing and displaying
+    www.luvd.com anyway, so every link and every share was splitting between two
+    addresses for the same page. A 301 is the part that is not a hint.
+
+    Only www is redirected, and only for safe methods. Anything else — the Fly
+    internal hostname, a health check, a direct IP — is left alone, because
+    guessing at hostnames here is how a deploy starts redirecting its own
+    readiness probe. POSTs are left alone too: a 301 on a form submission drops
+    the body in some clients, and /subscribe is a POST.
+    """
+    host = (request.host or "").lower()
+    if not host.startswith("www."):
+        return None
+    if request.method not in ("GET", "HEAD"):
+        return None
+    # Behind Fly's proxy the connection to the app is plain HTTP, so
+    # request.scheme says "http" for a request the browser made over HTTPS.
+    # Redirecting to http:// would bounce the visitor through a second redirect
+    # to get back to https, and hand Google a 301 chain for every page.
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    target = urlunsplit((
+        scheme, host[4:], request.path, request.query_string.decode(), ""
+    ))
+    return redirect(target, code=301)
+
 
 # Gunicorn leaves the app logger at WARNING, which would hide whether a signup's
 # welcome email actually went out. Nothing else here logs below WARNING, so this

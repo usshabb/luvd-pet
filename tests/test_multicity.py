@@ -951,10 +951,11 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     against rendered markup for every live city, over the city page, its rescue
     pages and its index, and it fails on ANY href pointing at a foreign index.
 
-    The one deliberate exception is the cross-city row at the foot of an index
-    ("Also in Los Angeles →"), which is the whole-site view. It is recognised by
-    its "Also in" label rather than exempted wholesale, so a stray link cannot
-    hide behind the exemption.
+    A link to another city's index is allowed only when its label NAMES that
+    city — "LA rescues", "Also in Los Angeles →". That is the real invariant:
+    the bug was never that a foreign link existed, it was that one labelled
+    "All rescues" silently went somewhere else. A label carrying the city
+    cannot mislead, and a label without one cannot hide behind an exemption.
     """
     from datetime import date as _date
     import page as _page
@@ -991,8 +992,16 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
                 if owner is None:
                     continue                      # not an index link at all
                 checked += 1
-                if owner != code and "Also in" in label:
-                    continue                      # the deliberate cross-link
+                if owner != code:
+                    # Naming the city is what makes a cross-link honest. Word
+                    # boundaries so "LA" cannot be matched inside another word.
+                    o = cities.CITIES[owner]
+                    text = re.sub(r"<[^>]+>", " ", label)
+                    named = (re.search(rf"\b{re.escape(o.short)}\b", text)
+                             or o.name.lower() in text.lower())
+                    eq(f"{what}: {href} is labelled with its city "
+                       f"({text.strip()[:40]!r})", bool(named), True)
+                    continue
                 eq(f"{what}: {href} belongs to", owner, code)
 
         # And the breadcrumb trail, which is the same claim made to a crawler.

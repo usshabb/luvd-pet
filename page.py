@@ -809,7 +809,16 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
                 "@id": f"{site}/#website",
                 "url": f"{site}/",
                 "name": "LUVD",
-                "description": meta_desc,
+                # The SITE's description, not this page's. It used to be
+                # meta_desc, which is city-specific — so one @id was described
+                # as "228 dogs from 7 New York City rescues" on one page and
+                # "138 from 4 Los Angeles rescues" on another. Same entity,
+                # two contradictory claims, and a crawler merging the graph has
+                # no way to pick. The page's own description belongs on the
+                # CollectionPage below, and does still say it.
+                "description": "Every new adoptable dog across "
+                               f"{served_phrase} rescues, collected each "
+                               "morning with the context listings leave out.",
                 "inLanguage": "en-US",
                 "publisher": {"@id": f"{site}/#org"},
             },
@@ -818,7 +827,15 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
                 "@id": f"{site}/#org",
                 "name": "LUVD",
                 "url": f"{site}/",
-                "logo": f"{site}/apple-touch-icon.png",
+                # An ImageObject rather than a bare URL: Google's logo
+                # guidance wants dimensions, and a bare string leaves it to
+                # fetch and guess.
+                "logo": {
+                    "@type": "ImageObject",
+                    "url": f"{site}/apple-touch-icon.png",
+                    "width": 180,
+                    "height": 180,
+                },
                 "email": CONTACT_EMAIL,
                 "areaServed": [{"@type": "City", "name": n} for n in served]
                               if len(served) > 1
@@ -836,12 +853,32 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
                 "isPartOf": {"@id": f"{site}/#website"},
                 "dateModified": for_date.isoformat(),
                 "about": {"@type": "Thing", "name": f"Dog adoption in {c.name}"},
+                "publisher": {"@id": f"{site}/#org"},
+                # Every other page type declares a trail; the city pages are
+                # the only ones that did not, which left the two cities looking
+                # like unrelated roots rather than one site with a city under
+                # it. The root's trail is one item — itself — which is what
+                # tells a crawler this is the top rather than an orphan.
+                "breadcrumb": {"@id": f"{page_url}#breadcrumb"},
                 "mainEntity": {
                     "@type": "ItemList",
                     "name": f"Adoptable dogs in {c.name}",
                     "numberOfItems": len(flat),
                     "itemListElement": items,
                 },
+            },
+            {
+                "@type": "BreadcrumbList",
+                "@id": f"{page_url}#breadcrumb",
+                "itemListElement": (
+                    [{"@type": "ListItem", "position": 1, "name": "LUVD",
+                      "item": f"{site}/"}]
+                    if c.path == "/" else
+                    [{"@type": "ListItem", "position": 1, "name": "LUVD",
+                      "item": f"{site}/"},
+                     {"@type": "ListItem", "position": 2,
+                      "name": f"Adopt a dog in {c.short}"}]
+                ),
             },
             {
                 "@type": "FAQPage",
@@ -983,6 +1020,19 @@ def render(dated, for_date: date = None, city: str = None) -> str:
             for o in (cities.CITIES[k] for k in cities.live_codes()))
     sub_picks = city_picks("")
     msub_picks = city_picks("m-")
+
+    # Every city, as plain links, in the footer of every page. The only
+    # crawlable route to /la was a single <a> inside the headline's city
+    # dropdown — one link, from one page, inside a menu. A city is a top-level
+    # section of this site and should be reachable from the foot of anything,
+    # which is also the shape Google reads when it decides whether a site has
+    # sections worth listing under the main result.
+    foot_cities = " &middot; ".join(
+        (f'<span class="foot-here">Dogs in {html.escape(o.short)}</span>'
+         if o.code == c.code else
+         f'<a href="{o.path}">Dogs in {html.escape(o.short)}</a>')
+        + f' &middot; <a href="{o.rescues_path}">{html.escape(o.short)} rescues</a>'
+        for o in (cities.CITIES[k] for k in cities.live_codes()))
     theme_script = _theme_script(c)
 
     empty = "" if flat else """
@@ -1861,6 +1911,13 @@ def render(dated, for_date: date = None, city: str = None) -> str:
   /* A rescue's name is one unit — don't break "Sean Casey Animal Rescue"
      across two lines. */
   .foot-rescues a{{white-space:nowrap;}}
+  .foot-cities{{margin:0 auto 14px;max-width:600px;line-height:1.9;
+    font-weight:600;}}
+  .foot-cities a{{white-space:nowrap;}}
+  .foot-cities a:hover{{color:var(--text);}}
+  /* The city you are already on is named but not linked — a link to the page
+     you are on is a link a crawler follows for nothing. */
+  .foot-here{{white-space:nowrap;opacity:.55;}}
   .foot-rescues a:hover{{color:var(--text);}}
   .foot-all{{font-weight:600;}}
 
@@ -2726,6 +2783,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       <span class="foot-hd">Rescues on LUVD</span>
       {footer_rescues} &middot; <a class="foot-all" href="{c.rescues_path}">All {c.short} rescues &rarr;</a>
     </nav>
+    <nav class="foot-cities" aria-label="Cities on LUVD">{foot_cities}</nav>
     <div style="margin-top:6px;">
       LUVD · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD">Contact</a>
       · <button class="foot-link" id="terms-link" type="button">Terms</button>
@@ -4941,6 +4999,18 @@ _DOG_PAGE_CSS = """
 """
 
 
+def _dp_other_cities(c) -> str:
+    """The other live cities, linked from a dog page's foot.
+
+    A dog page is the most-shared and most-linked page on the site, so it is the
+    best place to hand authority to a city section — and a stranger who arrives
+    on an LA dog from a text message has no other way to discover New York.
+    """
+    others = [cities.CITIES[k] for k in cities.live_codes() if k != c.code]
+    return "".join(f' &middot; <a href="{o.path}">Dogs in {html.escape(o.short)}</a>'
+                   for o in others)
+
+
 def _dp_breed(d: Dog) -> str:
     """"Mixed breed" rather than "Unknown", which is what the field often says."""
     return (d.breed if d.breed and "unknown" not in d.breed.lower()
@@ -5284,6 +5354,12 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
     product = {
         "@type": "Product",
         "name": d.name,
+        # Ties the dog to the site and the rescue's own entity. Without these
+        # the deepest, most-shared pages on the site were three isolated nodes
+        # — a crawler could read the dog but had nothing saying whose page it
+        # was on or which organisation is placing the animal.
+        "isPartOf": {"@id": f"{site}/#website"},
+        "seller": {"@id": f"{site}/rescue/{rescue_slug(d)}#rescue"},
         "description": clean_meta(d.description) or desc,
         "category": f"Adoptable dog — {breed}",
         "brand": {"@type": "Organization", "name": d.source_label},
@@ -5459,6 +5535,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
 <div class="dpg-foot">
   <a href="{c.path}">Every adoptable dog in {c.short}, updated every morning</a>
   &middot; <a href="{c.rescues_path}">All {c.short} rescues</a>
+  {_dp_other_cities(c)}
 </div>
 <script src="{share_href}"></script>
 <script>
@@ -5629,6 +5706,7 @@ def _rescue_structured_data(label: str, source: str, dogs: List[Dog],
                 "name": f"{label} — adoptable dogs in {c.short}",
                 "description": desc,
                 "isPartOf": {"@id": f"{site}/#website"},
+                "publisher": {"@id": f"{site}/#org"},
                 "about": {"@id": f"{site}/rescue/{slug}#rescue"},
                 "mainEntity": {
                     "@type": "ItemList",
@@ -5768,6 +5846,7 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
                 "name": f"{c.short} dog rescues on LUVD",
                 "description": desc,
                 "isPartOf": {"@id": f"{site}/#website"},
+                "publisher": {"@id": f"{site}/#org"},
                 "dateModified": for_date.isoformat(),
                 "mainEntity": {
                     "@type": "ItemList",
