@@ -399,7 +399,36 @@ def img():
     ctype = r.headers.get("Content-Type", "")
     if not ctype.startswith("image/"):
         return ("not an image", 415)
-    return Response(r.content, mimetype=ctype,
+    body = r.content
+
+    # ?w= resizes. Rescues upload straight off a phone, so a single photo is
+    # routinely 3-5 MB — fine behind a browser that only fetches what is on
+    # screen, ruinous in an email, where every photo is embedded and downloaded
+    # before the reader sees anything.
+    #
+    # Only ever DOWN. An upscale would spend CPU making a worse picture, and a
+    # width from a query string is not something to hand to a decoder unchecked.
+    try:
+        want = int(request.args.get("w", 0))
+    except ValueError:
+        want = 0
+    if 16 <= want <= 2000:
+        try:
+            from io import BytesIO
+            from PIL import Image
+            im = Image.open(BytesIO(body))
+            if im.width > want:
+                im = im.convert("RGB") if im.mode in ("P", "RGBA", "LA") else im
+                im.thumbnail((want, want * 4), Image.LANCZOS)
+                buf = BytesIO()
+                im.save(buf, format="JPEG", quality=82, optimize=True)
+                body, ctype = buf.getvalue(), "image/jpeg"
+        except Exception as e:
+            # A photo we cannot resize is still a photo. Serve the original
+            # rather than turning a big image into no image.
+            app.logger.warning("/img resize failed for %s: %s", raw, e)
+
+    return Response(body, mimetype=ctype,
                     headers={"Cache-Control": "public, max-age=86400"})
 
 

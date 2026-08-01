@@ -16,8 +16,8 @@ import random
 import re
 from datetime import date
 from pathlib import Path
-from typing import List
-from urllib.parse import quote
+from typing import List, Optional
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -207,7 +207,7 @@ def _serves_image(url: str) -> bool:
             and r.headers.get("Content-Type", "").startswith("image/"))
 
 
-def _email_photo(url: str) -> str:
+def _email_photo(url: str, width: int = 0) -> str:
     """A smaller rendition of the same photo, when one is addressable.
 
     A 162px tile has no use for a 2880x3840 original, and six of those is
@@ -221,13 +221,43 @@ def _email_photo(url: str) -> str:
     /photos/i-KEY/ form all return 403. Petstablished's S3 objects,
     Shelterluv's profile pictures and Petango each publish one rendition and
     ignore width parameters, so there is nothing smaller to ask them for.
+
+    When `width` is given and the host publishes nothing smaller, the last
+    resort is our own /img proxy, which resizes. That is the only way to get a
+    tile-sized version of the hosts above: one of them served a 3840x2560 PNG at
+    16.5 MB, which is 37 KB through the proxy at w=400. Six of those decides
+    whether the mail arrives at all — Gmail clips at 102 KB of HTML and no
+    client enjoys 100 MB of images.
+
+    Only for allowlisted hosts. /img refuses anything else with a 403, and an
+    <img> pointing at a 403 is a broken tile — strictly worse than a photo that
+    merely weighs too much, which is the rule the rest of this function follows.
     """
     if not url:
         return url
-    if url not in _PHOTO_CACHE:
-        _PHOTO_CACHE[url] = next(
-            (c for c in _photo_candidates(url) if _serves_image(c)), url)
-    return _PHOTO_CACHE[url]
+    key = (url, width)
+    if key not in _PHOTO_CACHE:
+        smaller = next((c for c in _photo_candidates(url) if _serves_image(c)),
+                       None)
+        if smaller is None and width:
+            smaller = _proxy_photo(url, width)
+        _PHOTO_CACHE[key] = smaller or url
+    return _PHOTO_CACHE[key]
+
+
+def _proxy_photo(url: str, width: int) -> Optional[str]:
+    """Our own resizing proxy, if it will accept this host and we know our URL."""
+    site = _site_url().rstrip("/")
+    if not site:
+        return None
+    try:
+        from app import _IMG_HOSTS
+    except Exception:
+        return None                        # no app context: leave it alone
+    host = urlsplit(url).netloc
+    if host not in _IMG_HOSTS:
+        return None
+    return f"{site}/img?u={quote(url, safe='')}&w={int(width)}"
 
 
 def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
@@ -240,7 +270,9 @@ def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
     still rides in the img alt either way, so a blocked-image render and a
     screen reader both keep it.
     """
-    photo = _email_photo(dog.primary_photo())
+    # 2x the tile, so it stays sharp on a retina phone without paying for the
+    # original.
+    photo = _email_photo(dog.primary_photo(), width=edge * 2)
     if not photo:
         return ""
     src = html.escape(photo)
