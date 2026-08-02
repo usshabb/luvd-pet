@@ -24,6 +24,10 @@ from .rescues.apurposeful import APurposefulSource
 from .rescues.animalrescuemission import AnimalRescueMissionSource
 from .rescues.outtathecage import OuttaTheCageSource
 from .rescues.hitliving import HitLivingSource
+from .rescues.wagsandwalks import WagsAndWalksSource
+from .rescues.angelcitypits import AngelCityPitsSource
+from .rescues.labelle import LaBelleSource
+from .rescues.muchlove import MuchLoveSource
 
 # Rescues we scrape directly from their own sites.
 _DIRECT: List[Source] = [
@@ -82,6 +86,15 @@ _VIA_PLATFORM: List[Source] = [
 _VIA_ADOPTAPET: List[Source] = [
     OuttaTheCageSource(),           # 24 — Encino
     HitLivingSource(),              # 25 — Van Nuys
+    # Curated rather than swept. ~440 LA organisations are reachable through
+    # this platform now, and adding them all would rebuild the thing LUVD
+    # exists to be an alternative to. These four were chosen on third-party
+    # standing — Charity Navigator ratings, placement history, review volume —
+    # not on roster size.
+    WagsAndWalksSource(),           # 26 — 4/4 Charity Navigator
+    AngelCityPitsSource(),          # 27 — 3/4
+    LaBelleSource(),                # 28
+    MuchLoveSource(),               # 29 — 3/4, all-foster since 1999
 ]
 
 

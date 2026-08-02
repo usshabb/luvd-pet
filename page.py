@@ -3695,12 +3695,12 @@ function renderDog(d) {{
 // Three things, not four. These are the actual reasons to use LUVD instead of
 // opening a dozen rescue tabs — aggregation, better information, and speed.
 const CREED = [
+  ['Only the best rescues.',
+   'We hand-pick every rescue we list — top-rated, long-running, and known for it. Not a directory of everyone.'],
   ['Straight from the source.',
-   'We pull from the rescues themselves, then re-check every listing overnight. What you see this morning is really available.'],
+   'We pull from those rescues themselves, then re-check every listing overnight. What you see this morning is really available.'],
   ['The context listings leave out.',
-   'Energy, apartment fit, experience needed, time alone. Plus a breed guide, so you know if a dog suits your life.'],
-  ['Then we point you the right way.',
-   'Most rescues want an application first, a few prefer email. Every dog links to the step that one actually needs.'],
+   'Energy, apartment fit, experience needed, time alone. Plus a breed guide — and a link straight to the step that rescue actually wants next.'],
 ];
 
 // Short, fun, and written so a follower actually taps through. The platform
