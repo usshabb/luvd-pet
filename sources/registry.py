@@ -22,6 +22,8 @@ from .rescues.wagmor import WagmorSource
 from .rescues.loveleo import LoveLeoSource
 from .rescues.apurposeful import APurposefulSource
 from .rescues.animalrescuemission import AnimalRescueMissionSource
+from .rescues.outtathecage import OuttaTheCageSource
+from .rescues.hitliving import HitLivingSource
 
 # Rescues we scrape directly from their own sites.
 _DIRECT: List[Source] = [
@@ -68,6 +70,20 @@ _VIA_PLATFORM: List[Source] = [
     AnimalRescueMissionSource(),    # 23 — West Hollywood
 ]
 
+# Rescues read through Adopt-a-Pet. Two of the four LA organisations the note
+# above records as having no route are here — that note is what sent the next
+# person looking, and Adopt-a-Pet is what they found. ~440 LA-area dog
+# organisations list there, so this is the same kind of unlock Petstablished
+# was, not a one-off.
+#
+# The other two still have no route and are not guesses either: Yogi's House
+# self-manages on Wix and needs its own scraper; MaeDay Rescue publishes
+# availability only on Instagram, which has no read path worth depending on.
+_VIA_ADOPTAPET: List[Source] = [
+    OuttaTheCageSource(),           # 24 — Encino
+    HitLivingSource(),              # 25 — Van Nuys
+]
+
 
 def _try_optional():
     """Scrapers still being built land here without breaking the app."""
@@ -86,7 +102,7 @@ def _try_optional():
 
 
 def all_sources() -> List[Source]:
-    sources = _DIRECT + _VIA_PLATFORM + _try_optional()
+    sources = _DIRECT + _VIA_PLATFORM + _VIA_ADOPTAPET + _try_optional()
     return sorted(sources, key=lambda s: s.priority)
 
 
