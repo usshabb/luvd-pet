@@ -1819,7 +1819,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
   .fpill.fsort .cv{{width:.66em;height:.44em;}}
   /* Right-anchored: it's the last control in the row, so a left-anchored menu
      would hang off the edge on narrow screens. */
-  .fpill.fsort .fmenu{{left:auto;right:0;}}
+  .fpill.fsort .fmenu{{left:auto;right:0;top:100%;}}
   .fmenu{{position:absolute;top:calc(100% + 8px);left:0;z-index:48;
     background:var(--surface);border:1px solid var(--hair);border-radius:14px;
     box-shadow:0 4px 12px rgba(0,0,0,.14),0 18px 48px rgba(0,0,0,.18);
@@ -1829,6 +1829,14 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     transition:opacity .16s ease,transform .2s cubic-bezier(.2,.8,.25,1);}}
   :root[data-theme="dark"] .fmenu{{
     box-shadow:0 4px 12px rgba(0,0,0,.5),0 22px 60px rgba(0,0,0,.6);}}
+  .fmenu{{scrollbar-width:thin;scrollbar-color:var(--hair) transparent;
+    overscroll-behavior:contain;}}
+  .fmenu::-webkit-scrollbar{{width:7px;}}
+  .fmenu::-webkit-scrollbar-track{{background:transparent;margin:10px 0;}}
+  .fmenu::-webkit-scrollbar-thumb{{background:var(--hair);border-radius:980px;
+    border:2px solid transparent;background-clip:content-box;}}
+  .fmenu::-webkit-scrollbar-thumb:hover{{background:var(--muted);
+    background-clip:content-box;}}
   .fmenu[hidden]{{display:none;}}
   /* On the menu, not on `.fpill.open .fmenu`: an open menu is moved out of its
      pill into #fmenu-layer, so a descendant selector stops matching exactly when
@@ -4803,7 +4811,8 @@ document.querySelectorAll('.fpill').forEach(pill => {{
       // Fixed, so the top is measured rather than inherited. Left and right come
       // from the mobile stylesheet: a full-width sheet, because a menu anchored
       // to the last pill would otherwise open off the edge of the screen.
-      menu.style.top = (r.bottom + 10) + 'px';
+      menu.style.top =
+        (r.bottom + (pill.classList.contains('fsort') ? 1 : 10)) + 'px';
       menu.style.left = '';
     }} else {{
       // Desktop keeps it in the pill, where absolute positioning under the
