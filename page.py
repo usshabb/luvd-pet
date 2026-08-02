@@ -1714,8 +1714,9 @@ def render(dated, for_date: date = None, city: str = None) -> str:
      own left/right/top resolve as they did when it was fixed to the viewport
      directly. pointer-events pass through everywhere except the menu itself, so
      an empty layer cannot swallow a tap on the page beneath it. */
-  .fmenu-layer{{position:fixed;inset:0;z-index:49;pointer-events:none;}}
-  .fmenu-layer > .fmenu{{pointer-events:auto;}}
+  .fmenu-layer{{position:fixed;inset:0;z-index:60;pointer-events:none;}}
+  .fmenu-layer > .fmenu,
+  .fmenu-layer > .pick-menu{{pointer-events:auto;}}
   /* The results header: count left, sort right, sitting on top of the grid.
      The count is always on the page, never toggled. It used to appear only once
      a filter was applied, which pushed the whole grid down at the exact moment
@@ -2598,8 +2599,11 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     .fpill.fsort .fmenu{{left:16px;right:16px;}}
     /* Full content width: .wrap is padding:0 16px here, so anything else
        leaves the sheet's edges just off the cards below it. */
-    .pick-menu{{position:fixed;left:50%;transform:translateX(-50%) translateY(-6px);
-      width:calc(100vw - 32px);max-width:none;min-width:0;}}
+    .pick-menu{{position:fixed;left:16px;right:16px;
+      transform:translateY(-6px);
+      width:auto;max-width:none;min-width:0;}}
+    .pick.open .pick-menu,
+    .pick-menu.open{{transform:none;}}
     .pick.open .pick-menu{{transform:translateX(-50%);}}
     .pick-menu button,.pick-menu a{{padding:13px 15px;font-size:16.5px;}}
   }}
