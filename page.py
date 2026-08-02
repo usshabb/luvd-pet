@@ -6031,6 +6031,111 @@ def _rescue_structured_data(label: str, source: str, dogs: List[Dog],
     }
 
 
+# Breeds people search for and we have enough of to answer with. "Other" and
+# "Mixed / unknown" are deliberately absent: they are real filter values but
+# nobody types them into Google, and a page titled "Mixed / unknown dogs for
+# adoption" would be a thin page competing with our own city page.
+_BREED_PAGE_SKIP = {"Other", "Mixed / unknown"}
+# Below this a page is thinner than the city page that already lists the same
+# dogs, so it competes with it instead of adding anything.
+BREED_PAGE_MIN = 3
+
+
+def breed_slug(group: str) -> str:
+    return slugify(group)
+
+
+def breed_path(c, group: str) -> str:
+    """/breed/pit-bull-type, or /la/breed/pit-bull-type.
+
+    Under the city rather than a flat /breed/ tree, because the same breed in
+    two cities is two different rosters answering two different searches.
+    """
+    base = "" if c.path == "/" else c.path
+    return f"{base}/breed/{breed_slug(group)}"
+
+
+def _breed_structured_data(group: str, dogs: List[Dog], site: str,
+                           url: str, desc: str, c) -> dict:
+    home_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
+    return {
+        "@context": "https://schema.org",
+        "@graph": [{
+            "@type": "CollectionPage",
+            "@id": url,
+            "url": url,
+            "name": f"{group} dogs for adoption in {c.short}",
+            "description": desc,
+            "isPartOf": {"@id": f"{site}/#website"},
+            "publisher": {"@id": f"{site}/#org"},
+            "breadcrumb": {"@type": "BreadcrumbList", "itemListElement": [
+                {"@type": "ListItem", "position": 1,
+                 "name": f"Adopt a dog in {c.short}", "item": home_url},
+                {"@type": "ListItem", "position": 2, "name": group}]},
+            "mainEntity": {
+                "@type": "ItemList",
+                "numberOfItems": len(dogs),
+                "itemListElement": [
+                    {"@type": "ListItem", "position": i,
+                     "url": f"{site}{dog_path(d)}", "name": d.name}
+                    for i, d in enumerate(dogs[:60], 1)],
+            },
+        }],
+    }
+
+
+def _breed_page(group: str, dogs: List[Dog], site: str, c) -> str:
+    """One page per breed group per city — "pit bull adoption nyc" is a real
+    search, and until now the breed filter answered it only in the browser,
+    where Google could not see it.
+
+    A listing rather than the city page with a filter pre-applied: that version
+    would put all 217 dogs in the HTML of all nine breed pages, and nine pages
+    carrying identical content is how you get all nine ignored as duplicates.
+    Only this breed's dogs are here, which is also why the city page's own
+    filters could be left exactly as they are — nothing about this changes them.
+    """
+    url = f"{site}{breed_path(c, group)}"
+    n = len(dogs)
+    lower = group[0].lower() + group[1:]
+    rescues = sorted({d.source_label for d in dogs})
+    desc = (f"{n} {lower} dog{'' if n == 1 else 's'} available for adoption "
+            f"from {len(rescues)} {c.name} "
+            f"rescue{'' if len(rescues) == 1 else 's'}, updated every morning. "
+            f"See each dog's energy level, apartment fit and who to contact.")
+    rows = "".join(
+        f'<li><a href="{html.escape(dog_path(d))}">{html.escape(d.name)}</a>'
+        f'<span class="b"> &mdash; {html.escape(d.breed or "Mixed breed")}'
+        f'{" &middot; " + html.escape(d.age) if d.age else ""}'
+        f' &middot; {html.escape(d.source_label)}</span></li>'
+        for d in dogs)
+    ld = json.dumps(_breed_structured_data(group, dogs, site, url, desc, c))
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(group)} dogs for adoption in {html.escape(c.short)}</title>
+<meta name="description" content="{html.escape(desc)}">
+<link rel="canonical" href="{url}">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/favicon.png" type="image/png">
+<meta property="og:site_name" content="LUVD">
+<meta property="og:title" content="{html.escape(group)} dogs for adoption in {html.escape(c.short)}">
+<meta property="og:description" content="{html.escape(desc)}">
+<meta property="og:url" content="{url}">
+<script type="application/ld+json">{ld}</script>
+<style>{_STATIC_PAGE_CSS}</style></head><body>
+<a class="back" href="{c.path}">&larr; All adoptable dogs in {html.escape(c.short)}</a>
+<h1>{html.escape(group)} dogs in {html.escape(c.short)}</h1>
+<p class="lead">{html.escape(desc)}</p>
+<ul class="dogs">{rows}</ul>
+<footer>
+  <a href="{c.rescues_path}">All {html.escape(c.short)} rescues on LUVD</a> &middot;
+  <a href="{c.path}">Today&rsquo;s new dogs</a>
+</footer>
+</body></html>"""
+
+
 def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     """One page per rescue — "muddy paws rescue dogs" is a real search."""
     slug = slugify(label)
@@ -6319,7 +6424,8 @@ def _owned_slugs(by_city: dict) -> set:
     return slugs
 
 
-def _carried_sitemap_urls(site: str, owned: set, written_paths: set) -> list:
+def _carried_sitemap_urls(site: str, owned: set, written_paths: set,
+                          breed_roots: set = ()) -> list:
     """URLs from the previous sitemap that this pass is not responsible for.
 
     A city left out because its scrapers failed still exists and is still
@@ -6350,6 +6456,13 @@ def _carried_sitemap_urls(site: str, owned: set, written_paths: set) -> list:
             continue
         path = url[len(site):]
         if path in written_paths:
+            continue
+        # Breed trees are deleted and rebuilt wholesale by the cities in this
+        # pass, so anything under one that was not just written no longer
+        # exists — a group that fell below the threshold overnight. Without
+        # this it would be carried forward from the last sitemap forever, and
+        # every carry would be submitting a URL we had already deleted.
+        if any(path.startswith(r) for r in breed_roots):
             continue
         slug = ""
         if path.startswith("/dog/"):
@@ -6427,6 +6540,9 @@ def write(pages, for_date: date = None) -> Path:
     # it in the previous sitemap and put it straight back — resubmitting the one
     # page we just decided not to submit.
     rendered = set()
+    # Breed trees rebuilt this pass, so the sitemap carry-over can tell a
+    # deleted breed page from one belonging to a city that did not run.
+    breed_roots = set()
     for code, dated in by_city.items():
         c = cities.resolve(code)
         out = OUT_DIR / c.file
@@ -6522,6 +6638,43 @@ def write(pages, for_date: date = None) -> Path:
         # and then tells it not to keep it. Its rescue index is empty for the
         # same reason and gets the same treatment.
         today_iso = for_date.isoformat()
+
+        # Breed pages. The breed filter has always been able to answer "pit
+        # bull adoption nyc" — it just answered it in the browser, where a
+        # crawler never saw it. These give each group a URL with only its own
+        # dogs in the HTML.
+        #
+        # Cleared first, and per city: a group that fell under the threshold
+        # overnight would otherwise keep serving 200 from a roster that no
+        # longer exists, the same stale-page problem the dog tree has.
+        broot = breed_path(c, "x").rsplit("/", 1)[0] + "/"
+        breed_roots.add(broot)
+        bdir = OUT_DIR / broot.strip("/")
+        if bdir.exists():
+            shutil.rmtree(bdir)
+        by_breed = {}
+        for d in flat:
+            by_breed.setdefault(breed_group(d), []).append(d)
+        n_breed = 0
+        for group, bdogs in sorted(by_breed.items(),
+                                   key=lambda kv: -len(kv[1])):
+            if group in _BREED_PAGE_SKIP or len(bdogs) < BREED_PAGE_MIN:
+                continue
+            bp = breed_path(c, group)
+            bfile = OUT_DIR / (bp.lstrip("/") + ".html")
+            bfile.parent.mkdir(parents=True, exist_ok=True)
+            bfile.write_text(_breed_page(group, bdogs, site, c),
+                             encoding="utf-8")
+            rendered.add(bp)
+            bu = f"{site}{bp}"
+            urls.append(bu)
+            # The roster changes whenever the city's does, so it dates from
+            # today like the city page rather than from any one dog.
+            lastmod[bu] = today_iso
+            n_breed += 1
+        if n_breed:
+            print(f"  {c.code}: {n_breed} breed page(s)")
+
         if flat:
             u = f"{site}/" if c.path == "/" else f"{site}{c.path}"
             urls.append(u)
@@ -6548,7 +6701,7 @@ def write(pages, for_date: date = None) -> Path:
     # last one published for a city that is not. A per-city sitemap would be a
     # sitemap announcing that the other city's URLs are gone.
     written_paths = {u[len(site):] or "/" for u in urls} | rendered
-    carried = _carried_sitemap_urls(site, owned, written_paths)
+    carried = _carried_sitemap_urls(site, owned, written_paths, breed_roots)
     if carried:
         print(f"  sitemap: carrying {len(carried)} URL(s) from the last run "
               f"for cities not in this pass")

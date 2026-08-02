@@ -75,6 +75,30 @@ def index():
     return send_from_directory(PUBLIC, "index.html")
 
 
+# The spelled-out city names. cities.py already knows them as aliases, but
+# only for resolving a stored value — nothing served them as URLs, so
+# /los-angeles was a 404 while /la worked. People search and type "los
+# angeles", and a competitor linking us is more likely to guess the long form
+# than the two-letter path. 301 so the short path stays the canonical one and
+# any link equity lands on it.
+_CITY_ALIASES = {
+    alias.replace(" ", "-").replace(".", "").replace(",-ca", ""): c.path
+    for c in cities.CITIES.values()
+    for alias in c.aliases
+}
+
+
+@app.route("/<alias>")
+def city_alias(alias):
+    """Redirect a spelled-out city name to its real path, else fall through."""
+    dest = _CITY_ALIASES.get(alias.strip("/").lower())
+    # Only redirect when it isn't already the real path, or /la would 301 to
+    # itself and loop.
+    if dest and dest.strip("/") != alias.strip("/").lower():
+        return redirect(dest, code=301)
+    return static_files(alias)
+
+
 @app.route("/<path:filename>")
 def static_files(filename):
     """Serve public/, resolving clean URLs to their .html file.
