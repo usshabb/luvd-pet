@@ -1302,7 +1302,11 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     display:flex;flex-direction:column;gap:2px;opacity:0;
     transition:opacity .18s ease,transform .22s cubic-bezier(.2,.8,.25,1);}}
   .pick-menu[hidden]{{display:none;}}
-  .pick.open .pick-menu{{opacity:1;transform:translateX(-50%);}}
+  /* Both selectors, for the same reason .fmenu.open exists: on a phone an
+     open menu is moved out of its pick and into the body-level layer, so the
+     descendant form stops matching exactly when it is needed. */
+  .pick.open .pick-menu,
+  .pick-menu.open{{opacity:1;transform:translateX(-50%);}}
   /* A live city is an anchor, not a button: choosing one is an ordinary
      navigation to that city's own page, so it should behave like a link —
      middle-click, cmd-click and "copy link" all work, and it needs no
@@ -2587,13 +2591,15 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        no longer the problem it was when it read "Sort by: Recently added". */
     /* Anchored to the row, not the pill, so a menu on the last pill can't open
        off the edge of a phone. */
-    .fmenu{{position:fixed;left:14px;right:14px;min-width:0;
+    .fmenu{{position:fixed;left:16px;right:16px;min-width:0;
       top:auto;transform:translateY(-6px);}}
     /* Re-asserted: the desktop right-anchor for the sort menu is more specific
        than the rule above and would otherwise defeat this full-width sheet. */
-    .fpill.fsort .fmenu{{left:14px;right:14px;}}
+    .fpill.fsort .fmenu{{left:16px;right:16px;}}
+    /* Full content width: .wrap is padding:0 16px here, so anything else
+       leaves the sheet's edges just off the cards below it. */
     .pick-menu{{position:fixed;left:50%;transform:translateX(-50%) translateY(-6px);
-      width:calc(100vw - 28px);max-width:330px;min-width:0;}}
+      width:calc(100vw - 32px);max-width:none;min-width:0;}}
     .pick.open .pick-menu{{transform:translateX(-50%);}}
     .pick-menu button,.pick-menu a{{padding:13px 15px;font-size:16.5px;}}
   }}
@@ -4043,7 +4049,14 @@ if (location.hash) setTimeout(openFromHash, 0);
   function closeAll() {{
     document.querySelectorAll('.pick').forEach(p => {{
       p.classList.remove('open');
-      p.querySelector('.pick-menu').hidden = true;
+      // p._menu, not querySelector: on a phone the open menu has been moved
+      // into the body-level layer and is no longer inside the pick.
+      const menu = p._menu || p.querySelector('.pick-menu');
+      if (menu) {{
+        menu.classList.remove('open');
+        menu.hidden = true;
+        returnMenuHome(menu);
+      }}
       p.querySelector('button').setAttribute('aria-expanded', 'false');
     }});
   }}
@@ -4074,6 +4087,7 @@ if (location.hash) setTimeout(openFromHash, 0);
   document.querySelectorAll('.pick').forEach(pick => {{
     const trigger = pick.querySelector('button');
     const menu = pick.querySelector('.pick-menu');
+    pick._menu = menu;
     trigger.addEventListener('click', e => {{
       e.stopPropagation();
       const open = pick.classList.contains('open');
@@ -4082,11 +4096,21 @@ if (location.hash) setTimeout(openFromHash, 0);
         menu.hidden = false;
         // Fixed on mobile, so the top has to be measured rather than inherited.
         if (window.matchMedia('(max-width:680px)').matches) {{
+          // Into the body-level layer FIRST. h1.pick-h1 carries a transform
+          // from the load animation, and a transformed ancestor becomes the
+          // containing block for position:fixed — so `top` was being measured
+          // from the h1 instead of the viewport and the menu opened ~178px too
+          // low, down past the subscribe form. Same fix the filter menus use.
+          openMenuInLayer(pick, menu);
           menu.style.top = (trigger.getBoundingClientRect().bottom + 10) + 'px';
         }} else {{
+          returnMenuHome(menu);
           menu.style.top = '';
         }}
-        requestAnimationFrame(() => pick.classList.add('open'));
+        requestAnimationFrame(() => {{
+          pick.classList.add('open');
+          menu.classList.add('open');
+        }});
         trigger.setAttribute('aria-expanded', 'true');
       }}
     }});
