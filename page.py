@@ -1091,9 +1091,9 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 <title>{c.title}</title>
 <meta name="description" content="{meta_desc}">
 <link rel="canonical" href="{page_url}">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.png" type="image/png">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3">
 
 <!-- Social scrapers (iMessage, Slack, Twitter) reject relative image paths,
      so these are absolute. og.png is rebuilt nightly with real dog faces. -->
@@ -5807,8 +5807,8 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}{dog_path(d)}">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="LUVD">
 <meta property="og:title" content="{html.escape(headline)}">
@@ -6145,8 +6145,8 @@ def _breed_page(group: str, dogs: List[Dog], site: str, c) -> str:
 <title>{html.escape(group)} dogs for adoption in {html.escape(c.short)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{url}">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
 <meta property="og:site_name" content="LUVD">
 <meta property="og:title" content="{html.escape(group)} dogs for adoption in {html.escape(c.short)}">
 <meta property="og:description" content="{html.escape(desc)}">
@@ -6198,8 +6198,8 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}/rescue/{slug}">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
 <meta property="og:site_name" content="LUVD">
 <meta property="og:title" content="{html.escape(label)} &mdash; adoptable dogs in {html.escape(c.short)}">
 <meta property="og:description" content="{html.escape(desc)}">
@@ -6327,8 +6327,8 @@ def _rescues_page(by_rescue: dict, site: str, for_date: date,
 <title>{html.escape(title)}</title>
 <meta name="description" content="{html.escape(desc)}">
 <link rel="canonical" href="{site}{c.rescues_path}">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
 <meta property="og:site_name" content="LUVD">
 <meta property="og:title" content="{html.escape(c.short)} dog rescues">
 <meta property="og:description" content="{html.escape(desc)}">
@@ -6368,8 +6368,8 @@ def _not_found_page(dogs: List[Dog], site: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>This dog has moved on — LUVD</title>
 <meta name="robots" content="noindex">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
 <style>
   :root{{--bg:#fbfbfd;--surface:#fff;--text:#1d1d1f;--muted:#6e6e73;
     --accent:#FF002E;--hair:rgba(0,0,0,.08);}}
