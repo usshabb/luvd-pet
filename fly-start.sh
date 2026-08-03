@@ -27,6 +27,7 @@ cp -rn "$IMAGE_PUBLIC/." /data/public/ 2>/dev/null || true
 for asset in \
   apple-touch-icon.png \
   favicon.png \
+  favicon.ico \
   assets/luvd-logo.png \
   assets/luvd-logo-email.png
 do
