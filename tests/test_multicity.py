@@ -1126,8 +1126,14 @@ def test_every_page_has_an_icon_a_browser_will_actually_fetch():
                                             _date(2026, 7, 31), "NYC"),
     }
     for what, markup in pages.items():
+        # Matched with a pattern, not a literal string. The href carries a
+        # cache-busting ?v= so a rebuilt icon actually reaches browsers, and an
+        # earlier version of this test pinned the exact bytes and failed the
+        # moment that was added — which is a test breaking on a change that
+        # improved the thing it was guarding.
         eq(f"{what} declares the .ico",
-           '<link rel="icon" href="/favicon.ico"' in markup, True)
+           bool(re.search(r'<link rel="icon" href="/favicon\.ico(\?[^"]*)?"',
+                          markup)), True)
 
 
 def test_dogs_are_kept_after_they_leave():
