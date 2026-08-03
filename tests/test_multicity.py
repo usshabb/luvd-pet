@@ -1030,6 +1030,46 @@ def test_no_page_sends_a_visitor_to_another_citys_rescue_index():
     eq("index links actually found", checked >= 2 * len(cities.live_codes()), True)
 
 
+def test_the_h1_is_one_sentence_and_nothing_else():
+    """The headline must read "Adopt a dog in NYC" — not the picker's contents.
+
+    The city and species pickers live in the h1, and their option lists used to
+    be nested inside them. So the strongest heading on the page read "Adopt a dog
+    Dogs Cats in NYC New York City Los Angeles Chicago Boston San Francisco" —
+    naming a species the site does not list and three cities it does not cover.
+
+    The lists now sit in .pick-store outside the h1, and the script moves each
+    into its .pick on open, so the UX is unchanged: while open the menu is
+    exactly where it always was. This asserts the heading text, which is the part
+    a search engine reads.
+    """
+    import re as _re
+    for code in cities.live_codes():
+        c = cities.CITIES[code]
+        markup = _page_html_for(code)
+        h1 = _re.search(r"<h1[^>]*>(.*?)</h1>", markup, _re.S).group(1)
+        text = " ".join(html.unescape(_re.sub(r"<[^>]+>", " ", h1)).split())
+        eq(f"{code} h1", text, f"Adopt a dog in {c.short}")
+        # The options must still exist somewhere, or the picker is broken.
+        eq(f"{code} keeps both menus", markup.count('class="pick-menu"'), 2)
+        eq(f"{code} menus are outside the h1",
+           'class="pick-menu"' in h1, False)
+        # And every city it does not serve stays out of the heading.
+        for other in ("Chicago", "Boston", "San Francisco", "Cats"):
+            eq(f"{code} h1 omits {other!r}", other in text, False)
+
+
+def _page_html_for(code):
+    from datetime import date as _date
+    import page as _page
+    from sources.base import Dog as _Dog
+    d = _Dog(id=f"t:{code}", name="T", source="muddypaws",
+             source_label="Muddy Paws Rescue", url="https://e.org/1",
+             photos=["https://e.org/p.jpg"], breed="Terrier", city=code)
+    d.first_seen = "2026-08-01"
+    return _page.render([("2026-08-01", [d])], _date(2026, 8, 1), code)
+
+
 def test_titles_lead_with_the_page_and_never_repeat_the_brand():
     """No brand suffix in <title>, and every page names the site once.
 

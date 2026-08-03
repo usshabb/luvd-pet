@@ -2653,24 +2653,35 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 <div class="wrap">
   <header>
     <div class="brand-wrap">{LOGO_SVG}</div>
+    <!-- The two option lists are NOT in here. They used to be, and the h1
+         therefore read "Adopt a dog Dogs Cats in NYC New York City Los Angeles
+         Chicago Boston San Francisco" — the strongest heading on the page,
+         naming a species we do not list and three cities we do not cover. The
+         comment on .pick claims the h1 reads as one sentence to a search
+         engine; nesting the menus inside it is what stopped that being true.
+         They live in .pick-store below and the script moves each one into its
+         .pick when it opens, so nothing about the UX changes: while open the
+         menu is exactly where it always was. -->
     <h1 class="pick-h1">Adopt a
-      <span class="pick" data-kind="species">
+      <span class="pick" data-kind="species" data-menu="menu-species">
         <button type="button" id="pick-species" aria-haspopup="listbox"
                 aria-expanded="false">dog{CHEVRON}</button>
-        <span class="pick-menu" id="menu-species" role="listbox" hidden>
-          <button role="option" data-v="dog" data-ok="1">Dogs</button>
-          <button role="option" data-v="cat">Cats</button>
-        </span>
       </span>
       in
-      <span class="pick" data-kind="city">
+      <span class="pick" data-kind="city" data-menu="menu-city">
         <button type="button" id="pick-city" aria-haspopup="listbox"
                 aria-expanded="false">{c.short}{CHEVRON}</button>
-        <span class="pick-menu" id="menu-city" role="listbox" hidden>
-          {city_options}
-        </span>
       </span>
     </h1>
+    <div class="pick-store" hidden>
+      <span class="pick-menu" id="menu-species" role="listbox" hidden>
+        <button role="option" data-v="dog" data-ok="1">Dogs</button>
+        <button role="option" data-v="cat">Cats</button>
+      </span>
+      <span class="pick-menu" id="menu-city" role="listbox" hidden>
+        {city_options}
+      </span>
+    </div>
     <div class="soon" id="soon" hidden>
       <p id="soon-msg"></p>
       <form class="hero-sub" id="soon-form">
@@ -2853,7 +2864,10 @@ def render(dated, for_date: date = None, city: str = None) -> str:
   </section>
 
   <section class="faq">
-    <h2>Adopting a dog in {c.name}</h2>
+    <!-- "{c.short} dog adoption" is a phrasing people search that the page
+         did not have in a heading; "{c.name}" spells the city out for the ones
+         who type it that way. Both forms, one sentence, no stuffing. -->
+    <h2>{c.short} dog adoption: adopting a dog in {c.name}</h2>
     <details open>
       <summary>How do I adopt a dog in {c.short}?</summary>
       <p>Open any dog above and use the button at the bottom of its page. Some
@@ -4090,7 +4104,14 @@ if (location.hash) setTimeout(openFromHash, 0);
 
   document.querySelectorAll('.pick').forEach(pick => {{
     const trigger = pick.querySelector('button');
-    const menu = pick.querySelector('.pick-menu');
+    // By id, not by descendant: the menus start outside the h1 now. Setting
+    // _homePill here is what makes the desktop branch below work on the FIRST
+    // open — returnMenuHome() only ever knew a home because openMenuInLayer()
+    // had set one, which on desktop had never run.
+    const menu = document.getElementById(pick.dataset.menu)
+                 || pick.querySelector('.pick-menu');
+    if (!menu) return;
+    menu._homePill = pick;
     pick._menu = menu;
     trigger.addEventListener('click', e => {{
       e.stopPropagation();
