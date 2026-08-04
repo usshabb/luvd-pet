@@ -109,15 +109,29 @@ def collect(prefs, city=None, verbose=True):
     return dogs, failures
 
 
-def order_for_feed(dogs):
-    """Round-robin across rescues so no single one owns the top of a group.
+def order_for_feed(dogs, today=None):
+    """Freshest first within a day, round-robin only to break ties.
 
-    Only Petfinder exposes a real published date — Muddy Paws has no intake
-    field and Animal Haven returns its listing in rotating order — so a global
-    recency sort would be inventing precision. Interleaving keeps every rescue
-    visible, and each source's own order (newest-first where it exists) is
-    preserved inside its queue.
+    This used to round-robin across rescues outright, on the grounds that too
+    few sources published a real date for a recency sort to mean anything.
+    That is no longer true — 156 of 227 New York dogs now carry the rescue's
+    own listing date — and it had a visible cost: the top of the page
+    alternated rescues rather than leading with the freshest dog, which is the
+    one thing someone arriving from the morning email is looking for.
+
+    So recency leads, using waiting_days(), which is the rescue's publish date
+    falling back to our first sighting. A rescue that publishes no date counts
+    from the day we found it, which is the only honest answer for those dogs
+    and puts them at the top on that day.
+
+    The round-robin survives as the tiebreak, and that is where it was always
+    earning its keep: on the morning a rescue is added, its whole roster shares
+    one date, and without interleaving that single rescue would own the entire
+    page.
     """
+    from datetime import date as _date
+    from page import waiting_days
+    today = today or _date.today()
     withphoto = [d for d in dogs if d.photos]
     nophoto = [d for d in dogs if not d.photos]
 
@@ -133,9 +147,20 @@ def order_for_feed(dogs):
                     lists.remove(q)
         return out
 
+    def freshest(items):
+        """Recency first; interleave rescues only among dogs sharing a date."""
+        buckets = {}
+        for d in items:
+            buckets.setdefault(waiting_days(d, today), []).append(d)
+        out = []
+        # None sorts last: a dog with no date at all is not evidence of freshness.
+        for days in sorted(buckets, key=lambda v: (v is None, v)):
+            out.extend(interleave(buckets[days]))
+        return out
+
     # Photo-first: the page is built around faces, so dogs the rescue never
     # photographed sort last rather than punching holes in the grid.
-    return interleave(withphoto) + interleave(nophoto)
+    return freshest(withphoto) + freshest(nophoto)
 
 
 def _group_by_day(dogs, fallback_iso: str):
@@ -144,7 +169,14 @@ def _group_by_day(dogs, fallback_iso: str):
     for d in dogs:
         groups.setdefault(d.first_seen or fallback_iso, []).append(d)
     for k in groups:
-        groups[k] = order_for_feed(groups[k])
+        # Ordered against the day being rendered, not against wall-clock
+        # today, so a re-render of an older day ranks it the same way.
+        from datetime import date as _d
+        try:
+            ref = _d.fromisoformat(k)
+        except ValueError:
+            ref = None
+        groups[k] = order_for_feed(groups[k], ref)
     return groups, sorted(groups.items(), key=lambda kv: kv[0], reverse=True)
 
 
