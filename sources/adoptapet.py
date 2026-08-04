@@ -264,7 +264,9 @@ class AdoptAPetSource(Source):
             if t.get("name"):
                 attributes.append(t["name"])
 
-        story = clean_text(_field(blob, "petStory") or "")
+        story = clean_text(
+            re.sub(r"\s*##\d+##\s*$", "",
+                   _field(blob, "petStory") or "").strip())
         fee = (_field(blob, "adoptionCost") or "").strip() or None
 
         return Dog(
