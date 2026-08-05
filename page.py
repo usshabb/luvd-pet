@@ -31,6 +31,9 @@ from sources.base import Dog
 
 OUT_DIR = Path(__file__).parent / "public"
 CONTACT_EMAIL = "cory@luvd.com"
+# One definition: the nav icon and the footer link both point here, and
+# two copies of a handle is how one of them ends up stale.
+INSTAGRAM_URL = "https://instagram.com/liveluvd"
 
 
 def _city_of(dogs, default: str = None) -> str:
@@ -1231,6 +1234,17 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     text-transform:uppercase;text-decoration:none;}}
   .nav-left{{display:flex;align-items:center;gap:12px;min-width:0;}}
   .nav-r{{display:flex;align-items:center;gap:8px;}}
+  /* Icon only, and a circle rather than a pill, so it reads as a secondary
+     destination beside Subscribe rather than competing with it. Sized to the
+     Subscribe button's height so the row keeps one baseline. */
+  .nav-ig{{all:unset;box-sizing:border-box;cursor:pointer;
+    width:34px;height:34px;flex:0 0 auto;
+    display:grid;place-items:center;border-radius:50%;
+    background:var(--hair2);color:var(--muted);
+    transition:background .2s ease,color .2s ease;}}
+  .nav-ig:hover{{background:var(--hair);color:var(--text);}}
+  .nav-ig svg{{width:17px;height:17px;fill:none;stroke:currentColor;
+    stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}}
   .nav-btn{{all:unset;box-sizing:border-box;cursor:pointer;font-size:13.5px;
     font-weight:500;color:var(--text);
     padding:7px 13px;border-radius:980px;transition:background .2s,opacity .2s;}}
@@ -2639,6 +2653,13 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     </div>
     <div class="nav-r">
       <button class="nav-btn" id="about-btn">About</button>
+      <a class="nav-ig" href="{INSTAGRAM_URL}" target="_blank" rel="noopener"
+         aria-label="LUVD on Instagram" title="LUVD on Instagram">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="5"/>
+          <circle cx="12" cy="12" r="4"/>
+          <circle cx="17.2" cy="6.8" r="1.1" fill="currentColor" stroke="none"/>
+        </svg></a>
       <button class="nav-btn nav-cta" id="sub-btn">Subscribe</button>
     </div>
   </div>
@@ -2897,7 +2918,8 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     </nav>
     <nav class="foot-cities" aria-label="Cities on LUVD">{foot_cities}</nav>
     <div style="margin-top:6px;">
-      LUVD · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD">Contact</a>
+      LUVD · <a href="{INSTAGRAM_URL}" target="_blank" rel="noopener">Instagram</a>
+      · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD">Contact</a>
       · <button class="foot-link" id="terms-link" type="button">Terms</button>
       · <button class="foot-link" id="privacy-link" type="button">Privacy</button>
     </div>
