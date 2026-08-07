@@ -1281,6 +1281,11 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     font-weight:700;margin:0;position:relative;z-index:5;}}
   /* Two words in the headline become pickers. Everything stays real text, so
      the h1 still reads as one sentence to search engines and screen readers. */
+  /* The honeypot. Parked off-screen rather than display:none or hidden,
+     because a bot that bothers to check visibility skips the obvious ones —
+     while a real person can neither see it nor tab into it. */
+  .hp{{position:absolute;left:-9999px;width:1px;height:1px;opacity:0;
+    pointer-events:none;}}
   .pick{{position:relative;display:inline-block;z-index:45;}}
   .pick > button{{all:unset;cursor:pointer;font:inherit;color:var(--text);
     border-bottom:3px solid var(--hair);padding:0 2px;
@@ -2708,6 +2713,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       <form class="hero-sub" id="soon-form">
         <input type="email" id="soon-email" placeholder="you@email.com" required
                autocomplete="email" aria-label="Email address">
+        <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
         <button type="submit">Tell me when it's ready</button>
       </form>
       <div class="hero-note" id="soon-note">We'll only write when it launches.</div>
@@ -2719,6 +2725,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       <form class="hero-sub" id="hero-form">
         <input type="email" id="hero-email" placeholder="you@email.com" required
                autocomplete="email" aria-label="Email address">
+        <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
         <button type="submit">Send new dogs</button>
       </form>
       <!-- Empty at rest: the button already says what happens, and a line of
@@ -2875,6 +2882,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     <form class="sub-form" id="sub-form">
       <input type="email" id="sub-email" placeholder="you@email.com" required
              autocomplete="email" aria-label="Email address">
+        <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
       <button type="submit">Subscribe</button>
     </form>
     <fieldset class="sub-cities" id="sub-cities">
@@ -5101,6 +5109,7 @@ function openSubscribe() {{
       <form class="sub-form" id="m-sub-form">
         <input type="email" id="m-sub-email" placeholder="you@email.com" required
                autocomplete="email" aria-label="Email address">
+        <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
         <button type="submit">Subscribe</button>
       </form>
       <fieldset class="sub-cities" id="m-sub-cities">
@@ -5146,6 +5155,14 @@ function pickedCities(formId) {{
   return on.length ? on : [];
 }}
 
+// Whatever the hidden field ended up holding. Empty for every human, because
+// a human never sees it; a form-spam bot fills every input it finds.
+function hpValue(formId) {{
+  const f = document.getElementById(formId);
+  const el = f && f.querySelector('input.hp');
+  return el ? el.value : '';
+}}
+
 async function handleSubscribe(e, emailId, noteId, formId) {{
   e.preventDefault();
   const email = document.getElementById(emailId).value.trim();
@@ -5163,7 +5180,8 @@ async function handleSubscribe(e, emailId, noteId, formId) {{
     const r = await fetch(SUBSCRIBE_URL, {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{email: email, cities: picked, city: picked[0]}})
+      body: JSON.stringify({{email: email, cities: picked,
+        city: picked[0], website: hpValue(formId)}})
     }});
     if (!r.ok) throw new Error('bad status');
     // Restore the note to its resting copy — no "you're in" line at all.

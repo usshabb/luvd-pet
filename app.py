@@ -230,10 +230,62 @@ def _sheet_sync_in_background():
     _in_background("subscriber sheet sync", sheet_sync.sync_subscribers)
 
 
+# Signups per address per window. In memory rather than in the database: it
+# only has to blunt a flood, it must never become a write on the hot path, and
+# losing the counters on deploy is fine — a bot that has to wait out a restart
+# to get its next five through is already beaten. One machine on Fly, so one
+# copy of this; behind several it would be per worker, which still bounds the
+# damage.
+_SUB_WINDOW = 3600          # seconds
+_SUB_MAX = 5                # signups per IP per window
+_sub_hits: dict = {}
+
+
+def _client_ip() -> str:
+    """The real client, not the proxy. Fly puts it in Fly-Client-IP."""
+    return (request.headers.get("Fly-Client-IP")
+            or (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+            or request.remote_addr or "?")
+
+
+def _subscribe_allowed(ip: str) -> bool:
+    import time
+    now = time.time()
+    hits = [t for t in _sub_hits.get(ip, ()) if now - t < _SUB_WINDOW]
+    # Trim everything that has aged out, so this cannot grow without bound on a
+    # long-running machine.
+    if len(_sub_hits) > 4000:
+        for k in [k for k, v in _sub_hits.items()
+                  if not any(now - t < _SUB_WINDOW for t in v)]:
+            _sub_hits.pop(k, None)
+    if len(hits) >= _SUB_MAX:
+        _sub_hits[ip] = hits
+        return False
+    hits.append(now)
+    _sub_hits[ip] = hits
+    return True
+
+
 @app.route("/subscribe", methods=["POST"])
 def subscribe():
     data = request.get_json(silent=True) or request.form
     email = (data.get("email") or "").strip().lower()
+
+    # The honeypot. `website` is off-screen in the form and no person can see
+    # or tab into it, so anything in it came from something filling every input
+    # it found in the HTML.
+    #
+    # Answered with a 200 and the shape of a success on purpose. A 400 tells
+    # the author of the bot exactly which field gave it away, and the next run
+    # simply leaves that one blank.
+    if (data.get("website") or "").strip():
+        app.logger.info("subscribe honeypot tripped from %s", _client_ip())
+        return jsonify({"ok": True, "cities": []})
+
+    if not _subscribe_allowed(_client_ip()):
+        app.logger.info("subscribe rate-limited %s", _client_ip())
+        return jsonify({"ok": True, "cities": []})
+
     if not EMAIL_RE.match(email):
         return jsonify({"ok": False, "error": "invalid email"}), 400
     # You sign up for one city at a time, and it is the city whose page you were
