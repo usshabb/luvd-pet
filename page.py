@@ -6603,6 +6603,8 @@ def write(pages, for_date: date = None) -> Path:
     # genuinely is new. A roster page does change daily; a dog's page dates
     # from the day that dog appeared.
     lastmod = {}
+    # url -> the one photo worth declaring for it.
+    images = {}
     # Every path this pass rendered, including the ones deliberately kept out of
     # the sitemap. `urls` alone is not enough: a page withheld because it is
     # noindex is also absent from `written_paths`, so the carry-over would find
@@ -6763,6 +6765,14 @@ def write(pages, for_date: date = None) -> Path:
             # stops changing once it exists, so claiming it changed this morning
             # is false for a dog listed six months ago — which is most of them.
             lastmod[u] = getattr(d, "first_seen", None) or today_iso
+            # The dog's own photo, declared so Google Images can index it. This
+            # is a photo-led product and image search is a real way in — someone
+            # looking for "husky adoption la" often arrives through pictures.
+            # One per dog: the hero is the one the card and the share card use,
+            # and listing five near-identical shots of the same animal is not
+            # five images worth finding.
+            if d.photos:
+                images[u] = d.photos[0]
 
         per_city.append(f"{c.code}: {len(flat)} dogs, {len(by_rescue)} rescues")
 
@@ -6780,12 +6790,20 @@ def write(pages, for_date: date = None) -> Path:
     # changed since March.
     entries = ([(u, lastmod.get(u, fallback)) for u in urls]
                + [(u, d or fallback) for u, d in carried])
-    body = "".join(
-        f"<url><loc>{html.escape(u)}</loc><lastmod>{d}</lastmod></url>"
-        for u, d in entries)
+    def _entry(u, d):
+        img = images.get(u)
+        # The image namespace is only meaningful on a dog's own URL, so pages
+        # without one emit exactly what they did before.
+        pic = (f"<image:image><image:loc>{html.escape(img)}</image:loc>"
+               f"</image:image>") if img else ""
+        return (f"<url><loc>{html.escape(u)}</loc>"
+                f"<lastmod>{d}</lastmod>{pic}</url>")
+
+    body = "".join(_entry(u, d) for u, d in entries)
     (OUT_DIR / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+        'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
         f"{body}</urlset>", encoding="utf-8")
 
     # One 404, from every city's dogs: a dead link can be arrived at from
