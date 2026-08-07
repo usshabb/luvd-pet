@@ -749,11 +749,17 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
         served_phrase = served[0] if served else c.name
     items = []
     for i, d in enumerate(flat[:60], 1):        # keep the payload sane
+        # Thing, not Product. Google reads a Product as retail and requires
+        # one of offers, review or aggregateRating — which is why all 255 of
+        # these were invalid in Search Console. The fix is not to add an offer:
+        # that would publish an adoption fee as a price in search results, and
+        # 45 of 240 dogs have no fee to publish anyway. A dog is not
+        # merchandise, so `brand` and `seller` go with the type. The rescue is
+        # still named on the page and carried by the BreadcrumbList.
         about = {
-            "@type": "Product",
+            "@type": "Thing",
             "name": d.name,
             "category": "Adoptable dog",
-            "brand": {"@type": "Organization", "name": d.source_label},
         }
         if d.photos:
             about["image"] = d.photos[0]
@@ -5651,18 +5657,16 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
     # gives a search result the "luvd.com › Muddy Paws Rescue › Poof" trail
     # instead of a bare URL. Every hop is a page this run actually writes.
     city_url = f"{site}/" if c.path == "/" else f"{site}{c.path}"
+    # Thing rather than Product — see the note in _structured_data(). The
+    # relationship to the site and the rescue that `isPartOf`, `seller` and
+    # `brand` used to carry is already stated by the BreadcrumbList below,
+    # which walks city -> rescue -> dog, so nothing is lost by dropping
+    # vocabulary that only makes sense for something you can buy.
     product = {
-        "@type": "Product",
+        "@type": "Thing",
         "name": d.name,
-        # Ties the dog to the site and the rescue's own entity. Without these
-        # the deepest, most-shared pages on the site were three isolated nodes
-        # — a crawler could read the dog but had nothing saying whose page it
-        # was on or which organisation is placing the animal.
-        "isPartOf": {"@id": f"{site}/#website"},
-        "seller": {"@id": f"{site}/rescue/{rescue_slug(d)}#rescue"},
         "description": clean_meta(d.description) or desc,
         "category": f"Adoptable dog — {breed}",
-        "brand": {"@type": "Organization", "name": d.source_label},
         "url": f"{site}{dog_path(d)}",
     }
     if photo:
