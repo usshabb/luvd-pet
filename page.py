@@ -2075,29 +2075,15 @@ def render(dated, for_date: date = None, city: str = None) -> str:
   .mnav-p{{left:max(14px,calc(50vw - 520px));}}
   .mnav-n{{right:max(14px,calc(50vw - 520px));}}
   @media (max-width:720px){{
-    /* A phone has no room beside a full-screen sheet, so these sit over the
-       photo — the usual place for gallery controls, and translucent enough to
-       read against one.
-       NOT along the bottom, which was the first attempt: the pinned action bar
-       is taller in the modal than on the dog page (it still carries the note
-       and the fee), so they landed on top of Apply and Share. Anchored to the
-       top instead, which nothing else occupies.
-       Swiping is the real gesture here; these are the visible hint that paging
-       exists at all. */
-    .mnav{{top:34%;bottom:auto;transform:translateY(-50%);
-      width:36px;height:36px;
-      background:rgba(0,0,0,.42);backdrop-filter:blur(8px);
-      -webkit-backdrop-filter:blur(8px);
-      transition:opacity .45s ease;}}
-    .mnav svg{{stroke:#fff;width:18px;height:18px;}}
-    .mnav:hover{{transform:translateY(-50%);}}
-    .mnav-p{{left:10px;}}
-    .mnav-n{{right:10px;}}
-    /* Shown on open, then out of the way. Two circles parked over the dog's
-       face for as long as the modal is open is chrome on top of the product,
-       and swipe is the real gesture here — these exist to say the gesture is
-       there, which they only need to do once. Any touch brings them back. */
-    .mnav.dim{{opacity:0;pointer-events:none;}}
+    /* No arrows on a phone. They sat over the photo at its left and right
+       edges, which is exactly where a photo carousel puts its controls — so
+       they read as "next picture of this dog" when they meant "next dog".
+       Dimming them after a moment never fixed that; it only made the wrong
+       hint briefer.
+       Swipe still pages between dogs, and the buttons still exist for the
+       touch handler to check and for a keyboard to use. Only the drawing is
+       gone, which was the part doing the lying. */
+    .mnav{{display:none;}}
   }}
 
   /* ---------- share sheet ---------- */
