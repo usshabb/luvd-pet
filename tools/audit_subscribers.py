@@ -1,9 +1,13 @@
 """Score the subscriber list for signs of automated signup.
 
-Run it where the database is:
+Either against the live database:
 
     fly ssh console -C "python tools/audit_subscribers.py"
     fly ssh console -C "python tools/audit_subscribers.py --list"
+
+or against a CSV exported from the backup sheet, which needs no server access:
+
+    .venv/bin/python tools/audit_subscribers.py --csv ~/Downloads/subs.csv
 
 Without --list it prints counts and patterns only, so it can be run and pasted
 around without moving anybody's address anywhere. With --list it prints the
@@ -15,6 +19,7 @@ the same hour off one link — so the output is evidence, not a verdict.
 """
 import argparse
 import collections
+import csv
 import re
 import sys
 from datetime import datetime
@@ -38,6 +43,24 @@ _CONSONANT_RUN = re.compile(r"[bcdfghjklmnpqrstvwxz]{6,}")
 _SEQUENTIAL = re.compile(r"^(.*?)(\d+)$")
 
 
+def _rows_from_csv(path):
+    """A sheet export. Any column whose header mentions email or created is
+    picked up, so a spreadsheet that has drifted from the table still reads."""
+    out = []
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            keys = {(k or "").strip().lower(): v for k, v in row.items()}
+            email = next((v for k, v in keys.items()
+                          if "email" in k and v and "@" in v), None)
+            if not email:
+                continue
+            created = next((v for k, v in keys.items()
+                            if "creat" in k or "date" in k or "signed" in k), "")
+            out.append({"email": email.strip().lower(),
+                        "created": (created or "").strip(), "active": 1})
+    return out
+
+
 def _rows():
     con = db._connect() if hasattr(db, "_connect") else None
     if con is None:
@@ -53,9 +76,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true",
                     help="print the suspect addresses, not just the counts")
+    ap.add_argument("--csv", metavar="FILE",
+                    help="read a sheet export instead of the database")
     args = ap.parse_args()
 
-    rows = _rows()
+    rows = _rows_from_csv(args.csv) if args.csv else _rows()
     total = len(rows)
     active = [r for r in rows if r.get("active", 1)]
     print(f"\n  {total} addresses on file, {len(active)} active\n")
