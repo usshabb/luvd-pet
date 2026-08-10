@@ -5167,6 +5167,18 @@ function mountTurnstile() {{
 }}
 window.onloadTurnstileCallback = mountTurnstile;
 
+// The signup token, fetched once on first use and reused while it lasts. A
+// script posting blind at /subscribe never runs this, which is the point.
+let _formToken = null;
+async function formToken() {{
+  if (_formToken) return _formToken;
+  try {{
+    const r = await fetch('/t', {{cache: 'no-store'}});
+    _formToken = (await r.json()).t || '';
+  }} catch (e) {{ _formToken = ''; }}
+  return _formToken;
+}}
+
 // The token this form's widget produced. Empty when Turnstile is not
 // configured, which the server treats as unenforced rather than as a failure.
 function tsToken(formId) {{
@@ -5202,7 +5214,7 @@ async function handleSubscribe(e, emailId, noteId, formId) {{
       headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{email: email, cities: picked,
         city: picked[0], website: hpValue(formId),
-        turnstile: tsToken(formId)}})
+        turnstile: tsToken(formId), t: await formToken()}})
     }});
     if (!r.ok) throw new Error('bad status');
     // Restore the note to its resting copy — no "you're in" line at all.

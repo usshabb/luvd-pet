@@ -268,6 +268,52 @@ def _subscribe_allowed(ip: str) -> bool:
     return True
 
 
+# A short-lived token the signup form has to fetch before it can post. It is
+# an HMAC of the current hour, so it needs no storage to verify and rotates on
+# its own.
+#
+# What this actually stops is the thing that appears to be happening: a script
+# POSTing blind at /subscribe, which never loads the page, never runs the
+# JavaScript, and so never asks for a token. It raises the bar from "know the
+# URL" to "follow the flow".
+#
+# What it does not stop is a bot written for this form, which can fetch /t as
+# easily as the page does. That is what Turnstile is for, and the code for it
+# is still here and still preferred. This is the version that needs no account.
+_FORM_TOKEN_HOURS = 2       # a token minted now stays good this hour and next
+
+
+def _form_token(offset: int = 0) -> str:
+    import hashlib
+    import hmac as _h
+    import time
+    secret = (os.getenv("FORM_TOKEN_SECRET")
+              or os.getenv("UNSUB_SECRET") or "luvd-dev-secret")
+    bucket = int(time.time() // 3600) - offset
+    return _h.new(secret.encode(), f"form:{bucket}".encode(),
+                  hashlib.sha256).hexdigest()[:24]
+
+
+def _form_token_ok(token: str) -> bool:
+    """Valid for the hour it was minted in and the one after.
+
+    Two hours because somebody can open the page, read about a dog, and sign up
+    twenty minutes later — and because an exact-hour boundary would fail every
+    signup that straddled one.
+    """
+    import hmac as _h
+    if not token:
+        return False
+    return any(_h.compare_digest(token, _form_token(i))
+               for i in range(_FORM_TOKEN_HOURS))
+
+
+@app.route("/t")
+def form_token():
+    """Mint a signup token. Cheap, stateless, and deliberately boring."""
+    return jsonify({"t": _form_token()})
+
+
 def _turnstile_ok(token: str, ip: str) -> bool:
     """Ask Cloudflare whether this token is real.
 
@@ -321,9 +367,14 @@ def subscribe():
     # the author of the bot exactly which field gave it away, and the next run
     # simply leaves that one blank.
     ip = _client_ip()
-    # First, because it is the only one of the three a direct POST cannot walk
-    # around.
-    if not _turnstile_ok((data.get("turnstile") or "").strip(), ip):
+    # Turnstile when it is configured, since it is strictly stronger. The form
+    # token is the fallback that needs no account — it only proves the caller
+    # went through the page, which is exactly what a blind POST has not done.
+    if os.getenv("TURNSTILE_SECRET"):
+        if not _turnstile_ok((data.get("turnstile") or "").strip(), ip):
+            return jsonify({"ok": False, "error": "verification failed"}), 400
+    elif not _form_token_ok((data.get("t") or "").strip()):
+        app.logger.info("subscribe refused — no valid form token, from %s", ip)
         return jsonify({"ok": False, "error": "verification failed"}), 400
 
     if (data.get("website") or "").strip():
