@@ -15,6 +15,7 @@ subscribers — so Los Angeles shelters can never affect what a New York reader
 sees, or the other way round.
 """
 import argparse
+import os
 import sys
 from dotenv import load_dotenv
 
@@ -372,6 +373,14 @@ def run(dry_run=False, city=None):
 
     if not new_today:
         print("No new dogs today — no email sent (by design).")
+        return dogs
+
+    # EMAILS_PAUSED stops the subscriber send while leaving the run itself
+    # intact: the page renders, dogs are recorded as seen, and today's arrivals
+    # are deliberately NOT queued for later — unpausing resumes with tomorrow's
+    # dogs rather than mailing a backlog of stale "new" ones.
+    if os.getenv("EMAILS_PAUSED"):
+        print(f"EMAILS_PAUSED set — {len(new_today)} new {city} dog(s), no digest sent.")
         return dogs
 
     # Only this city's subscribers, so a New York reader can never be sent a Los

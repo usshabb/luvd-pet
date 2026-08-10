@@ -22,6 +22,7 @@ exits without mailing, the same rule the dog digest follows. "This week's events
 none" is worse than silence — it teaches people to ignore the next one.
 """
 import argparse
+import os
 import sys
 from datetime import timedelta
 
@@ -77,6 +78,12 @@ def run(city: str = None, dry_run: bool = False, skip_sync: bool = False) -> int
 
     if dry_run:
         print("(dry run: no email sent)")
+        return 0
+
+    # Same switch as check.py's digest: subscriber sends stop, everything else
+    # (the sheet sync above, the operator's own runs) is untouched.
+    if os.getenv("EMAILS_PAUSED"):
+        print(f"EMAILS_PAUSED set — {len(week)} {city} event(s), no email sent.")
         return 0
 
     recipients = db.list_subscribers(city)
