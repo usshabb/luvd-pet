@@ -7,12 +7,6 @@ primary_region = "ewr"
 [build]
   dockerfile = "Dockerfile"
 
-[env]
-  # Subscriber sends are paused while the list is cleaned of fake signups
-  # (2026-08). The scrape and page still run; check.py and check_events.py
-  # skip their mail loops. Delete this line and deploy to resume.
-  EMAILS_PAUSED = "1"
-
 [processes]
   app = "sh /app/fly-start.sh"
 
