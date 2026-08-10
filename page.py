@@ -970,6 +970,13 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     payload = json.dumps(rows)
     breeds_json = json.dumps(breeds, ensure_ascii=False)
     subscribe_url = os.getenv("SUBSCRIBE_URL", "/subscribe")
+    turnstile_key = os.getenv("TURNSTILE_SITE_KEY", "")
+    # Only loaded when a key exists, so an unconfigured deploy ships no
+    # third-party script and no request to Cloudflare on every page view.
+    turnstile_tag = (
+        '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js'
+        '?onload=onloadTurnstileCallback&render=explicit" async defer></script>'
+        if turnstile_key else "")
 
     today_iso = for_date.isoformat()
     total = len(flat)
@@ -1114,6 +1121,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
 <meta name="twitter:description" content="{meta_desc}">
 <meta name="twitter:image" content="{site}/og.png?v={cache_bust}">
 <meta name="theme-color" content="#FF002E">
+{turnstile_tag}
 <meta name="robots" content="{robots_meta}">
 
 <!-- Structured data. The ItemList gives search and answer engines the actual
@@ -2946,6 +2954,7 @@ DOGS.forEach(d => {{
   d.breed_info = Object.assign({{}}, BREEDS[d.b] || {{}}, d.bi || {{}});
 }});
 const SUBSCRIBE_URL = {json.dumps(subscribe_url)};
+const TURNSTILE_KEY = {json.dumps(turnstile_key)};
 // You subscribe to one city, and it's the city whose page you're on. Baked in at
 // render time rather than read from the URL, so it's right even on a cached copy
 // and cannot be confused by a stray query string.
@@ -5141,6 +5150,31 @@ function pickedCities(formId) {{
   return on.length ? on : [];
 }}
 
+// One Turnstile widget per signup form, added only when a site key is
+// configured. Managed mode, so a real visitor almost never sees a challenge —
+// it resolves silently and drops a token into a hidden input in the form.
+function mountTurnstile() {{
+  if (!TURNSTILE_KEY || !window.turnstile) return;
+  document.querySelectorAll('.sub-form').forEach(f => {{
+    if (f.querySelector('.cf-turnstile')) return;
+    const d = document.createElement('div');
+    d.className = 'cf-turnstile';
+    d.dataset.sitekey = TURNSTILE_KEY;
+    d.dataset.size = 'flexible';
+    f.appendChild(d);
+    window.turnstile.render(d, {{sitekey: TURNSTILE_KEY, size: 'flexible'}});
+  }});
+}}
+window.onloadTurnstileCallback = mountTurnstile;
+
+// The token this form's widget produced. Empty when Turnstile is not
+// configured, which the server treats as unenforced rather than as a failure.
+function tsToken(formId) {{
+  const f = document.getElementById(formId);
+  const el = f && f.querySelector('[name="cf-turnstile-response"]');
+  return el ? el.value : '';
+}}
+
 // Whatever the hidden field ended up holding. Empty for every human, because
 // a human never sees it; a form-spam bot fills every input it finds.
 function hpValue(formId) {{
@@ -5167,7 +5201,8 @@ async function handleSubscribe(e, emailId, noteId, formId) {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{email: email, cities: picked,
-        city: picked[0], website: hpValue(formId)}})
+        city: picked[0], website: hpValue(formId),
+        turnstile: tsToken(formId)}})
     }});
     if (!r.ok) throw new Error('bad status');
     // Restore the note to its resting copy — no "you're in" line at all.

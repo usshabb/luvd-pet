@@ -13,6 +13,8 @@ from pathlib import Path
 from flask import (Flask, Response, jsonify, redirect, request,
                    send_from_directory)
 
+import requests
+
 import cities
 import db
 
@@ -266,6 +268,46 @@ def _subscribe_allowed(ip: str) -> bool:
     return True
 
 
+def _turnstile_ok(token: str, ip: str) -> bool:
+    """Ask Cloudflare whether this token is real.
+
+    This is the check a direct POST cannot fake, and it is the reason it exists.
+    The honeypot below only catches something that rendered the form and filled
+    every input in it; a script posting straight at this endpoint never sees
+    the hidden field and simply omits it. A Turnstile token has to be issued by
+    Cloudflare to a real browser session and is verified here, server side, so
+    there is nothing for the caller to forge or replay.
+
+    Unconfigured means unenforced, and it says so loudly in the log every time.
+    Failing closed would be the stricter choice, but a missing or rotated key
+    would then silently take the signup form down for everybody, and a form
+    that quietly rejects real people is worse than one that quietly lets bots
+    in — the second is visible in the list, the first is invisible entirely.
+    """
+    secret = os.getenv("TURNSTILE_SECRET")
+    if not secret:
+        app.logger.warning(
+            "TURNSTILE_SECRET unset — signup is unprotected against direct POSTs")
+        return True
+    if not token:
+        return False
+    try:
+        r = requests.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data={"secret": secret, "response": token, "remoteip": ip},
+            timeout=8)
+        ok = bool(r.json().get("success"))
+    except Exception as e:
+        # Cloudflare being unreachable must not close the form. The rate limit
+        # and the honeypot are still standing behind this.
+        app.logger.error("turnstile verify failed (%s: %s) — allowing",
+                         type(e).__name__, e)
+        return True
+    if not ok:
+        app.logger.info("turnstile rejected a signup from %s", ip)
+    return ok
+
+
 @app.route("/subscribe", methods=["POST"])
 def subscribe():
     data = request.get_json(silent=True) or request.form
@@ -278,12 +320,18 @@ def subscribe():
     # Answered with a 200 and the shape of a success on purpose. A 400 tells
     # the author of the bot exactly which field gave it away, and the next run
     # simply leaves that one blank.
+    ip = _client_ip()
+    # First, because it is the only one of the three a direct POST cannot walk
+    # around.
+    if not _turnstile_ok((data.get("turnstile") or "").strip(), ip):
+        return jsonify({"ok": False, "error": "verification failed"}), 400
+
     if (data.get("website") or "").strip():
-        app.logger.info("subscribe honeypot tripped from %s", _client_ip())
+        app.logger.info("subscribe honeypot tripped from %s", ip)
         return jsonify({"ok": True, "cities": []})
 
-    if not _subscribe_allowed(_client_ip()):
-        app.logger.info("subscribe rate-limited %s", _client_ip())
+    if not _subscribe_allowed(ip):
+        app.logger.info("subscribe rate-limited %s", ip)
         return jsonify({"ok": True, "cities": []})
 
     if not EMAIL_RE.match(email):
