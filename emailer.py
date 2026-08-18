@@ -557,6 +557,43 @@ def _bulk_headers(to_email: str) -> dict:
     }
 
 
+def build_digest_text(dogs: List[Dog], city: str = None,
+                      unsubscribe_for: str = None) -> str:
+    """The plain-text half of the digest.
+
+    The welcome, the events digest and the goodbye all had one; the daily
+    digest — the only one of the four that goes out every morning to everybody
+    — did not, and shipped as HTML alone. A message with no text/plain
+    alternative is a long-standing spam signal, because that is what bulk
+    senders who do not care look like.
+
+    Deliberately the same facts in the same order as the HTML, not a teaser.
+    A filter that scores the two parts against each other treats a text half
+    that says less than the HTML as an attempt to hide something.
+    """
+    # Imported here rather than at module scope, matching build_html: page
+    # imports emailer for the digest preview, so a top-level import is a cycle.
+    from page import dog_path
+
+    c = cities.resolve(city)
+    n = len(dogs)
+    lines = [f"{n} new dog in {c.short} today" if n == 1
+             else f"{n} new dogs in {c.short} today", ""]
+    for d in dogs:
+        lines.append(d.name)
+        facts = [f for f in (d.breed, d.age, d.sex, d.weight) if f]
+        if facts:
+            lines.append("  " + " · ".join(facts))
+        if d.source_label:
+            lines.append(f"  {d.source_label}")
+        lines.append(f"  {_site_url()}{dog_path(d)}")
+        lines.append("")
+    lines += [f"See every {c.short} dog: {_city_page(city)}", "", "--", "LUVD"]
+    if unsubscribe_for:
+        lines.append(f"Unsubscribe: {unsub_url(unsubscribe_for)}")
+    return "\n".join(lines) + "\n"
+
+
 def send_digest(to_email: str, dogs: List[Dog], for_date: date = None,
                 city: str = None):
     n = len(dogs)
@@ -564,6 +601,7 @@ def send_digest(to_email: str, dogs: List[Dog], for_date: date = None,
         to_email,
         "A new dog just dropped 🐶" if n == 1 else "New dogs just dropped 🐶",
         html_body=build_html(dogs, for_date, unsubscribe_for=to_email, city=city),
+        text_body=build_digest_text(dogs, city, unsubscribe_for=to_email),
         headers=_bulk_headers(to_email),
     )
 
