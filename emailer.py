@@ -164,7 +164,44 @@ def _city_page(city: str = None) -> str:
     return _abs(cities.resolve(city).path).rstrip("/") or _site_url()
 
 
-def _dog_link(dog: Dog) -> str:
+def _track(path: str, send_id: int = None, dog_id: str = None) -> str:
+    """Wrap a site-relative path in the click counter, or leave it alone.
+
+    The redirect target is never carried as a URL — only as a path this server
+    re-attaches its own origin to. That is the whole reason it is shaped this
+    way: a `?u=https://...` parameter would make this an open redirect, and an
+    open redirect on a domain that sends bulk mail is a gift to whoever finds
+    it first.
+
+    No send_id means no tracking, and the plain link is returned. Every mail
+    that predates this — the goodbye, the welcome — takes that path and is
+    unchanged.
+    """
+    if not send_id:
+        return _abs(path)
+    q = f"u={quote(path, safe='/')}"
+    if dog_id:
+        q += f"&d={quote(dog_id, safe='')}"
+    return _abs(f"/c/{int(send_id)}?{q}")
+
+
+def _pixel(send_id: int = None) -> str:
+    """The open counter. Empty when the mail is not being tracked.
+
+    Counts loads, not readers: Apple Mail Privacy Protection and Gmail's image
+    proxy fetch this whether or not anybody looked, so the number runs high by
+    an amount that cannot be measured. It is trend data, not a rate — see
+    db.email_stats(), which refuses to divide by it.
+    """
+    if not send_id:
+        return ""
+    return (f'<img src="{html.escape(_abs(f"/px/{int(send_id)}.gif"))}" '
+            f'width="1" height="1" alt="" '
+            f'style="display:block;width:1px;height:1px;border:0;'
+            f'max-height:1px;max-width:1px;opacity:0;overflow:hidden;">')
+
+
+def _dog_link(dog: Dog, send_id: int = None) -> str:
     """The dog's own page, not the front page.
 
     A tile is a face; tapping it should land on that face. check.py writes
@@ -178,7 +215,7 @@ def _dog_link(dog: Dog) -> str:
     except Exception:
         return _site_url()
     if (PUBLIC / f"{path.lstrip('/')}.html").is_file():
-        return _abs(path)
+        return _track(path, send_id, dog.id)
     return _site_url()
 
 
@@ -261,7 +298,8 @@ def _proxy_photo(url: str, width: int) -> Optional[str]:
 
 
 def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
-          pad_right: int, mso_fallback: bool, caption: bool = True) -> str:
+          pad_right: int, mso_fallback: bool, caption: bool = True,
+          send_id: int = None) -> str:
     """One square photo tile. Width and height come from the same number.
 
     `caption` carries the dog's name and rescue under the photo. The digest
@@ -303,7 +341,7 @@ def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
     return f"""
       <td class="{cell_class}" width="{edge}" style="width:{edge}px;
                  padding:0 {pad_right}px {pad_bottom}px 0;vertical-align:top;">
-        <a href="{html.escape(_dog_link(dog))}" style="text-decoration:none;">
+        <a href="{html.escape(_dog_link(dog, send_id))}" style="text-decoration:none;">
           {img}{words}
         </a>
       </td>"""
@@ -312,7 +350,7 @@ def _tile(dog: Dog, edge: int, img_class: str, cell_class: str,
 def _grid(dogs: List[Dog], cols: int, edge: int, table_class: str,
           img_class: str, cell_class: str, hidden: bool,
           mso_fallback: bool, caption: bool = True,
-          align: str = "center") -> str:
+          align: str = "center", send_id: int = None) -> str:
     """A table of square tiles, `cols` across.
 
     Four dogs go two across rather than three-then-one: a row holding a single
@@ -332,7 +370,8 @@ def _grid(dogs: List[Dog], cols: int, edge: int, table_class: str,
         chunk = dogs[i:i + cols]
         cells = "".join(
             _tile(d, edge, img_class, cell_class,
-                  0 if j == len(chunk) - 1 else GUTTER, mso_fallback, caption)
+                  0 if j == len(chunk) - 1 else GUTTER, mso_fallback, caption,
+                  send_id)
             for j, d in enumerate(chunk))
         rows += f"<tr>{cells}</tr>"
     hide = "display:none;mso-hide:all;" if hidden else ""
@@ -484,8 +523,13 @@ def _preheader(text: str) -> str:
             f'mso-hide:all;">{html.escape(text)}{pad}</div>')
 
 
+def _city_path(city: str = None) -> str:
+    """The site-relative path of a city's page, for links that get tracked."""
+    return cities.resolve(city).path if city else "/"
+
+
 def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None,
-               city: str = None) -> str:
+               city: str = None, send_id: int = None) -> str:
     # for_date is unused since the footer stopped printing the date. It stays
     # in the signature because check.py passes it and a digest is still a thing
     # that happened on a day; dropping it would be a breaking change for the
@@ -512,9 +556,10 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
     # fallback rides with whichever one Outlook ends up showing, which is now
     # the phone one.
     grid_desk = _grid(desk, 3, TILE_DESKTOP, "g-desk", "dk-img", "dk-cell",
-                      hidden=True, mso_fallback=False)
+                      hidden=True, mso_fallback=False, send_id=send_id)
     grid_phone = _grid(phone, 2, TILE_PHONE_TINY, "g-phone", "ph-img",
-                       "ph-cell", hidden=False, mso_fallback=True)
+                       "ph-cell", hidden=False, mso_fallback=True,
+                       send_id=send_id)
 
     more = (_more_line(n - len(phone), "m-phone", hidden=False)
             + _more_line(n - len(desk), "m-desk", hidden=True))
@@ -532,12 +577,12 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
                text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
       {n} new dog{'' if n == 1 else 's'} today</h1>
     <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
-              text-align:center;margin:0 0 26px;">Across every NYC rescue we follow.</p>
+              text-align:center;margin:0 0 26px;">Across every {html.escape(cities.resolve(city).short)} rescue we follow.</p>
 
     {grid_desk}{grid_phone}
     {more}
 
-    <a href="{html.escape(_city_page(city))}"
+    <a href="{html.escape(_track(_city_path(city), send_id))}"
        style="display:block;background:#FF002E;color:#fff;text-decoration:none;
               text-align:center;padding:15px;border-radius:13px;font:600 16px
               -apple-system,Segoe UI,Roboto,sans-serif;margin-top:24px;">
@@ -545,6 +590,7 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
 
     {_footer(unsubscribe_for)}
   </div>
+  {_pixel(send_id)}
 </div>""")
 
 
@@ -595,14 +641,135 @@ def build_digest_text(dogs: List[Dog], city: str = None,
 
 
 def send_digest(to_email: str, dogs: List[Dog], for_date: date = None,
-                city: str = None):
+                city: str = None, send_id: int = None):
     n = len(dogs)
     return send_email(
         to_email,
         "A new dog just dropped 🐶" if n == 1 else "New dogs just dropped 🐶",
-        html_body=build_html(dogs, for_date, unsubscribe_for=to_email, city=city),
+        html_body=build_html(dogs, for_date, unsubscribe_for=to_email, city=city,
+                             send_id=send_id),
         text_body=build_digest_text(dogs, city, unsubscribe_for=to_email),
         headers=_bulk_headers(to_email),
+    )
+
+
+SAVED_COUNT = 6
+SAVED_PHONE_COUNT = 4
+
+
+def saved_link(dogs: List[Dog], city: str = None) -> str:
+    """The reader's list as a URL — the same address Copy link builds.
+
+    This is the part of the mail that is actually worth keeping. A saved list
+    lives in localStorage, which is one browser's and which Safari evicts after
+    seven days without a visit; a link in an inbox outlives both, and opens the
+    list on any device. The mail is the backup the button is named for.
+    """
+    ids = ",".join(d.id for d in dogs if d.id)
+    path = _city_path(city)
+    return _abs(f"{path}?saved={quote(ids, safe=',:')}")
+
+
+def build_saved_html(dogs: List[Dog], city: str = None,
+                     unsubscribe_for: str = None, send_id: int = None) -> str:
+    n = len(dogs)
+    with_photos = [d for d in dogs if d.photos]
+    desk = with_photos[:SAVED_COUNT]
+    phone = with_photos[:SAVED_PHONE_COUNT]
+    if len(phone) > 1 and len(phone) % 2:
+        phone = phone[:-1]
+
+    grid_desk = _grid(desk, 3, TILE_DESKTOP, "g-desk", "dk-img", "dk-cell",
+                      hidden=True, mso_fallback=False, send_id=send_id)
+    grid_phone = _grid(phone, 2, TILE_PHONE_TINY, "g-phone", "ph-img",
+                       "ph-cell", hidden=False, mso_fallback=True,
+                       send_id=send_id)
+    more = (_more_line(n - len(phone), "m-phone", hidden=False)
+            + _more_line(n - len(desk), "m-desk", hidden=True))
+
+    dog_word = "dog" if n == 1 else "dogs"
+    link = saved_link(dogs, city)
+    return _document(f"""{_preheader(f"Your {n} saved {dog_word}, kept somewhere safer than a browser tab")}
+<div style="background:#fbfbfd;padding:32px 16px;">
+  <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
+              padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
+    {_logo()}
+    <h1 style="font:700 27px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
+               text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
+      Your {n} saved {dog_word}</h1>
+    <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
+              text-align:center;margin:0 0 26px;">
+      Keep this email &mdash; the link below reopens your list on any device.</p>
+
+    {grid_desk}{grid_phone}
+    {more}
+
+    <a href="{html.escape(_track_saved(link, send_id))}"
+       style="display:block;background:#FF002E;color:#fff;text-decoration:none;
+              text-align:center;padding:15px;border-radius:13px;font:600 16px
+              -apple-system,Segoe UI,Roboto,sans-serif;margin-top:24px;">
+      Open my saved list &rarr;</a>
+
+    <p style="font:400 13px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
+              text-align:center;margin:18px 0 0;">
+      These dogs are listed by rescues we follow, not by us. Availability can
+      change before we see it &mdash; the rescue&rsquo;s own page is always the
+      last word.</p>
+
+    {_footer(unsubscribe_for)}
+  </div>
+  {_pixel(send_id)}
+</div>""")
+
+
+def _track_saved(url: str, send_id: int = None) -> str:
+    """The saved link, counted. Split out because unlike every other tracked
+    link this one is already absolute — it carries a query string the path
+    helper would have to rebuild — so it is turned back into a path here
+    rather than teaching _track() a second input shape."""
+    if not send_id:
+        return url
+    site = _site_url().rstrip("/")
+    path = url[len(site):] if url.startswith(site) else url
+    return _abs(f"/c/{int(send_id)}?u={quote(path, safe='/')}")
+
+
+def build_saved_text(dogs: List[Dog], city: str = None,
+                     unsubscribe_for: str = None) -> str:
+    n = len(dogs)
+    lines = [f"Your {n} saved dog" + ("" if n == 1 else "s"), ""]
+    for d in dogs:
+        lines.append(d.name)
+        facts = [f for f in (d.breed, d.age, d.sex, d.weight) if f]
+        if facts:
+            lines.append("  " + " \u00b7 ".join(facts))
+        if d.source_label:
+            lines.append(f"  {d.source_label}")
+        lines.append(f"  {_dog_link(d)}")
+        lines.append("")
+    lines += [f"Open your list on any device: {saved_link(dogs, city)}", "",
+              "These dogs are listed by rescues we follow, not by us.",
+              "Availability can change before we see it.", "", "--", "LUVD"]
+    if unsubscribe_for:
+        lines.append(f"Unsubscribe: {unsub_url(unsubscribe_for)}")
+    return "\n".join(lines) + "\n"
+
+
+def send_saved(to_email: str, dogs: List[Dog], city: str = None,
+               send_id: int = None):
+    """Mail somebody their own saved list, because they asked for it.
+
+    No List-Unsubscribe headers and no unsubscribe link: this is a one-off
+    transactional mail somebody pressed a button to receive, not bulk mail
+    they are on a list for. Sending it with an unsubscribe footer would offer
+    to remove them from something they may not even be subscribed to.
+    """
+    n = len(dogs)
+    return send_email(
+        to_email,
+        "Your saved dog on LUVD" if n == 1 else f"Your {n} saved dogs on LUVD",
+        html_body=build_saved_html(dogs, city, send_id=send_id),
+        text_body=build_saved_text(dogs, city),
     )
 
 
@@ -1008,6 +1175,72 @@ def send_welcome(to_email: str, city: str = None):
 
 # The dog payload the page renders from, written by page.render().
 _DOGS_JSON = re.compile(r"^const DOGS = (\[.*\]);$", re.M)
+
+
+def _page_dogs(city: str = None) -> dict:
+    """Every dog on one city's rendered page, keyed by id.
+
+    The page is the roster for anything running in the web process, which never
+    scrapes and holds no dogs of its own. Read rather than cached: this is on a
+    path somebody pressed a button for, not a hot loop, and a cache here would
+    serve yesterday's dogs the morning after a render.
+    """
+    name = "index.html" if not city or cities.resolve(city).path == "/" \
+        else cities.resolve(city).path.strip("/") + ".html"
+    try:
+        m = _DOGS_JSON.search((PUBLIC / name).read_text(encoding="utf-8"))
+        if not m:
+            return {}
+        out = {}
+        for r in json.loads(m.group(1)):
+            if r.get("id"):
+                out[r["id"]] = r
+        return out
+    except Exception:
+        return {}
+
+
+def dogs_by_id(ids, city: str = None) -> List[Dog]:
+    """Dog objects for a saved list, in the order the reader saved them.
+
+    Searches the reader's own city first and then every other live one, because
+    a saved list is not bound to a city — somebody can heart a dog in Brooklyn,
+    open the LA page and heart another, and the list holds both. Ids that match
+    nothing are dropped rather than raising: a list can name a dog that has
+    since been adopted, and the rest of it is still worth mailing.
+    """
+    pages, seen = [], set()
+    for c in [city] + [c for c in cities.all_codes() if cities.is_live(c)]:
+        key = cities.canon(c) if c else ""
+        if key in seen:
+            continue
+        seen.add(key)
+        pages.append(_page_dogs(c))
+
+    out = []
+    for dog_id in ids:
+        row = next((p[dog_id] for p in pages if dog_id in p), None)
+        if not row:
+            continue
+        out.append(Dog(
+            id=row.get("id") or "",
+            name=row.get("name") or "",
+            source=row.get("source") or "",
+            source_label=row.get("source_label") or "",
+            url=row.get("url") or "",
+            photos=[ph for ph in (row.get("photos") or []) if ph],
+            breed=row.get("breed") or "",
+            age=row.get("age") or "",
+            sex=row.get("sex") or "",
+            size=row.get("size") or "",
+            weight=row.get("weight") or "",
+            location=row.get("location") or "",
+            description=row.get("description") or "",
+            attributes=row.get("attributes") or [],
+            fee=row.get("fee") or None,
+            adopt_url=row.get("cta_url") or row.get("url") or "",
+        ))
+    return out
 
 
 def roster(limit: int) -> List[Dog]:

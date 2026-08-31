@@ -75,6 +75,50 @@ def build(days: int = 7) -> tuple:
       <ul style="font:400 14px -apple-system,sans-serif;color:#1d1d1f;
           padding-left:18px;margin:0;">{items}</ul>"""
 
+    # Email performance. Kept visually separate from the rescue table above,
+    # which is about the site: these two answer different questions and adding
+    # a column would have implied they were the same measurement.
+    es = db.email_stats(days)
+    sv = db.saved_counts(days)
+    email_block = ""
+    if es["sent"] or sv["saves"]:
+        names = {}
+        if es["top_dogs"]:
+            try:
+                names = {d.id: (d.name, d.source_label)
+                         for d in emailer.dogs_by_id(
+                             [d["dog_id"] for d in es["top_dogs"]])}
+            except Exception:
+                names = {}
+        clicked = "".join(
+            f"<li style='margin-bottom:5px;'><b>"
+            f"{names.get(d['dog_id'], (d['dog_id'], ''))[0]}</b>"
+            f" — {d['n']} click{'s' if d['n'] != 1 else ''}"
+            f" <span style='color:#8a8a8e;'>"
+            f"{names.get(d['dog_id'], ('', ''))[1]}</span></li>"
+            for d in es["top_dogs"])
+        clicked_block = (
+            f"<h3 style=\"font:600 14px -apple-system,sans-serif;color:#1d1d1f;"
+            f"margin:20px 0 8px;\">Most clicked from email</h3>"
+            f"<ul style=\"font:400 14px -apple-system,sans-serif;color:#1d1d1f;"
+            f"padding-left:18px;margin:0;\">{clicked}</ul>") if clicked else ""
+        saved_line = (
+            f"<br>{sv['saves']} dog{'s' if sv['saves'] != 1 else ''} saved to "
+            f"{sv['people']} emailed list{'s' if sv['people'] != 1 else ''}"
+        ) if sv["saves"] else ""
+        email_block = f"""
+      <h3 style="font:600 14px -apple-system,sans-serif;color:#1d1d1f;
+          margin:26px 0 8px;">Email</h3>
+      <p style="font:400 14px -apple-system,sans-serif;color:#1d1d1f;margin:0;">
+        {es['sent']} sent · {es['opens']} open{'s' if es['opens'] != 1 else ''}
+        · {es['clicks']} click{'s' if es['clicks'] != 1 else ''}{saved_line}</p>
+      <p style="font:400 12px -apple-system,sans-serif;color:#8a8a8e;
+          margin:6px 0 0;line-height:1.5;">
+        Opens run high and always will: Apple Mail and Gmail fetch the image
+        that counts them whether or not anybody looked. Read it as a trend, not
+        a rate. Clicks are the number to trust.</p>
+      {clicked_block}"""
+
     html = f"""
 <div style="background:#fbfbfd;padding:30px 16px;">
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:18px;
@@ -102,6 +146,7 @@ def build(days: int = 7) -> tuple:
       </tr>{rows}
     </table>
     {top}
+    {email_block}
 
     <p style="font:400 12.5px -apple-system;color:#8a8a8e;margin:26px 0 0;
        line-height:1.5;border-top:1px solid #eee;padding-top:16px;">

@@ -2,10 +2,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import base64
 import logging
 import os
 import re
-from urllib.parse import urlunsplit
+from datetime import date
+from urllib.parse import urlsplit, urlunsplit
 import threading
 from html import escape as html_escape
 from pathlib import Path
@@ -241,6 +243,13 @@ def _sheet_sync_in_background():
 _SUB_WINDOW = 3600          # seconds
 _SUB_MAX = 5                # signups per IP per window
 _sub_hits: dict = {}
+# Mailing yourself your own saved list gets its own budget rather than sharing
+# the signup one. They are different actions with different honest ceilings —
+# revising a list and re-sending it a few times is normal behaviour, and
+# spending the signup allowance on it would lock somebody out of subscribing
+# for an hour because they mailed themselves their dogs twice.
+_SAVED_MAX = 6
+_saved_hits: dict = {}
 
 
 def _client_ip() -> str:
@@ -250,22 +259,31 @@ def _client_ip() -> str:
             or request.remote_addr or "?")
 
 
-def _subscribe_allowed(ip: str) -> bool:
+def _rate_ok(store: dict, ip: str, limit: int) -> bool:
+    """One IP's budget in `store`, spent one hit at a time. False when spent."""
     import time
     now = time.time()
-    hits = [t for t in _sub_hits.get(ip, ()) if now - t < _SUB_WINDOW]
+    hits = [t for t in store.get(ip, ()) if now - t < _SUB_WINDOW]
     # Trim everything that has aged out, so this cannot grow without bound on a
     # long-running machine.
-    if len(_sub_hits) > 4000:
-        for k in [k for k, v in _sub_hits.items()
+    if len(store) > 4000:
+        for k in [k for k, v in store.items()
                   if not any(now - t < _SUB_WINDOW for t in v)]:
-            _sub_hits.pop(k, None)
-    if len(hits) >= _SUB_MAX:
-        _sub_hits[ip] = hits
+            store.pop(k, None)
+    if len(hits) >= limit:
+        store[ip] = hits
         return False
     hits.append(now)
-    _sub_hits[ip] = hits
+    store[ip] = hits
     return True
+
+
+def _subscribe_allowed(ip: str) -> bool:
+    return _rate_ok(_sub_hits, ip, _SUB_MAX)
+
+
+def _saved_allowed(ip: str) -> bool:
+    return _rate_ok(_saved_hits, ip, _SAVED_MAX)
 
 
 # A short-lived token the signup form has to fetch before it can post. It is
@@ -619,6 +637,143 @@ def outbound():
         return jsonify({"ok": False}), 400
     db.record_outbound(dog_id, source, kind)
     return jsonify({"ok": True})
+
+
+# A 1x1 transparent GIF, inline so the open counter never depends on a file
+# being present on the volume. 43 bytes.
+_PIXEL_GIF = base64.b64decode(
+    b"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+
+
+def _local_path(u: str):
+    """`u` as a path on this site, or None if it points anywhere else.
+
+    The click counter must never forward to an arbitrary URL. An open redirect
+    on the domain that sends the mail is exactly the primitive a phishing
+    campaign wants — a real luvd.com link in a real LUVD email that lands
+    somewhere else — so this refuses anything carrying a scheme or a host.
+    urlsplit rather than a startswith check because "//evil.com" has no scheme,
+    reads as a path, and is a protocol-relative URL that browsers follow
+    off-site.
+    """
+    u = (u or "").strip()
+    if not u or any(c in u for c in "\r\n\t\\"):
+        return None
+    parts = urlsplit(u)
+    if parts.scheme or parts.netloc or not parts.path.startswith("/"):
+        return None
+    return urlunsplit(("", "", parts.path, parts.query, parts.fragment))
+
+
+@app.route("/px/<int:send_id>.gif")
+def email_pixel(send_id: int):
+    """Count an open. Always returns the pixel, even when the count fails.
+
+    A mail that has already left is not worth a broken image over a database
+    hiccup, and there is nothing the reader could do about it either way.
+    """
+    try:
+        db.record_open(send_id)
+    except Exception as e:
+        app.logger.warning("open pixel %s: %s: %s", send_id, type(e).__name__, e)
+    r = Response(_PIXEL_GIF, mimetype="image/gif")
+    # Without this the proxy caches the pixel and every later open is invisible.
+    r.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    r.headers["Pragma"] = "no-cache"
+    return r
+
+
+@app.route("/c/<int:send_id>")
+def email_click(send_id: int):
+    """Count a click and forward to the page the link named.
+
+    Forwards first and counts second in spirit: a failure to record must still
+    land the reader on the dog they tapped, which is the only part of this they
+    asked for.
+    """
+    dest = _local_path(request.args.get("u"))
+    if not dest:
+        app.logger.info("click %s refused a non-local target %r",
+                        send_id, (request.args.get("u") or "")[:120])
+        return redirect("/", code=302)
+    try:
+        db.record_click(send_id, (request.args.get("d") or "").strip()[:120] or None)
+    except Exception as e:
+        app.logger.warning("click %s: %s: %s", send_id, type(e).__name__, e)
+    return redirect(dest, code=302)
+
+
+@app.route("/saved", methods=["POST"])
+def mail_saved_list():
+    """Mail somebody the dogs they hearted, and remember which ones they were.
+
+    Gated exactly like /subscribe, and for the same reason: it takes an address
+    and sends mail to it, which is all a bot needs to turn it into a way of
+    mailing strangers. The honeypot and rate-limit rejections answer 200 with
+    the shape of a success on purpose — a 400 tells whoever wrote the bot which
+    check caught them.
+
+    This is also the one place the saved list reaches the server. The privacy
+    page says so in as many words; if that ever stops being true here, it has
+    to stop being true there in the same commit.
+    """
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+    ip = _client_ip()
+
+    if os.getenv("TURNSTILE_SECRET"):
+        if not _turnstile_ok((data.get("turnstile") or "").strip(), ip):
+            return jsonify({"ok": False, "error": "verification failed"}), 400
+    elif not _form_token_ok((data.get("t") or "").strip()):
+        app.logger.info("saved-list refused — no valid form token, from %s", ip)
+        return jsonify({"ok": False, "error": "verification failed"}), 400
+
+    if (data.get("website") or "").strip():
+        app.logger.info("saved-list honeypot tripped from %s", ip)
+        return jsonify({"ok": True, "sent": 0})
+
+    if not _saved_allowed(ip):
+        app.logger.info("saved-list rate-limited %s", ip)
+        return jsonify({"ok": True, "sent": 0})
+
+    if not EMAIL_RE.match(email):
+        return jsonify({"ok": False, "error": "invalid email"}), 400
+
+    raw = data.get("ids")
+    if isinstance(raw, str):
+        raw = [v for v in raw.split(",") if v.strip()]
+    # Capped because the list arrives from the client and nothing stops a POST
+    # naming ten thousand ids. Nobody hearts more than a few dozen dogs, and the
+    # mail only shows six.
+    ids = [str(v).strip()[:120] for v in (raw or [])][:60]
+    if not ids:
+        return jsonify({"ok": False, "error": "no dogs"}), 400
+
+    city = cities.canon((data.get("city") or "").strip()) or cities.DEFAULT_CITY
+
+    import emailer
+    dogs = emailer.dogs_by_id(ids, city)
+    if not dogs:
+        # Every id is unknown to both pages — an old list whose dogs have all
+        # been adopted, or a made-up POST. Either way there is no mail to send.
+        return jsonify({"ok": False, "error": "no dogs"}), 400
+
+    try:
+        db.save_list(email, [d.id for d in dogs], city)
+    except Exception as e:
+        # The mail is the thing they asked for; the record is ours. Never fail
+        # the request over the half they did not ask for.
+        app.logger.warning("save_list: %s: %s", type(e).__name__, e)
+
+    send_id = 0
+    try:
+        send_id = db.start_send("saved", city, date.today().isoformat(), 1,
+                                accumulate=True)
+    except Exception as e:
+        app.logger.warning("start_send: %s: %s", type(e).__name__, e)
+
+    _mail_in_background("saved", email, dogs=dogs, city=city, send_id=send_id)
+    return jsonify({"ok": True, "sent": len(dogs)})
 
 
 @app.route("/report")

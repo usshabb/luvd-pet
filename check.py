@@ -397,10 +397,22 @@ def run(dry_run=False, city=None):
         return dogs
 
     from emailer import send_digest
+    # One row for this morning's mail-out, which every open and click in it
+    # counts against. Created before the first send so the id can go into the
+    # mail; failing to create it costs the numbers, never the digest — send_id=0
+    # renders exactly the untracked mail this sent before any of this existed.
+    send_id = 0
+    try:
+        from datetime import date as _sd
+        send_id = db.start_send("digest", city, _sd.today().isoformat(),
+                                len(recipients))
+    except Exception as e:
+        print(f"  tracking row failed ({type(e).__name__}: {e}) — sending untracked")
+
     sent = 0
     for addr in recipients:
         try:
-            send_digest(addr, new_today, city=city)
+            send_digest(addr, new_today, city=city, send_id=send_id)
             sent += 1
         except Exception as e:
             print(f"  email to {addr} failed: {type(e).__name__}: {e}")

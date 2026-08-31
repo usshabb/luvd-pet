@@ -117,6 +117,65 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_outbound_created "
             "ON outbound(created)"
         )
+        # A saved list someone mailed to themselves. The heart list itself
+        # still lives in the browser and is still never sent — this table only
+        # ever holds a list its owner typed their own address to receive, which
+        # is the same bargain the "Copy link" button already makes, one step
+        # further. Nothing writes here without that action.
+        #
+        # It is also the only place LUVD learns which dogs one person wanted
+        # together. A digest tells you a dog got clicks; this tells you the
+        # four dogs somebody was choosing between, which is the difference
+        # between a popularity count and a preference.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS saved_lists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                dog_id TEXT NOT NULL,
+                city TEXT,
+                created TEXT DEFAULT (datetime('now')),
+                UNIQUE(email, dog_id)
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_saved_email ON saved_lists(email)"
+        )
+        # One row per mail-out, and click counts hanging off it. Deliberately
+        # aggregate: a send knows how many opened it, never which addresses, so
+        # the privacy page's "anonymous counts" stays literally true. Going
+        # per-person later means a new table, not a rewrite of this one.
+        #
+        # UNIQUE(kind, city, sent_on) makes a send idempotent — a nightly run
+        # that retries, or two cities finishing in the same minute, reuse the
+        # row rather than splitting one morning's numbers across two.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS email_sends (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,        -- digest | saved | events
+                city TEXT,
+                sent_on TEXT NOT NULL,     -- YYYY-MM-DD
+                recipients INTEGER NOT NULL DEFAULT 0,
+                opens INTEGER NOT NULL DEFAULT 0,
+                created TEXT DEFAULT (datetime('now')),
+                UNIQUE(kind, city, sent_on)
+            )"""
+        )
+        # dog_id is NULL for the links that are not a dog — the "see every dog"
+        # button, mostly. COALESCE in the unique index because SQLite treats
+        # every NULL as distinct, so without it each click on that button would
+        # insert its own row instead of incrementing one.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS email_clicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                send_id INTEGER NOT NULL,
+                dog_id TEXT,
+                clicks INTEGER NOT NULL DEFAULT 0
+            )"""
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_click_send_dog "
+            "ON email_clicks(send_id, COALESCE(dog_id, ''))"
+        )
         # In-person adoption events, for the Monday digest. A cache of an
         # operator-maintained sheet, never a store: `replace_events()` rewrites
         # the whole table from the sheet every sync, the same bargain
@@ -555,6 +614,151 @@ def record_outbound(dog_id: str, source: str, kind: str):
             "INSERT INTO counters(key, value) VALUES('total_outbound', 1) "
             "ON CONFLICT(key) DO UPDATE SET value = value + 1"
         )
+
+
+def save_list(email: str, dog_ids, city: str = None) -> int:
+    """Remember the dogs someone mailed to themselves. Returns how many are new.
+
+    Re-mailing the same list is a no-op rather than a duplicate: the point is
+    the set of dogs one person wanted, not how many times they pressed the
+    button. `created` therefore marks the first time a dog appeared on their
+    list, which is the date worth keeping.
+    """
+    email = (email or "").strip().lower()[:200]
+    ids = [str(d).strip()[:120] for d in (dog_ids or []) if str(d).strip()]
+    if not email or not ids:
+        return 0
+    added = 0
+    with connect() as conn:
+        for dog_id in ids:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO saved_lists(email, dog_id, city) "
+                "VALUES(?, ?, ?)",
+                (email, dog_id, (city or None)),
+            )
+            added += cur.rowcount or 0
+    return added
+
+
+def saved_for(email: str) -> list:
+    """Every dog id this address has mailed itself, newest first."""
+    email = (email or "").strip().lower()
+    if not email:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT dog_id, city, created FROM saved_lists WHERE email = ? "
+            "ORDER BY created DESC, id DESC", (email,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def saved_counts(days: int = 7) -> dict:
+    """How the saved-list button is being used, and on which dogs."""
+    with connect() as conn:
+        since = f"-{int(days)} days"
+        total = conn.execute(
+            "SELECT COUNT(*) c, COUNT(DISTINCT email) e FROM saved_lists "
+            "WHERE created >= datetime('now', ?)", (since,)
+        ).fetchone()
+        top = conn.execute(
+            "SELECT dog_id, COUNT(*) n FROM saved_lists "
+            "WHERE created >= datetime('now', ?) "
+            "GROUP BY dog_id ORDER BY n DESC, dog_id LIMIT 10", (since,)
+        ).fetchall()
+    return {
+        "saves": total["c"] if total else 0,
+        "people": total["e"] if total else 0,
+        "top": [dict(r) for r in top],
+    }
+
+
+def start_send(kind: str, city: str, sent_on: str, recipients: int,
+               accumulate: bool = False) -> int:
+    """The row this mail-out's opens and clicks count against.
+
+    Idempotent per (kind, city, day) so a retried nightly run reuses the row
+    instead of splitting one morning across two.
+
+    The two callers count differently, which is what `accumulate` picks between.
+    The digest calls this once with the whole list, so a retry that mailed fewer
+    people must not talk the day's denominator down — MAX keeps the honest
+    number. A saved list is one person pressing a button, called once per send,
+    so the day's rows have to add up instead; MAX there would report 1 recipient
+    on a day fifty people mailed themselves a list.
+    """
+    bump = ("recipients = recipients + excluded.recipients" if accumulate
+            else "recipients = MAX(recipients, excluded.recipients)")
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO email_sends(kind, city, sent_on, recipients) "
+            "VALUES(?, ?, ?, ?) "
+            f"ON CONFLICT(kind, city, sent_on) DO UPDATE SET {bump}",
+            (kind[:16], (city or ""), sent_on, int(recipients or 0)),
+        )
+        row = conn.execute(
+            "SELECT id FROM email_sends WHERE kind = ? AND city = ? "
+            "AND sent_on = ?", (kind[:16], (city or ""), sent_on)
+        ).fetchone()
+    return row["id"] if row else 0
+
+
+def record_open(send_id: int) -> None:
+    """One open. Counts every load, not every reader — see the caller."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE email_sends SET opens = opens + 1 WHERE id = ?",
+            (int(send_id),),
+        )
+
+
+def record_click(send_id: int, dog_id: str = None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO email_clicks(send_id, dog_id, clicks) VALUES(?, ?, 1) "
+            "ON CONFLICT(send_id, COALESCE(dog_id, '')) DO UPDATE SET "
+            "clicks = clicks + 1",
+            (int(send_id), (dog_id or None)),
+        )
+
+
+def email_stats(days: int = 7) -> dict:
+    """Sends, opens and per-dog clicks over the window.
+
+    `open_rate` is deliberately not computed here. Apple Mail Privacy
+    Protection and Gmail's image proxy fetch the pixel whether or not a person
+    looked, so opens run high by an amount nobody can measure. The raw number
+    is trend data; presenting it as a rate would give it a precision it has
+    not got. Clicks are the honest signal and are reported beside it.
+    """
+    with connect() as conn:
+        since = f"-{int(days)} days"
+        sends = conn.execute(
+            "SELECT id, kind, city, sent_on, recipients, opens FROM email_sends "
+            "WHERE sent_on >= date('now', ?) ORDER BY sent_on DESC, city", (since,)
+        ).fetchall()
+        clicks = conn.execute(
+            "SELECT c.dog_id, SUM(c.clicks) n FROM email_clicks c "
+            "JOIN email_sends s ON s.id = c.send_id "
+            "WHERE s.sent_on >= date('now', ?) AND c.dog_id IS NOT NULL "
+            "GROUP BY c.dog_id ORDER BY n DESC, c.dog_id LIMIT 10", (since,)
+        ).fetchall()
+        totals = conn.execute(
+            "SELECT COALESCE(SUM(s.recipients), 0) sent, "
+            "COALESCE(SUM(s.opens), 0) opens, "
+            "(SELECT COALESCE(SUM(c.clicks), 0) FROM email_clicks c "
+            " JOIN email_sends s2 ON s2.id = c.send_id "
+            " WHERE s2.sent_on >= date('now', ?)) clicks "
+            "FROM email_sends s WHERE s.sent_on >= date('now', ?)",
+            (since, since),
+        ).fetchone()
+    return {
+        "sends": [dict(r) for r in sends],
+        "top_dogs": [dict(r) for r in clicks],
+        "sent": totals["sent"] if totals else 0,
+        "opens": totals["opens"] if totals else 0,
+        "clicks": totals["clicks"] if totals else 0,
+    }
 
 
 def weekly_report(days: int = 7) -> dict:
