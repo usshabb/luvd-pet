@@ -119,8 +119,13 @@ def _terms_html(email: str, for_date) -> str:
 
 def _privacy_html(email: str, for_date) -> str:
     """Plain-language Privacy Policy. LUVD collects almost nothing: an email for
-    the digest, anonymous open counts, and optional interest requests. Saved dogs
-    live in the browser and never reach us."""
+    the digest, anonymous counts, and optional interest requests. Saved dogs live
+    in the browser and reach us only when somebody presses Email it to me.
+
+    This text is the published promise, so it is the specification the code has
+    to match rather than a description written after it. Anything that starts
+    collecting something new changes this in the same commit — the whole value of
+    a page like this is that it was never quietly overtaken."""
     upd = for_date.strftime("%B %-d, %Y")
     return f"""
       <p class="upd">Last updated {upd}</p>
@@ -136,18 +141,35 @@ def _privacy_html(email: str, for_date) -> str:
           identifier, so we can show which dogs are getting attention.</li>
         <li><b>Optional requests</b> — if you tell us a species or city
           you&rsquo;d like us to cover, along with an email if you want a reply.</li>
+        <li><b>A saved list you email yourself</b> — only when you press
+          <b>Email it to me</b> and type an address. See section 2.</li>
+        <li><b>Whether our emails get opened and clicked</b> — counted per email
+          we send and per dog in it, never per person. We can see that a
+          morning&rsquo;s digest was opened 40 times and that one dog drew nine of
+          the clicks; we can&rsquo;t see who did either, and we don&rsquo;t store
+          anything that would let us.</li>
       </ul>
 
-      <h3>2. Your saved dogs stay on your device</h3>
-      <p>The dogs you heart are stored locally in your browser. We never receive
-        that list and never store it.</p>
-      <p>The one exception is one you make yourself: the <b>Copy link</b> button
-        on your saved list builds a web address with those dogs&rsquo; IDs in it,
-        so you can move the list to another device or send it to someone. That
-        link works for anyone who has it, so treat it like any other link you
-        share &mdash; and note that our server sees the address of every page it
-        serves, this one included. Don&rsquo;t use it and your saved list never
-        leaves the browser you made it in.</p>
+      <h3>2. Your saved dogs</h3>
+      <p>The dogs you heart are stored locally in your browser. We don&rsquo;t
+        receive that list as you build it, and nothing syncs it anywhere on its
+        own.</p>
+      <p>Two buttons on your saved list can send it, and pressing one is the
+        only way it ever leaves:</p>
+      <ul>
+        <li><b>Copy link</b> builds a web address with those dogs&rsquo; IDs in
+          it, so you can move the list to another device or send it to someone.
+          That link works for anyone who has it, so treat it like any other link
+          you share — and note that our server sees the address of every
+          page it serves, this one included.</li>
+        <li><b>Email it to me</b> sends the list to an address you type, and we
+          do keep it: your email, and which dogs were on it. We keep it to send
+          the mail, and to see which dogs people are choosing between —
+          that is the one thing a click count can&rsquo;t tell us. Emailing
+          yourself a list does not subscribe you to anything.</li>
+      </ul>
+      <p>Use neither and your saved list never leaves the browser you made it
+        in.</p>
 
       <h3>3. How we use it</h3>
       <p>To send the digest you asked for, to understand which dogs draw interest,
@@ -169,8 +191,11 @@ def _privacy_html(email: str, for_date) -> str:
         immediately. You can also email us anytime to be removed.</p>
 
       <h3>7. Data retention</h3>
-      <p>We keep your email until you unsubscribe. Anonymous counts may be kept
-        indefinitely, since they contain no personal information.</p>
+      <p>We keep your email until you unsubscribe. Anonymous counts —
+        including the email open and click counts in section 1 — may be kept
+        indefinitely, since they contain no personal information. A saved list
+        you emailed yourself is kept with your address; ask us and we will
+        delete it.</p>
 
       <h3>8. Children</h3>
       <p>LUVD is intended for adults. We don&rsquo;t knowingly collect information
@@ -1132,6 +1157,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     --bg:#fbfbfd; --surface:#fff; --text:#1d1d1f; --muted:#6e6e73;
     --hair:rgba(0,0,0,.08); --hair2:rgba(0,0,0,.045);
     --accent:#FF002E; --accent-soft:rgba(255,0,46,.1);
+    --chip:rgba(255,255,255,.55);
     --good:#1a8f3c; --good-soft:rgba(26,143,60,.12);
     --warn:#a86500; --warn-soft:rgba(168,101,0,.13);
     --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.06);
@@ -1146,6 +1172,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       --bg:#000; --surface:#1c1c1e; --text:#f5f5f7; --muted:#98989d;
       --hair:rgba(255,255,255,.13); --hair2:rgba(255,255,255,.07);
       --accent-soft:rgba(255,0,46,.2);
+      --chip:rgba(255,255,255,.09);
       --good:#32d74b; --good-soft:rgba(50,215,75,.16);
       --warn:#ffb340; --warn-soft:rgba(255,179,64,.16);
       --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
@@ -1157,6 +1184,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     --bg:#000; --surface:#1c1c1e; --text:#f5f5f7; --muted:#98989d;
     --hair:rgba(255,255,255,.13); --hair2:rgba(255,255,255,.07);
     --accent-soft:rgba(255,0,46,.2);
+    --chip:rgba(255,255,255,.09);
     --good:#32d74b; --good-soft:rgba(50,215,75,.16);
     --warn:#ffb340; --warn-soft:rgba(255,179,64,.16);
     --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
@@ -1239,7 +1267,14 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        thing people need to reach, so it takes the left edge. */
     .nav-date{{display:none;}}
     .nav-mid{{display:none;}}
-
+    /* Three targets crowd the right edge on a phone, so one goes. Instagram
+       rather than About, and not because it matters less: the footer already
+       links Instagram, and it does not link About at all. Dropping About here
+       would leave the page with no route to what LUVD is, which rescues are on
+       it, or why those — on a site whose whole claim is that the list is
+       curated, that is the one thing a first visit needs. Instagram loses a
+       second entry point; About would lose its only one. */
+    .nav-ig{{display:none;}}
   }}
   @media (prefers-reduced-motion:reduce){{
     .nc-dot,.nav-count b.bump{{animation:none;}}
@@ -1663,7 +1698,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     border-radius:14px;padding:12px 16px;margin:26px 0 0;}}
   .filter-bar[hidden]{{display:none;}}
   .fb-label{{display:flex;align-items:center;gap:9px;font-size:14.5px;
-    font-weight:600;color:var(--accent);}}
+    font-weight:600;color:var(--accent);white-space:nowrap;flex:0 0 auto;}}
   .fb-hrt{{width:16px;height:16px;fill:var(--accent);stroke:var(--accent);
     stroke-width:1.8;}}
   .fb-clear{{all:unset;box-sizing:border-box;cursor:pointer;font-size:13.5px;
@@ -1681,7 +1716,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
      level rather than scrolling it, so "luvd.com/?saved=a,b" rendered as
      "…,b/luvd.com" — a URL nobody could verify, which defeats showing it. */
   .fb-url{{font:500 12.5px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;
-    color:var(--accent);opacity:.72;background:rgba(255,255,255,.55);
+    color:var(--accent);opacity:.86;background:var(--chip);
     border-radius:8px;padding:5px 9px;max-width:340px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
   .fb-url[hidden]{{display:none;}}
@@ -1696,16 +1731,26 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     stroke:var(--accent);stroke-width:2;stroke-linecap:round;
     stroke-linejoin:round;}}
   .fb-copy[hidden]{{display:none;}}
+  /* Filled rather than white, because between the two buttons this is the one
+     worth pressing: a copied link lives in a clipboard until the next copy, and
+     a mailed one is still there next week. Copy link stays beside it — the
+     link is still the thing that needs no address. */
+  .fb-mail{{background:var(--accent);color:#fff;box-shadow:none;}}
+  .fb-mail svg{{stroke:#fff;}}
+  .fb-mail:hover{{opacity:.9;}}
+  /* Two buttons now sit beside it, so the URL loses the room it needs to be
+     read at anything under a wide desktop. Shown only where it can display
+     enough of itself to recognise; below this the Copy link button is the part
+     that does the work, and the link is still what gets copied. */
+  @media (max-width:900px){{ .fb-url{{display:none;}} }}
   @media (max-width:680px){{
-    /* No room for a URL beside a button on a phone, and the button is the part
-       that does something. The link is still what gets shared — it is just not
-       recited first. */
-    .fb-url{{display:none;}}
     /* 44px, because this is now the only thing to press in this bar and it was
        coming out at 31. The label stays 13.5px; the height comes from padding,
        so the pill grows without the type shouting. */
     .fb-copy{{min-height:44px;padding:0 16px;}}
-    .filter-bar{{padding:10px 12px;}}
+    .filter-bar{{padding:10px 12px;flex-wrap:wrap;row-gap:10px;}}
+    .fb-right{{flex:1 1 100%;margin-left:0;gap:8px;}}
+    .fb-copy,.fb-mail{{flex:1 1 0;justify-content:center;padding:0 10px;}}
   }}
 
   /* ---------- filter pills ---------- */
@@ -2312,7 +2357,9 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     line-height:1.45 !important;}}
   @media (max-width:680px){{
     .sc-inner{{grid-template-columns:1fr;}}
-    .sc-inner > .sc-right{{border-left:0;border-top:1px solid var(--hair);}}
+    .sc-inner > .sc-right{{border-left:0;border-top:0;order:-1;}}
+    .sc-inner:has(> .sc-block) > .sc-right:not(:empty){{
+      border-bottom:1px solid var(--hair);}}
   }}
 
   /* ---------- tabs ---------- */
@@ -2549,7 +2596,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        that an open menu is NOT a descendant of it.
        tests/test_multicity.py::test_filter_menus_cannot_be_clipped holds the
        pair together — if this row scrolls, the layer and the move must exist. */
-    .fbar-pills{{flex-wrap:nowrap;justify-content:safe center;overflow-x:auto;
+    .fbar-pills{{flex-wrap:wrap;justify-content:center;row-gap:8px;
       padding-bottom:2px;scrollbar-width:none;}}
     .fbar-pills::-webkit-scrollbar{{display:none;}}
     /* The fade that says the row keeps going. A mask, not an overlaid gradient,
@@ -2737,9 +2784,11 @@ def render(dated, for_date: date = None, city: str = None) -> str:
         6 14.5 4.4 16.6 4.4C18.9 4.4 21 6.4 21 9.6C21 14.6 16 18 12 21Z"/></svg>
       Saved dogs</span>
     <!-- The other half of ?saved=. A list in localStorage is one device's and
-         Safari drops it after seven days without a visit, so this is how it
-         leaves: a URL the reader keeps. Nothing is sent to us — the ids travel
-         in the link, which is what keeps the privacy page's promise true. -->
+         Safari drops it after seven days without a visit, so these are the two
+         ways it leaves. Copy link sends nothing to us: the ids travel in the
+         URL the reader keeps. Email it to me does send them, along with the
+         address they typed, and both are named in the privacy page under
+         "Your saved dogs" — if either changes, that section changes with it. -->
     <!-- Right side: the link itself, then the button that takes it. Showing the
          URL is what makes "Copy link" legible — you can see it is your own page
          with your own dogs in it, not an account or an upload. Truncated from
@@ -2753,6 +2802,10 @@ def render(dated, for_date: date = None, city: str = None) -> str:
           aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1
           1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg
         ><span class="fb-copy-t">Copy link</span></button>
+      <button class="fb-clear fb-copy fb-mail" id="fb-mail" hidden><svg
+          viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9 6 9-6"/><rect
+          x="3" y="5" width="18" height="14" rx="2"/></svg
+        ><span class="fb-mail-t">Email it to me</span></button>
     </div>
   </div>
 
@@ -2789,6 +2842,11 @@ def render(dated, for_date: date = None, city: str = None) -> str:
         <button type="button" aria-haspopup="listbox" aria-expanded="false">
           <span class="fp-t">Size</span>{CHEVRON}</button>
         <span class="fmenu" role="listbox" aria-label="Filter by size" hidden></span>
+      </span>
+      <span class="fpill" data-kind="rescue">
+        <button type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="fp-t">Rescue</span>{CHEVRON}</button>
+        <span class="fmenu" role="listbox" aria-label="Filter by rescue" hidden></span>
       </span>
       <!-- "Foster", not "Foster-to-adopt". The long form was 158.1px on a phone,
            wider than Breed and Age together and the entire reason the row
@@ -4334,6 +4392,8 @@ function paintSaved() {{
   // beside it is one more thing to read.
   const copy = document.getElementById('fb-copy');
   if (copy) copy.hidden = n === 0;
+  const mail = document.getElementById('fb-mail');
+  if (mail) mail.hidden = n === 0;
   const urlEl = document.getElementById('fb-url');
   if (urlEl) {{
     const link = savedLink();
@@ -4404,12 +4464,13 @@ bindSaves();
 // purpose: 3-14% of our listings fill those fields in, so the results would
 // describe how thoroughly each rescue types rather than which dogs exist, and
 // two clicks would land on a confident, false zero.
-const FILTERS = {{breed: '', sex: '', age: '', size: ''}};
+const FILTERS = {{breed: '', sex: '', age: '', size: '', rescue: ''}};
 let fosterOnly = false;
 
-const F_LABEL = {{breed: 'Breed', sex: 'Gender', age: 'Age', size: 'Size'}};
+const F_LABEL = {{breed: 'Breed', sex: 'Gender', age: 'Age', size: 'Size',
+              rescue: 'Rescue'}};
 const F_ANY = {{breed: 'Any breed', sex: 'Any gender', age: 'Any age',
-              size: 'Any size'}};
+              size: 'Any size', rescue: 'Any rescue'}};
 // Smallest first, and every row carries its pound range. "Medium" on its own
 // means whatever the last dog somebody met weighed; the numbers are the whole
 // point of the filter. These are the GROWN weights — see size_bucket() — so a
@@ -4449,13 +4510,14 @@ const OPT_LAST = ['Mixed / unknown', 'Other', 'Unknown'];
 // "Any" and in no option, i.e. in a list you can't click your way to.
 const fieldOf = (d, kind) => (kind === 'breed' ? d.breed_group
   : kind === 'age' ? d.age_bucket
-  : kind === 'size' ? d.size_bucket : d.sex) || 'Unknown';
+  : kind === 'size' ? d.size_bucket
+  : kind === 'rescue' ? d.source_label : d.sex) || 'Unknown';
 
 // `skip` evaluates a menu's own options as if that pill were cleared. That's
 // what makes the counts inside it reachable numbers rather than a column of
 // zeroes, and it's the whole reason you can't click your way to an empty page.
 function fMatch(d, skip) {{
-  for (const kind of ['breed', 'sex', 'age', 'size']) {{
+  for (const kind of ['breed', 'sex', 'age', 'size', 'rescue']) {{
     if (FILTERS[kind] && skip !== kind && fieldOf(d, kind) !== FILTERS[kind]) return false;
   }}
   if (fosterOnly && skip !== 'foster' && d.program !== 'foster-to-adopt') return false;
@@ -4624,7 +4686,7 @@ function closeFilterMenus() {{
 }}
 
 function resetFilters() {{
-  FILTERS.breed = FILTERS.sex = FILTERS.age = FILTERS.size = '';
+  for (const k in FILTERS) FILTERS[k] = '';
   fosterOnly = false;
 }}
 
@@ -4982,6 +5044,74 @@ if (fbCopy) fbCopy.onclick = async () => {{
   const urlEl = document.getElementById('fb-url');
   if (urlEl) {{ urlEl.hidden = false; urlEl.style.display = 'block'; }}
   say('Copy the link →');
+}};
+
+// Mail the list to yourself. The one place a saved list leaves the browser as
+// anything other than a link the reader carries — so it is deliberately an
+// action with an address typed into it, never a background sync, and the
+// privacy page names it alongside Copy link for the same reason.
+const fbMail = document.getElementById('fb-mail');
+if (fbMail) fbMail.onclick = () => {{
+  const ids = [...savedSet()];
+  if (!ids.length) return;
+  const n = ids.length;
+  showModal(`
+    <button class="m-close" aria-label="Close">✕</button>
+    <div class="share">
+      <div class="tl-hd" style="text-align:center;">
+        Email ${{n === 1 ? 'your saved dog' : `your ${{n}} saved dogs`}}</div>
+      <p class="cta-sub" style="margin:0 0 14px;">A browser forgets a saved
+        list. An inbox doesn&rsquo;t &mdash; the email reopens it on any
+        device.</p>
+      <form class="sub-form" id="sv-form" novalidate>
+        <input class="hp" type="text" name="website" tabindex="-1"
+               autocomplete="off" aria-hidden="true">
+        <input id="sv-email" type="email" required autocomplete="email"
+               placeholder="you@email.com" aria-label="Email address">
+        <button type="submit" id="sv-go">Send it</button>
+      </form>
+      <div class="cta-sub" id="sv-note" style="margin-top:12px;">
+        We keep the list so we can send it. Nothing else.</div>
+    </div>`, 'narrow');
+
+  const form = document.getElementById('sv-form');
+  const note = document.getElementById('sv-note');
+  form.onsubmit = async (e) => {{
+    e.preventDefault();
+    const email = document.getElementById('sv-email').value.trim();
+    if (!email) return;
+    const go = document.getElementById('sv-go');
+    go.disabled = true;
+    note.textContent = 'Sending…';
+    try {{
+      const hp = form.querySelector('input.hp');
+      const r = await fetch('/saved', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{email: email, ids: ids, city: CITY,
+          website: hp ? hp.value : '', t: await formToken()}})
+      }});
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || 'bad status');
+      note.textContent = 'Sent. Check your inbox.';
+      announce('Your saved list has been emailed to you.');
+      if (window.luvdCelebrate) window.luvdCelebrate('sent!');
+      setTimeout(closeModal, 1800);
+    }} catch (err) {{
+      go.disabled = false;
+      // The link still works with no server at all, and it is the same list.
+      note.innerHTML = "Couldn&rsquo;t send that. " +
+        '<a href="#" id="sv-fall">Copy the link instead →</a>';
+      const fall = document.getElementById('sv-fall');
+      if (fall) fall.onclick = (ev) => {{
+        ev.preventDefault();
+        const url = savedLink();
+        if (url) navigator.clipboard.writeText(url).then(
+          () => {{ note.textContent = 'Link copied.'; }},
+          () => {{ note.textContent = url; }});
+      }};
+    }}
+  }};
 }};
 
 // Merges, never replaces. If somebody sent you their list, adopting it must not
