@@ -1386,8 +1386,9 @@ def test_subscribing_picks_cities_and_mails_once():
     _app._sheet_sync_in_background = lambda: None
     try:
         c = _app.app.test_client()
+        tok = _app._form_token()
 
-        r = c.post("/subscribe", json={"email": "both@e.com",
+        r = c.post("/subscribe", json={"email": "both@e.com", "t": tok,
                                        "cities": ["NYC", "LA"]})
         eq("both cities accepted", r.status_code, 200)
         eq("and both recorded", sorted(db.cities_for("both@e.com"))
@@ -1396,14 +1397,14 @@ def test_subscribing_picks_cities_and_mails_once():
         eq("exactly one welcome", len(sent), 1)
 
         sent.clear()
-        r = c.post("/subscribe", json={"email": "both@e.com",
+        r = c.post("/subscribe", json={"email": "both@e.com", "t": tok,
                                        "cities": ["NYC", "LA"]})
         eq("re-submitting mails nobody", (r.status_code, len(sent)), (200, 0))
 
         # An unknown city is refused outright rather than partly applied — the
         # good half must not be silently written while the bad half 400s.
         sent.clear()
-        r = c.post("/subscribe", json={"email": "new@e.com",
+        r = c.post("/subscribe", json={"email": "new@e.com", "t": tok,
                                        "cities": ["NYC", "ZZZ"]})
         eq("unknown city refused", r.status_code, 400)
         eq("and nothing was mailed", len(sent), 0)
@@ -1411,12 +1412,12 @@ def test_subscribing_picks_cities_and_mails_once():
         # The old shape still works: a cached page, or a form with no JS.
         sent.clear()
         eq("legacy singular city",
-           c.post("/subscribe", json={"email": "old@e.com",
+           c.post("/subscribe", json={"email": "old@e.com", "t": tok,
                                       "city": "LA"}).status_code, 200)
         eq("mails once", len(sent), 1)
         sent.clear()
         eq("no city at all still means the default",
-           c.post("/subscribe", json={"email": "bare@e.com"}
+           c.post("/subscribe", json={"email": "bare@e.com", "t": tok}
                   ).get_json()["cities"], [cities.DEFAULT_CITY])
     finally:
         _app._mail_in_background, _app._sheet_sync_in_background = real_mail, real_sync
