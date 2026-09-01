@@ -1102,6 +1102,8 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     # section of this site and should be reachable from the foot of anything,
     # which is also the shape Google reads when it decides whether a site has
     # sections worth listing under the main result.
+    foot_extra = (f'<a href="{c.cost_path}">What a dog costs in '
+                  f'{html.escape(c.short)}</a>')
     foot_cities = " &middot; ".join(
         (f'<span class="foot-here">Dogs in {html.escape(o.short)}</span>'
          if o.code == c.code else
@@ -2983,6 +2985,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       {footer_rescues} &middot; <a class="foot-all" href="{c.rescues_path}">All {c.short} rescues &rarr;</a>
     </nav>
     <nav class="foot-cities" aria-label="Cities on LUVD">{foot_cities}</nav>
+    <nav class="foot-cities" aria-label="Guides">{foot_extra}</nav>
     <div style="margin-top:6px;">
       LUVD · <a href="{INSTAGRAM_URL}" target="_blank" rel="noopener">Instagram</a>
       · <a href="mailto:{CONTACT_EMAIL}?subject=Hello%20LUVD">Contact</a>
@@ -6391,10 +6394,25 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     slug = slugify(label)
     source = dogs[0].source if dogs else ""
     c = cities.resolve(_city_of(dogs))
-    title = f"{label} — adoptable dogs in {c.short}"
     n = len(dogs)
-    desc = (f"All {n} dog{'' if n == 1 else 's'} currently available for "
-            f"adoption from {label} in {c.name}, updated daily.")
+    # Leads with the rescue's name, because that is what the query says, then
+    # gives a reason to click a result that sits below the rescue's own site.
+    #
+    # Search Console, three months in: these pages sit at position 7-10 for
+    # queries like "labelle foundation adoptable dogs" and take 0% of them —
+    # 120 impressions, 4 clicks. Position 7 should convert at 3-5%, so the
+    # ranking is not the problem, the result is. "adoptable dogs in LA" reads
+    # like a directory stub next to the rescue itself; "every dog available
+    # today" says what this page has that the rescue's own site may not — all
+    # of them, current, in one list.
+    #
+    # Deliberately no number in the title. The count changes daily and Google
+    # caches titles for weeks, so "14 dogs" would spend most of its life wrong.
+    # The description carries the count, which is refreshed far more often.
+    title = f"{label} — every dog available today in {c.short}"
+    desc = (f"All {n} dog{'' if n == 1 else 's'} available for adoption from "
+            f"{label} in {c.name} right now, refreshed every morning. Photos, "
+            f"temperament and how to apply.")
     rows = "".join(
         f'<li><a href="{html.escape(dog_path(d))}">{html.escape(d.name)}</a>'
         f'<span class="b"> — {html.escape(d.breed or "Mixed breed")}'
@@ -6437,6 +6455,308 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
   {rescues_link}
   <a href="{c.path}">Today&rsquo;s new dogs</a>
 </footer>
+</body></html>"""
+
+
+
+# Just the table. Everything else on this page is _STATIC_PAGE_CSS already.
+_COST_CSS = """
+  table.cost{width:100%;border-collapse:collapse;margin:14px 0 26px;
+    font-size:15px;}
+  table.cost th{text-align:left;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);font-weight:700;
+    padding:0 0 8px;border-bottom:1px solid var(--hair);}
+  table.cost td{padding:10px 0;border-bottom:1px solid var(--hair2);}
+  table.cost .num{text-align:right;white-space:nowrap;font-variant-numeric:
+    tabular-nums;}
+  table.cost .hint{color:var(--muted);font-weight:400;}
+  table.cost tr.tot td{border-bottom:0;border-top:1px solid var(--hair);
+    font-weight:700;padding-top:12px;}
+"""
+
+
+def _cost_page(flat: List[Dog], site: str, for_date: date, city: str = None) -> str:
+    """What a dog actually costs per month, from the dogs listed right now.
+
+    The site's first page that answers a question rather than listing a dog.
+    Everything else here is a roster — good for "adopt a dog in NYC", useless
+    for "how much does a dog cost per month", which is a thing people search
+    before they ever look at a listing.
+
+    It is worth writing because the numbers are real. enrich.py already derives
+    a monthly cost for every dog from its size and coat, so this is an aggregate
+    of the actual roster rather than a figure copied off another blog — and it
+    moves as the roster does. What it is NOT is observed spending, and the page
+    says so: an estimate honestly labelled beats a precise-looking invention.
+    """
+    c = cities.resolve(city)
+    costs = [d.monthly_cost for d in flat
+             if (getattr(d, "monthly_cost", None) or {}).get("low")]
+    if not costs:
+        return ""
+
+    def med(xs):
+        xs = sorted(xs)
+        n = len(xs)
+        return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) // 2
+
+    lo, hi = med([m["low"] for m in costs]), med([m["high"] for m in costs])
+
+    # Line items, median across every dog that has one.
+    lines, order = {}, []
+    for m in costs:
+        for name, a, b in (m.get("items") or []):
+            if name not in lines:
+                lines[name] = ([], [])
+                order.append(name)
+            lines[name][0].append(a)
+            lines[name][1].append(b)
+    rows = "".join(
+        f'<tr><td>{html.escape(n)}</td>'
+        f'<td class="num">${med(lines[n][0])}&ndash;{med(lines[n][1])}</td></tr>'
+        for n in order)
+
+    # By size, which is what actually drives the number.
+    buckets = {}
+    for d in flat:
+        m = getattr(d, "monthly_cost", None) or {}
+        b = size_bucket(d)
+        if m.get("low") and b and b != "Unknown":
+            buckets.setdefault(b, ([], []))
+            buckets[b][0].append(m["low"])
+            buckets[b][1].append(m["high"])
+    size_rows = "".join(
+        f'<tr><td>{label} <span class="hint">{hint}</span></td>'
+        f'<td class="num">${med(buckets[label][0])}&ndash;{med(buckets[label][1])}'
+        f'</td><td class="num hint">{len(buckets[label][0])}</td></tr>'
+        for label, hint in (("Small", "under 25 lbs"), ("Medium", "25&ndash;50 lbs"),
+                            ("Large", "50 lbs +"))
+        if label in buckets)
+
+    n = len(costs)
+    title = f"What a dog costs per month in {c.short}"
+    desc = (f"A dog in {c.name} costs about ${lo}–{hi} a month to keep, "
+            f"before the adoption fee. Food, insurance, routine vet, supplies "
+            f"and grooming, estimated across the {n} dogs listed today.")
+    faq = [
+        (f"How much does a dog cost per month in {c.short}?",
+         f"About ${lo} to ${hi} a month for a typical dog, covering food, pet "
+         f"insurance, routine veterinary care, supplies and grooming. Size is "
+         f"the biggest single factor. This excludes the adoption fee, which "
+         f"most {c.short} rescues charge once, and anything unexpected."),
+        (f"What is the biggest monthly cost of owning a dog in {c.short}?",
+         "Pet insurance and routine veterinary care are usually the two "
+         "largest line items, ahead of food for most dogs."),
+        ("Does a bigger dog cost more?",
+         "Yes, mostly through food and medication, which are dosed by weight. "
+         "The difference between a small and a large dog is real but smaller "
+         "than people expect — the fixed costs do not change."),
+    ]
+    ld = json.dumps({
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "WebPage",
+                "@id": f"{site}{c.cost_path}",
+                "url": f"{site}{c.cost_path}",
+                "name": title,
+                "description": desc,
+                "isPartOf": {"@id": f"{site}/#website"},
+                "publisher": {"@id": f"{site}/#org"},
+                "dateModified": for_date.isoformat(),
+                "breadcrumb": {"@id": f"{site}{c.cost_path}#breadcrumb"},
+            },
+            {
+                "@type": "BreadcrumbList",
+                "@id": f"{site}{c.cost_path}#breadcrumb",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": 1,
+                     "name": f"Adopt a dog in {c.short}",
+                     "item": f"{site}/" if c.path == "/" else f"{site}{c.path}"},
+                    {"@type": "ListItem", "position": 2, "name": title},
+                ],
+            },
+            {
+                "@type": "FAQPage",
+                "@id": f"{site}{c.cost_path}#faq",
+                "mainEntity": [
+                    {"@type": "Question", "name": q,
+                     "acceptedAnswer": {"@type": "Answer", "text": a}}
+                    for q, a in faq
+                ],
+            },
+        ],
+    })
+    faq_html = "".join(
+        f"<h2>{html.escape(q)}</h2><p>{html.escape(a)}</p>" for q, a in faq[1:])
+
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(desc)}">
+<link rel="canonical" href="{site}{c.cost_path}">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
+<meta property="og:site_name" content="LUVD">
+<meta property="og:title" content="{html.escape(title)}">
+<meta property="og:description" content="{html.escape(desc)}">
+<meta property="og:url" content="{site}{c.cost_path}">
+<script type="application/ld+json">{ld}</script>
+<style>{_STATIC_PAGE_CSS}{_COST_CSS}</style></head><body>
+<a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>
+<h1>{html.escape(title)}</h1>
+<p class="lead">About <b>${lo}&ndash;{hi} a month</b> for a typical dog, before the
+  adoption fee. Worked out across the {n} dogs listed in {html.escape(c.name)}
+  today, so it moves as the roster does.</p>
+
+<h2>Where the money goes</h2>
+<table class="cost"><tbody>{rows}
+  <tr class="tot"><td>Typical total</td>
+      <td class="num">${lo}&ndash;{hi}</td></tr>
+</tbody></table>
+
+<h2>Does size change it?</h2>
+<p>Some, but less than people expect &mdash; insurance and routine vet care
+   barely move, and only food and weight-dosed medication really scale.</p>
+<table class="cost"><thead><tr><th>Size</th><th class="num">Per month</th>
+  <th class="num">Dogs</th></tr></thead><tbody>{size_rows}</tbody></table>
+
+{faq_html}
+
+<h2>What this does not include</h2>
+<p>The adoption fee, which most {html.escape(c.short)} rescues charge once and
+   which usually covers spay/neuter, vaccinations and microchipping. Nor
+   anything unexpected &mdash; an illness or an injury is the reason pet
+   insurance is on the list above.</p>
+<p class="lead">These are estimates, derived from each dog's size and coat
+   rather than from anybody's receipts. They are here to set expectations
+   before you apply, not to budget to the dollar.</p>
+
+<footer><a href="{c.path}">See the {c.short} dogs &rarr;</a>
+  &middot; <a href="{c.rescues_path}">All {c.short} rescues</a></footer>
+</body></html>"""
+
+
+# Below this many faces the wall is thin content and ships noindex. It is still
+# published and linked — its other job, giving each departed dog page a link
+# home, matters from the very first dog.
+ALUMNI_INDEX_MIN = 12
+
+# The alumni grid. Small tiles — this is a wall of faces, not a browse.
+_ALUMNI_CSS = """
+  .al-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));
+    gap:14px;margin:22px 0 8px;}
+  .al{display:block;text-decoration:none;color:inherit;}
+  .al img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:14px;
+    display:block;background:var(--hair);}
+  .al-n{display:block;font-weight:600;font-size:14px;margin-top:7px;}
+  .al-r{display:block;color:var(--muted);font-size:12.5px;}
+"""
+
+
+def _alumni_page(gone: list, site: str, for_date: date, city: str = None) -> str:
+    """Dogs that are no longer listed. The archive, with a front door.
+
+    Two jobs. Every departed dog keeps a working page — that was the point of
+    `gone_on` — but once a dog leaves it drops out of the sitemap and nothing on
+    the site links to it any more. It stays indexed from when it was live and
+    then slowly rots as an orphan. This gives all of them a link home.
+
+    The second job is the one worth having: Search Console says dog pages carry
+    88% of clicks at an 8.6% CTR, which is the whole engine, and this is a page
+    made entirely of links to dog pages that already rank.
+
+    It never claims an adoption. We know a dog is no longer listed and not why —
+    most are adopted, a listing can also be pulled or transferred — so the page
+    says the true thing and lets the reader draw the happy conclusion.
+    """
+    c = cities.resolve(city)
+    if not gone:
+        return ""
+    with_photo = [g for g in gone if (g.get("photos") or [])]
+    # A wall of three faces is thin content, and asking Google to index it while
+    # it is thin teaches it the page is not worth much. It still gets published
+    # and linked, because its other job — giving every departed dog page a link
+    # home — matters from the first dog.
+    thin = len(with_photo) < ALUMNI_INDEX_MIN
+    n = len(gone)
+    title = f"Dogs that found their way off the {c.short} list"
+    desc = (f"{n} dogs have left the LUVD {c.short} list since we started "
+            f"watching. Most because somebody took them home. Their pages are "
+            f"still here.")
+
+    # The stored payload is Dog.to_dict(), which has no `path` — that is added
+    # by the page payload builder, not by the model. Rebuilding the dog is how
+    # the archive pages themselves get their URL, so it is the same answer.
+    tiles = []
+    for g in with_photo[:120]:
+        try:
+            gd = Dog(**{k: v for k, v in g.items()
+                        if k in Dog.__dataclass_fields__})
+        except Exception:
+            continue
+        tiles.append(
+            f'<a class="al" href="{html.escape(dog_path(gd))}">'
+            f'<img src="{html.escape(g["photos"][0])}"'
+            f' alt="{html.escape(g["name"])}" loading="lazy">'
+            f'<span class="al-n">{html.escape(g["name"])}</span>'
+            f'<span class="al-r">{html.escape(g.get("source_label", ""))}</span>'
+            f"</a>")
+    tiles = "".join(tiles)
+
+    ld = json.dumps({
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "CollectionPage",
+                "@id": f"{site}{c.alumni_path}",
+                "url": f"{site}{c.alumni_path}",
+                "name": title,
+                "description": desc,
+                "isPartOf": {"@id": f"{site}/#website"},
+                "publisher": {"@id": f"{site}/#org"},
+                "dateModified": for_date.isoformat(),
+                "breadcrumb": {"@id": f"{site}{c.alumni_path}#breadcrumb"},
+            },
+            {
+                "@type": "BreadcrumbList",
+                "@id": f"{site}{c.alumni_path}#breadcrumb",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": 1,
+                     "name": f"Adopt a dog in {c.short}",
+                     "item": f"{site}/" if c.path == "/" else f"{site}{c.path}"},
+                    {"@type": "ListItem", "position": 2, "name": title},
+                ],
+            },
+        ],
+    })
+
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">{
+  chr(10) + '<meta name="robots" content="noindex,follow">' if thin else ""}
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(desc)}">
+<link rel="canonical" href="{site}{c.alumni_path}">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="icon" href="/favicon.png?v=3" type="image/png">
+<meta property="og:site_name" content="LUVD">
+<meta property="og:title" content="{html.escape(title)}">
+<meta property="og:description" content="{html.escape(desc)}">
+<meta property="og:url" content="{site}{c.alumni_path}">
+<script type="application/ld+json">{ld}</script>
+<style>{_STATIC_PAGE_CSS}{_ALUMNI_CSS}</style></head><body>
+<a class="back" href="{c.path}">&larr; All adoptable dogs in {c.short}</a>
+<h1>{html.escape(title)}</h1>
+<p class="lead"><b>{n} dogs</b> have left the {html.escape(c.short)} list since
+   we started watching. We only know they are no longer listed &mdash; but most
+   dogs leave a rescue's list because somebody took them home. 🏡</p>
+<div class="al-grid">{tiles}</div>
+<footer><a href="{c.path}">See the dogs still waiting &rarr;</a>
+  &middot; <a href="{c.rescues_path}">All {c.short} rescues</a></footer>
 </body></html>"""
 
 
@@ -6879,6 +7199,30 @@ def write(pages, for_date: date = None) -> Path:
 
         # One rescue index per city, at /rescues and /la/rescues, each listing
         # only its own city's rescues.
+        # The cost guide. The site's only page that answers a question
+        # rather than listing a dog, and the numbers come from the roster
+        # above, so it is worth republishing every morning.
+        cost_html = _cost_page(flat, site, for_date, c.code)
+        if cost_html:
+            cpath = OUT_DIR / c.cost_file
+            cpath.parent.mkdir(parents=True, exist_ok=True)
+            cpath.write_text(cost_html, encoding="utf-8")
+            rendered.add(c.cost_path)
+            urls.append(f"{site}{c.cost_path}")
+            lastmod[f"{site}{c.cost_path}"] = for_date.isoformat()
+
+        # And the alumni wall, which is the only thing on the site that links
+        # to a departed dog's page — without it every one of them is an orphan
+        # the morning after it leaves.
+        alumni_html = _alumni_page(departed, site, for_date, c.code)
+        if alumni_html:
+            apath = OUT_DIR / c.alumni_file
+            apath.parent.mkdir(parents=True, exist_ok=True)
+            apath.write_text(alumni_html, encoding="utf-8")
+            rendered.add(c.alumni_path)
+            urls.append(f"{site}{c.alumni_path}")
+            lastmod[f"{site}{c.alumni_path}"] = for_date.isoformat()
+
         rpath = OUT_DIR / c.rescues_file
         rpath.parent.mkdir(parents=True, exist_ok=True)
         rpath.write_text(_rescues_page(by_rescue, site, for_date, c.code),

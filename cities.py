@@ -80,6 +80,24 @@ class City:
         return "/rescues" if self.path == "/" else f"{self.path}/rescues"
 
     @property
+    def cost_path(self) -> str:
+        """Where this city's cost guide lives: /cost, /la/cost."""
+        return "/cost" if self.path == "/" else f"{self.path}/cost"
+
+    @property
+    def cost_file(self) -> str:
+        return self.cost_path.lstrip("/") + ".html"
+
+    @property
+    def alumni_path(self) -> str:
+        """Dogs that have left the list: /alumni, /la/alumni."""
+        return "/alumni" if self.path == "/" else f"{self.path}/alumni"
+
+    @property
+    def alumni_file(self) -> str:
+        return self.alumni_path.lstrip("/") + ".html"
+
+    @property
     def rescues_file(self) -> str:
         """The file in public/ that serves rescues_path."""
         return self.rescues_path.lstrip("/") + ".html"
