@@ -61,6 +61,29 @@ TILE_PHONE_SMALL = 148    # 376-480px  (a 390px iPhone lands here)
 TILE_PHONE = 176          # 481-600px
 GUTTER = 9
 
+
+def _grid_cols(cols: int, n: int) -> int:
+    """How many columns a grid of `n` dogs actually uses.
+
+    Four dogs in three columns leaves one alone on the second row, which reads
+    as a photo that failed to load, so it goes two-and-two instead. Shared with
+    the caller because the button under the grid has to be as wide as the grid,
+    and the grid is 504px across at three columns and 333px at two — a button
+    hardcoded to either is wrong on the days the count changes.
+    """
+    return 2 if cols == 3 and n == 4 else cols
+
+
+def _grid_w(cols: int, edge: int) -> int:
+    """How wide a row of tiles actually is.
+
+    Each cell is `edge` wide with a gutter to its right except the last, so this
+    is what the grid measures at a given breakpoint — and what the button under
+    it has to match. Derived rather than written down, so changing a tile size
+    cannot leave the button behind at one breakpoint only.
+    """
+    return cols * edge + (cols - 1) * GUTTER
+
 # Ink fills 1162x364 of the source file, so this box puts the visible wordmark
 # at about 125x39 above the 27px headline — a clear step up from the 120x52 it
 # was, and still reading as a header rather than a billboard. 150x65 is exactly
@@ -363,8 +386,7 @@ def _grid(dogs: List[Dog], cols: int, edge: int, table_class: str,
     """
     if not dogs:
         return ""
-    if cols == 3 and len(dogs) == 4:
-        cols = 2
+    cols = _grid_cols(cols, len(dogs))
     rows = ""
     for i in range(0, len(dogs), cols):
         chunk = dogs[i:i + cols]
@@ -466,11 +488,26 @@ _STYLE = f"""
       .ph-img{{width:{TILE_PHONE_SMALL}px !important;
                height:{TILE_PHONE_SMALL}px !important;}}
       .ph-cell{{width:{TILE_PHONE_SMALL}px !important;}}
+      /* The button matches the grid, not the card. Spanning the full 504px of
+         content while the photos above it measured 257 made it the widest thing
+         in the mail by a distance. It steps with the tiles instead. */
+      .cta-w{{width:{_grid_w(2, TILE_PHONE_SMALL)}px !important;}}
     }}
     @media only screen and (min-width:481px){{
       .ph-img{{width:{TILE_PHONE}px !important;
                height:{TILE_PHONE}px !important;}}
       .ph-cell{{width:{TILE_PHONE}px !important;}}
+      .cta-w{{width:{_grid_w(2, TILE_PHONE)}px !important;}}
+    }}
+    /* LAST of the min-width rules on purpose. These all match at 700px and
+       carry the same specificity, so source order decides — with this block
+       above the 376/481 ones, they overrode it and the button kept the phone
+       width on a desktop. Two widths because the desktop grid drops to two
+       columns for a four-dog morning; the email wears the class that matches
+       the grid it actually drew. */
+    @media only screen and (min-width:601px){{
+      .cta-w2{{width:{_grid_w(2, TILE_DESKTOP)}px !important;}}
+      .cta-w3{{width:{_grid_w(3, TILE_DESKTOP)}px !important;}}
     }}
     @media only screen and (max-width:480px){{
       .card{{padding-left:18px !important;padding-right:18px !important;}}
@@ -582,11 +619,17 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
     {grid_desk}{grid_phone}
     {more}
 
-    <a href="{html.escape(_track(_city_path(city), send_id))}"
-       style="display:block;background:#FF002E;color:#fff;text-decoration:none;
-              text-align:center;padding:15px;border-radius:13px;font:600 16px
-              -apple-system,Segoe UI,Roboto,sans-serif;margin-top:24px;">
-      See all {n} dog{'' if n == 1 else 's'} →</a>
+    <table class="cta-w cta-w{_grid_cols(3, len(desk))}" cellpadding="0" cellspacing="0" align="center"
+           style="border-collapse:collapse;margin:24px auto 0;
+                  width:{_grid_w(2, TILE_PHONE_TINY)}px;">
+      <tr><td>
+        <a href="{html.escape(_track(_city_path(city), send_id))}"
+           style="display:block;background:#FF002E;color:#fff;text-decoration:none;
+                  text-align:center;padding:15px;border-radius:13px;font:600 16px
+                  -apple-system,Segoe UI,Roboto,sans-serif;">
+          See all {n} dog{'' if n == 1 else 's'} →</a>
+      </td></tr>
+    </table>
 
     {_footer(unsubscribe_for)}
   </div>
