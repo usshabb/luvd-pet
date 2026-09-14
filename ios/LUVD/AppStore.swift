@@ -651,9 +651,9 @@ final class AppStore {
         }
     }
 
-    /// A tap on a new-dogs notification. One dog opens straight to that dog;
-    /// several open that city's arrivals today.
-    func handleNotification(cityCode: String?, dogIDs: [String]) async {
+    /// A tap on a new-dogs notification. The notification names one dog, so
+    /// that dog opens — over that city's arrivals today, which are one tap back.
+    func handleNotification(cityCode: String?, dogIDs: [String], featuredID: String? = nil) async {
         let pushed = City.find(cityCode)
         if let pushed, !cities.contains(pushed) {
             setCities(cities + [pushed])
@@ -663,13 +663,19 @@ final class AppStore {
         // minutes ago, and a five-minute HTTP cache could predate it.
         await load(fresh: true)
         tab = .browse
-        if dogIDs.count == 1 {
-            if let d = byID[dogIDs[0]] { openDog = d }
-        } else {
+        let featured = (featuredID ?? (dogIDs.count == 1 ? dogIDs.first : nil)).flatMap { byID[$0] }
+        if dogIDs.count > 1 {
             resetBrowsing()
-            filters.newToday = true
-            if cities.count > 1, let pushed { filters.selected[.city] = [pushed.name] }
+            // Only narrow to today's arrivals when there are some to show. A tap
+            // after the city's midnight, or on a list that has since changed,
+            // would otherwise land on an empty feed.
+            let arrived = dogs.filter { isNew($0) && (pushed == nil || $0.cityCode == pushed?.code) }
+            if !arrived.isEmpty {
+                filters.newToday = true
+                if cities.count > 1, let pushed { filters.selected[.city] = [pushed.name] }
+            }
         }
+        if let featured { openDog = featured }
     }
 
     /// `luvd://dog/<id>` opens one dog; `luvd://new?city=NYC[&ids=a,b]` opens

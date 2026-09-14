@@ -58,7 +58,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let info = response.notification.request.content.userInfo
         let city = info["city"] as? String
         let ids = info["dog_ids"] as? [String] ?? []
-        Task { @MainActor in await AppStore.shared.handleNotification(cityCode: city, dogIDs: ids) }
+        let featured = info["featured_id"] as? String
+        Task { @MainActor in
+            await AppStore.shared.handleNotification(cityCode: city, dogIDs: ids, featuredID: featured)
+        }
         completionHandler()
     }
 }
