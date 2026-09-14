@@ -8,13 +8,21 @@ struct DogDetailView: View {
     @State private var page = 0
     @State private var applyURL: URL?
     @State private var aboutExpanded = false
+    @State private var pastHero = false
+    /// The photo has faded enough that white status-bar text would sit on a
+    /// near-white page. Earlier than pastHero: the fade runs well ahead of
+    /// the name reaching the bar.
+    @State private var photoFaded = false
+
+    /// Portrait 4:5 at an iPhone's width, give or take.
+    private let heroHeight: CGFloat = 500
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                PhotoCarousel(urls: dog.photoURLs, page: $page)
+                hero
+                titleBlock
                 VStack(alignment: .leading, spacing: 24) {
-                    title
                     if let quip = dog.quip { quipBubble(quip) }
                     if let scores = dog.scores { FitSection(scores: scores) }
                     if let outlook = dog.sizeOutlook { SizeSection(outlook: outlook) }
@@ -35,9 +43,23 @@ struct DogDetailView: View {
             }
             .padding(.bottom, 24)
         }
+        // The photo runs to the top of the screen, under the status bar and the
+        // floating back and share buttons.
+        .ignoresSafeArea(edges: .top)
+        .modifier(DetailScrollReader { offset in
+            let past = offset > heroHeight - 40
+            if past != pastHero { pastHero = past }
+            let faded = offset > heroHeight * 0.4
+            if faded != photoFaded { photoFaded = faded }
+        })
         .safeAreaInset(edge: .bottom) { actionBar }
-        .navigationTitle(dog.displayName)
+        // The bar stays clear over the photo and earns its background — and the
+        // dog's name — only once the big name has scrolled up out of sight.
+        .navigationTitle(pastHero ? dog.displayName : "")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(pastHero ? .visible : .hidden, for: .navigationBar)
+        .toolbarColorScheme(photoFaded ? nil : .dark, for: .navigationBar)
+        .animation(.easeInOut(duration: 0.2), value: pastHero)
         .toolbar {
             if let url = dog.webURL(base: API.productionBase) {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -52,15 +74,51 @@ struct DogDetailView: View {
         .onAppear { API.recordView(dog) }
     }
 
-    private var title: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    /// The photos, edge to edge. As the page scrolls up they move at a little
+    /// over half its speed and fade; pulled down at the top they stretch.
+    /// visualEffect reads position per frame without touching view state, so
+    /// the effect costs nothing on the rest of the page.
+    private var hero: some View {
+        let height = heroHeight
+        return PhotoCarousel(urls: dog.photoURLs, page: $page)
+            .frame(height: height)
+            .overlay(alignment: .top) {
+                LinearGradient(colors: [.black.opacity(0.5), .black.opacity(0.18), .clear],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 170)
+                    .allowsHitTesting(false)
+            }
+            .visualEffect { content, proxy in
+                let minY = proxy.frame(in: .scrollView(axis: .vertical)).minY
+                let pushed = max(0, -minY)
+                let pulled = max(0, minY)
+                return content
+                    .scaleEffect(1 + pulled / height, anchor: .bottom)
+                    .offset(y: pushed * 0.42)
+                    .opacity(1 - min(1, pushed / (height * 0.85)))
+            }
+            .zIndex(-1)
+    }
+
+    /// The name, large and centred, with everything that says who the dog is
+    /// under it. It drifts and fades as it nears the top, where the bar picks
+    /// the name up.
+    private var titleBlock: some View {
+        VStack(spacing: 7) {
             HStack(spacing: 6) {
                 if store.isNew(dog) { Pill(text: "New today", systemImage: "sparkles", tint: Theme.red, filled: true) }
                 if let waiting = dog.waitingLabel { Pill(text: waiting, systemImage: "hourglass", tint: Theme.caution) }
                 if dog.isFoster { Pill(text: "Foster-to-adopt", systemImage: "house", tint: Theme.good) }
             }
-            Text(dog.displayName).font(Theme.display(34))
-            Text(dog.displayBreed).font(.title3.weight(.medium)).foregroundStyle(.secondary)
+            Text(dog.displayName)
+                .font(Theme.display(42))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+            Text(dog.displayBreed)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             let facts = [dog.cleanAge, dog.sex, dog.cleanWeight].compactMap { $0 }
             if !facts.isEmpty {
                 Text(facts.joined(separator: " · ")).font(.subheadline.weight(.medium))
@@ -70,8 +128,21 @@ struct DogDetailView: View {
                       systemImage: "house.and.flag.fill")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 2)
+                    .padding(.top, 1)
             }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
+        .background(Theme.background)
+        .visualEffect { content, proxy in
+            let minY = proxy.frame(in: .scrollView(axis: .vertical)).minY
+            // Fully visible until its top is 170pt from the top of the screen,
+            // gone by 60pt — just as it would slide under the bar.
+            let t = min(1, max(0, (170 - minY) / 110))
+            return content
+                .opacity(1 - t)
+                .offset(y: t * 14)
         }
     }
 
@@ -194,7 +265,6 @@ struct PhotoCarousel: View {
                 .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .always : .never))
             }
         }
-        .aspectRatio(4 / 5, contentMode: .fit)
         .frame(maxWidth: .infinity)
     }
 }
@@ -369,6 +439,24 @@ struct FlowLayout: Layout {
             view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// The profile's scroll offset: 0 at rest, growing as the page scrolls up.
+/// iOS 18+ reads it from the scroll view; on iOS 17 the bar simply stays clear.
+private struct DetailScrollReader: ViewModifier {
+    let onChange: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top
+            } action: { _, offset in
+                onChange(offset)
+            }
+        } else {
+            content
         }
     }
 }
