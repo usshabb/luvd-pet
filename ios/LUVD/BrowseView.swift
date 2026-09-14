@@ -5,7 +5,13 @@ struct BrowseView: View {
     @State private var path: [Dog] = []
     @State private var showFilters = false
 
-    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    /// One big card per row, or two smaller ones. Remembered, so the feed opens
+    /// the way it was left.
+    @AppStorage("feedColumns") private var columnsCount = 1
+
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: columnsCount)
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -30,15 +36,28 @@ struct BrowseView: View {
                         prompt: "Name, breed or rescue")
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Image("Logo")
+                    // The outline-cropped wordmark at nearly the bar's full
+                    // height. The shadowed original is mostly margin, and
+                    // fitted here its letters were a third of this size.
+                    Image("LogoHeader")
                         .resizable()
                         .scaledToFit()
-                        .frame(height: 30)
+                        .frame(height: 40)
                         .accessibilityLabel("LUVD")
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { store.showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Haptics.selection()
+                        withAnimation(.snappy) { columnsCount = columnsCount == 1 ? 2 : 1 }
+                    } label: {
+                        Image(systemName: columnsCount == 1 ? "square.grid.2x2" : "rectangle.grid.1x2")
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .accessibilityLabel(columnsCount == 1 ? "Show two dogs per row" : "Show one dog per row")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -83,7 +102,7 @@ struct BrowseView: View {
     @ViewBuilder private var content: some View {
         switch (store.state, store.dogs.isEmpty) {
         case (.idle, true), (.loading, true):
-            LazyVGrid(columns: columns, spacing: 18) {
+            LazyVGrid(columns: gridColumns, spacing: columnsCount == 1 ? 26 : 18) {
                 ForEach(0..<6, id: \.self) { _ in CardSkeleton() }
             }
         case (.failed(let message), true):
@@ -109,9 +128,9 @@ struct BrowseView: View {
                 }
                 .padding(.top, 30)
             } else {
-                LazyVGrid(columns: columns, spacing: 18) {
+                LazyVGrid(columns: gridColumns, spacing: columnsCount == 1 ? 26 : 18) {
                     ForEach(dogs) { dog in
-                        DogCard(dog: dog)
+                        DogCard(dog: dog, large: columnsCount == 1)
                             .onTapGesture { path.append(dog) }
                             .accessibilityAddTraits(.isButton)
                             .accessibilityAction { path.append(dog) }
@@ -195,27 +214,91 @@ struct ChipButton: View {
 struct DogCard: View {
     @Environment(AppStore.self) private var store
     let dog: Dog
+    /// The one-per-row card: a square photo and room for the facts that make
+    /// someone stop scrolling — who they are, how they'd fit, what the rescue
+    /// says. The two-per-row card is a face and a name.
+    var large = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            RemoteImage(url: dog.photoURLs.first, maxPixel: 560)
-                .aspectRatio(4 / 5, contentMode: .fit)
-                .overlay(alignment: .topTrailing) { SaveButton(dog: dog).padding(8) }
-                .overlay(alignment: .bottomLeading) { badge.padding(8) }
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(dog.name)
-                    .font(Theme.display(17))
-                    .lineLimit(1)
-                Text([dog.displayBreed, dog.age].compactMap { $0 }.joined(separator: " · "))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 2)
+        VStack(alignment: .leading, spacing: large ? 10 : 8) {
+            RemoteImage(url: dog.photoURLs.first, maxPixel: large ? 1100 : 560)
+                .aspectRatio(large ? 1 : 4 / 5, contentMode: .fit)
+                .overlay(alignment: .topTrailing) {
+                    SaveButton(dog: dog, size: large ? 42 : 36).padding(large ? 12 : 8)
+                }
+                .overlay(alignment: .bottomLeading) { badge.padding(large ? 12 : 8) }
+                .clipShape(RoundedRectangle(cornerRadius: large ? 22 : 18, style: .continuous))
+            if large { largeCaption } else { smallCaption }
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+
+    private var smallCaption: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(dog.name)
+                .font(Theme.display(17))
+                .lineLimit(1)
+            Text([dog.displayBreed, dog.age].compactMap { $0 }.joined(separator: " · "))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private var largeCaption: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(dog.name)
+                    .font(Theme.display(23))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if let rescue = rescueLine {
+                    Text(rescue)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Text(([dog.displayBreed] + dog.facts).joined(separator: " · "))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            let chips = fitChips
+            if !chips.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(chips, id: \.0) { Pill(text: $0.0, systemImage: $0.1) }
+                }
+                .padding(.top, 2)
+            }
+            if let quip = dog.quip {
+                Text("“\(quip)”")
+                    .font(.subheadline)
+                    .italic()
+                    .lineLimit(1)
+                    .padding(.top, 1)
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    /// The city rides with the rescue only when more than one is followed.
+    private var rescueLine: String? {
+        guard let rescue = dog.sourceLabel else { return nil }
+        guard store.cities.count > 1, let city = City.find(dog.cityCode) else { return rescue }
+        return "\(rescue) · \(city.short)"
+    }
+
+    /// At most two, so the row never wraps: energy first, then whichever fit
+    /// fact the dog has.
+    private var fitChips: [(String, String)] {
+        var out: [(String, String)] = []
+        if let energy = dog.energyWord { out.append((energy, "bolt.fill")) }
+        if dog.apartmentFriendly { out.append(("Apartment-friendly", "building.2")) }
+        else if dog.firstTimeFriendly { out.append(("Good first dog", "hand.thumbsup")) }
+        else if dog.okAlone { out.append(("OK home alone", "clock")) }
+        return Array(out.prefix(2))
     }
 
     @ViewBuilder private var badge: some View {

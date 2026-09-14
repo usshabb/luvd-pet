@@ -93,7 +93,34 @@ def tab_heart(mask: Image.Image):
     print(f"  tab heart {TAB_BOX}pt @2x/@3x -> {TAB.relative_to(ROOT)}")
 
 
+HEADER = ROOT / "ios" / "LUVD" / "Assets.xcassets" / "LogoHeader.imageset"
+
+
+def header_logo():
+    """The wordmark cropped to its sticker outline, for the Dogs header.
+
+    The original carries a wide soft drop shadow for the onboarding screen, and
+    most of its canvas is that shadow: fitted to a nav bar's height, the letters
+    came out barely a third of it. Cropping at the outline drops the shadow and
+    the empty margin, so the same height is nearly all wordmark.
+    """
+    import json
+    logo = Image.open(SRC).convert("RGBA")
+    alpha = logo.split()[3].point(lambda v: 255 if v >= 160 else 0)
+    box = alpha.getbbox()
+    cropped = logo.crop(box)
+    HEADER.mkdir(parents=True, exist_ok=True)
+    cropped.save(HEADER / "luvd-logo-header.png", "PNG", optimize=True)
+    (HEADER / "Contents.json").write_text(json.dumps({
+        "images": [{"filename": "luvd-logo-header.png", "idiom": "universal"}],
+        "info": {"author": "xcode", "version": 1},
+    }, indent=2) + "\n")
+    print(f"  header logo {logo.size[0]}x{logo.size[1]} -> {cropped.size[0]}x{cropped.size[1]} "
+          f"(aspect {cropped.size[0] / cropped.size[1]:.2f})")
+
+
 def main():
+    header_logo()
     mask = heart_mask()
     tab_heart(mask)
     w, h = mask.size
