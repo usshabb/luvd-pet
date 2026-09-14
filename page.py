@@ -1753,6 +1753,60 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     .fb-copy,.fb-mail{{flex:1 1 0;justify-content:center;padding:0 10px;}}
   }}
 
+  /* ---------- mobile filter sheet ---------- */
+  /* Desktop shows the pill row and nothing else; this appears only where that
+     row stops fitting. Both are never on screen at once, so there is one
+     filter UI at any width and no question of which one is authoritative. */
+  .fsheet-btn{{all:unset;display:none;align-items:center;justify-content:center;
+    gap:8px;box-sizing:border-box;cursor:pointer;margin:0 auto;
+    font-size:14.5px;font-weight:600;color:var(--text);
+    padding:10px 20px;min-height:44px;border-radius:980px;
+    border:1px solid var(--hair);background:var(--surface);
+    box-shadow:0 1px 2px rgba(0,0,0,.05);}}
+  .fsheet-btn svg{{width:16px;height:16px;fill:none;stroke:currentColor;
+    stroke-width:2;stroke-linecap:round;}}
+  /* Filled when narrowing, the same signal a filled pill gives on desktop. */
+  .fsheet-btn.on{{background:var(--accent);border-color:var(--accent);color:#fff;}}
+  .fsb-n{{display:inline-grid;place-items:center;min-width:20px;height:20px;
+    padding:0 6px;border-radius:980px;background:#fff;color:var(--accent);
+    font-size:12px;font-weight:700;}}
+  .fsb-n[hidden]{{display:none;}}
+  .fsheet{{padding:26px 22px 8px;}}
+  .fs-hd{{display:flex;align-items:baseline;justify-content:space-between;
+    gap:12px;margin:0 0 6px;}}
+  .fs-hd h2{{font-size:24px;letter-spacing:-.02em;margin:0;}}
+  .fs-clear{{all:unset;cursor:pointer;font-size:14px;font-weight:600;
+    color:var(--accent);}}
+  .fs-clear[hidden]{{display:none;}}
+  .fs-sec{{padding:18px 0 4px;border-top:1px solid var(--hair2);margin-top:14px;}}
+  .fs-sec:first-of-type{{border-top:0;margin-top:0;}}
+  .fs-sec h3{{font-size:12px;font-weight:700;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 10px;}}
+  .fs-opts{{display:flex;flex-direction:column;gap:2px;}}
+  /* A full-width row rather than a chip grid: the labels are rescue names and
+     breed groups, which wrap badly at chip width, and a row gives the count a
+     fixed column to line up in. */
+  .fs-opt{{all:unset;box-sizing:border-box;cursor:pointer;display:flex;
+    align-items:center;justify-content:space-between;gap:14px;
+    min-height:46px;padding:0 14px;border-radius:12px;
+    font-size:15.5px;color:var(--text);}}
+  .fs-opt:hover{{background:var(--hair2);}}
+  .fs-opt.on{{background:var(--accent);color:#fff;font-weight:600;}}
+  .fs-opt.on b{{color:#fff;opacity:.85;}}
+  .fs-opt b{{font-weight:600;color:var(--muted);font-size:14px;
+    font-variant-numeric:tabular-nums;}}
+  .fs-opt .opt-d{{color:var(--muted);font-style:normal;margin-left:7px;
+    font-size:13.5px;}}
+  .fs-opt.on .opt-d{{color:#fff;opacity:.8;}}
+  .fs-opt:disabled{{opacity:.35;cursor:default;}}
+  .fs-opt:disabled:hover{{background:none;}}
+  .fs-opt:focus-visible{{outline:2px solid var(--accent);outline-offset:-2px;}}
+  /* Pinned, so the running count stays visible while the list is scrolled. */
+  .fs-foot{{padding:14px 22px max(18px,env(safe-area-inset-bottom));
+    border-top:1px solid var(--hair);background:var(--surface);}}
+  .fs-foot .cta{{width:100%;}}
+  .fs-foot .cta:disabled{{opacity:.45;cursor:default;}}
+
   /* ---------- filter pills ---------- */
   /* One quiet row above the dogs, centred under the centred hero. No card, no
      heading, no sidebar: at ~220 dogs these are for narrowing a scroll, not for
@@ -2596,20 +2650,11 @@ def render(dated, for_date: date = None, city: str = None) -> str:
        that an open menu is NOT a descendant of it.
        tests/test_multicity.py::test_filter_menus_cannot_be_clipped holds the
        pair together — if this row scrolls, the layer and the move must exist. */
-    .fbar-pills{{flex-wrap:wrap;justify-content:center;row-gap:8px;
-      padding-bottom:2px;scrollbar-width:none;}}
-    .fbar-pills::-webkit-scrollbar{{display:none;}}
-    /* The fade that says the row keeps going. A mask, not an overlaid gradient,
-       for two reasons: a mask cannot intercept a touch, so the pills under it
-       stay tappable and the row stays scrollable; and it fades to *transparent*
-       rather than to a colour, so it is correct on whatever background the
-       current theme paints without knowing anything about it. The classes are
-       set by paintPillFade() — the edge only fades when there is something
-       behind it, so the cue disappears at the end of the scroll and never
-       appears at all if the pills happen to fit. */
-    .fbar-pills.fade-r{{-webkit-mask-image:linear-gradient(to right,#000
-      calc(100% - 34px),transparent);mask-image:linear-gradient(to right,#000
-      calc(100% - 34px),transparent);}}
+    /* The row is gone on a phone, replaced by .fsheet-btn. Kept as rules
+       rather than deleted because the same stylesheet serves every width and
+       the row is still the desktop UI. */
+    .fbar-pills{{display:none;}}
+    .fsheet-btn{{display:flex;}}
     .fbar-meta{{margin:12px 0 -10px;}}
     /* 17px here, against 19px on desktop. 19px is exactly the phone size of the
        card dog names (.nm, 19px/700), so the count sat at the size and weight of
@@ -2859,6 +2904,12 @@ def render(dated, for_date: date = None, city: str = None) -> str:
       <button class="fpill-t" id="f-program" type="button" aria-pressed="false"
               aria-label="Foster-to-adopt" hidden>Foster <b></b></button>
     </div>
+    <!-- The phone's whole filter UI. Hidden on desktop, where the pill row
+         above fits and says more by being there. -->
+    <button class="fsheet-btn" id="fsheet-btn" type="button" aria-label="Filters">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path
+        d="M7 12h10"/><path d="M10 18h4"/></svg>Filters<span class="fsb-n"
+        hidden></span></button>
     <!-- The results header, sitting directly on the grid: the count reads as the
          grid's heading on the left, the sort control on the right. Both are
          permanent, so nothing in this row can arrive and shove the other end.
@@ -4575,6 +4626,7 @@ function paintFilters(pool) {{
     const tag = pill.querySelector('.fp-t');
     if (tag) tag.textContent = cur || F_LABEL[kind];
   }});
+  paintFilterButton();
   const prog = document.getElementById('f-program');
   if (prog) {{
     prog.hidden = !DOGS.some(d => d.program === 'foster-to-adopt');
@@ -4978,6 +5030,141 @@ document.querySelectorAll('.fpill').forEach(pill => {{
     applyView();
   }});
 }});
+
+// ---- mobile filter sheet ----------------------------------------------------
+// Six pills do not fit a 375px row, and Phase-2 matching adds four more
+// dimensions. Rather than keep rationing horizontal space, a phone gets one
+// button and a full-screen sheet; the pills stay on desktop, where there is
+// room and where a filled pill states the active filter for free.
+//
+// Every option is rendered inline rather than behind a dropdown. Two reasons:
+// it is one tap per choice instead of two, and a menu inside a scrolling
+// modal is the exact stacking-and-clipping arrangement that shipped twice as
+// "the menus open behind the dogs". A flat sheet has none of that machinery.
+//
+// Choices apply live, as the pills do. There is no Apply button and no staged
+// state to reconcile — the count on the footer button is the running answer,
+// so the sheet is a view of the same FILTERS the row edits, never a copy.
+const FSHEET_KINDS = ['breed', 'sex', 'age', 'size', 'rescue'];
+
+function fsheetSections() {{
+  return FSHEET_KINDS.map(kind => {{
+    const opts = fOptions(kind);
+    // One option is not a choice. A city with a single rescue should not be
+    // offered a rescue filter that can only ever say "all of them".
+    if (opts.length < 2) return '';
+    const rows = [['', F_ANY[kind]]].concat(opts).map(([v, label, detail]) =>
+      `<button type="button" class="fs-opt" data-kind="${{esc(kind)}}"
+         data-v="${{esc(v)}}" role="option" aria-selected="false">
+        <span>${{esc(label)}}${{detail ? `<i class="opt-d">${{esc(detail)}}</i>` : ''}}</span>
+        <b></b></button>`).join('');
+    return `<section class="fs-sec">
+      <h3>${{esc(F_LABEL[kind])}}</h3>
+      <div class="fs-opts" role="listbox"
+           aria-label="Filter by ${{esc(F_LABEL[kind].toLowerCase())}}">${{rows}}</div>
+    </section>`;
+  }}).join('');
+}}
+
+// Counts and selected state, written in place. Re-rendering the sheet's HTML
+// on every tap would throw away the scroll position, which on a sheet this
+// long means being bounced back to Breed after choosing a rescue.
+function paintSheet() {{
+  const sheet = document.getElementById('fsheet');
+  if (!sheet) return;
+  const pool = DOGS.filter(d => sharedIds ? sharedIds.has(d.id)
+    : (!showingSaved || savedSet().has(d.id)));
+  sheet.querySelectorAll('.fs-opt').forEach(opt => {{
+    const kind = opt.dataset.kind, v = opt.dataset.v;
+    const base = pool.filter(d => fMatch(d, kind));
+    const n = v ? base.filter(d => fieldOf(d, kind) === v).length : base.length;
+    opt.querySelector('b').textContent = n;
+    // Never disable the current choice, or there is no way to click off it.
+    opt.disabled = !n && v !== FILTERS[kind];
+    const on = v === FILTERS[kind];
+    opt.classList.toggle('on', on);
+    opt.setAttribute('aria-selected', on ? 'true' : 'false');
+  }});
+  const fp = document.getElementById('fs-foster');
+  if (fp) {{
+    const n = pool.filter(d => fMatch(d, 'foster')
+      && d.program === 'foster-to-adopt').length;
+    fp.querySelector('b').textContent = n;
+    fp.classList.toggle('on', fosterOnly);
+    fp.setAttribute('aria-pressed', fosterOnly ? 'true' : 'false');
+  }}
+  const done = document.getElementById('fs-done');
+  if (done) {{
+    const n = pool.filter(d => fMatch(d)).length;
+    done.textContent = n === 1 ? 'Show 1 dog' : `Show ${{n}} dogs`;
+    done.disabled = n === 0;
+  }}
+  const clear = document.getElementById('fs-clear');
+  if (clear) clear.hidden = !fsActiveCount();
+}}
+
+function fsActiveCount() {{
+  return Object.keys(FILTERS).filter(k => FILTERS[k]).length + (fosterOnly ? 1 : 0);
+}}
+
+// The button has to say what the pills said by being filled: how narrow the
+// list already is. Without the number, a filtered grid behind a closed sheet
+// looks like a short list rather than a filtered one.
+function paintFilterButton() {{
+  const b = document.getElementById('fsheet-btn');
+  if (!b) return;
+  const n = fsActiveCount();
+  b.classList.toggle('on', n > 0);
+  const tag = b.querySelector('.fsb-n');
+  if (tag) {{ tag.textContent = n || ''; tag.hidden = !n; }}
+  b.setAttribute('aria-label', n ? `Filters, ${{n}} active` : 'Filters');
+}}
+
+function openFilterSheet() {{
+  const foster = DOGS.some(d => d.program === 'foster-to-adopt') ? `
+    <section class="fs-sec">
+      <h3>Program</h3>
+      <div class="fs-opts">
+        <button type="button" class="fs-opt" id="fs-foster" aria-pressed="false">
+          <span>Foster-to-adopt</span><b></b></button>
+      </div>
+    </section>` : '';
+  showModal(`
+    <button class="m-close" aria-label="Close">✕</button>
+    <div class="m-scroll">
+      <div class="fsheet" id="fsheet">
+        <div class="fs-hd">
+          <h2>Filters</h2>
+          <button type="button" class="fs-clear" id="fs-clear" hidden>Clear all</button>
+        </div>
+        ${{fsheetSections()}}
+        ${{foster}}
+      </div>
+    </div>
+    <div class="m-foot fs-foot">
+      <button class="cta" id="fs-done" type="button">Show dogs</button>
+    </div>`, 'mid');
+  scrim.classList.add('sheet');
+
+  const sheet = document.getElementById('fsheet');
+  sheet.addEventListener('click', e => {{
+    const opt = e.target.closest('.fs-opt');
+    if (!opt || opt.disabled) return;
+    if (opt.id === 'fs-foster') fosterOnly = !fosterOnly;
+    else FILTERS[opt.dataset.kind] = opt.dataset.v;
+    applyView();
+    paintSheet();
+  }});
+  const clear = document.getElementById('fs-clear');
+  if (clear) clear.onclick = () => {{ resetFilters(); applyView(); paintSheet(); }};
+  const done = document.getElementById('fs-done');
+  if (done) done.onclick = () => closeModal();
+  paintSheet();
+}}
+
+const fsBtn = document.getElementById('fsheet-btn');
+if (fsBtn) fsBtn.onclick = openFilterSheet;
+
 const progPill = document.getElementById('f-program');
 if (progPill) progPill.addEventListener('click', () => {{
   fosterOnly = !fosterOnly;
