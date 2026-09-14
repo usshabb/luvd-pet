@@ -148,8 +148,9 @@ struct StoryViewer: View {
 
     private func story(in size: CGSize) -> some View {
         ZStack {
+            // No fixed frame: sized to the safe area, the photo stopped short of
+            // the home indicator and left a black band under the buttons.
             RemoteImage(url: photos.indices.contains(photoIndex) ? photos[photoIndex] : nil, maxPixel: 1400)
-                .frame(width: size.width, height: size.height)
                 .id("\(dog.id)#\(photoIndex)")
                 .transition(.opacity)
                 .ignoresSafeArea()
@@ -250,6 +251,7 @@ struct StoryViewer: View {
             if let quip = dog.quip {
                 Text("“\(quip)”").font(Theme.display(19, .semibold)).lineLimit(2)
             }
+            Spacer().frame(height: 18)
             // Instagram's link convention: the call to action centred at the
             // bottom with a small up arrow above it, which is also the swipe-up
             // gesture it stands for. Save and share flank it so the row balances.
@@ -260,16 +262,16 @@ struct StoryViewer: View {
                 Spacer(minLength: 12)
                 shareButton
             }
-            .padding(.top, 4)
         }
     }
 
     private var meetButton: some View {
         Button { profileDog = dog } label: {
-            VStack(spacing: 3) {
+            VStack(spacing: 8) {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 17, weight: .bold))
-                    .offset(y: bob ? -4 : 1)
+                    .shadow(color: .black.opacity(0.3), radius: 4)
+                    .offset(y: bob ? -5 : 0)
                 Text("Meet \(dog.displayName)")
                     .font(Theme.display(16, .semibold))
                     .lineLimit(1)

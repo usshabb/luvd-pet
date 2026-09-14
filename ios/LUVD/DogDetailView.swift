@@ -20,8 +20,12 @@ struct DogDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                hero
-                titleBlock
+                // No gap between photo and name: the name's background butts
+                // the photo, so the parallax never opens a strip between them.
+                VStack(spacing: 0) {
+                    hero
+                    titleBlock
+                }
                 VStack(alignment: .leading, spacing: 24) {
                     if let quip = dog.quip { quipBubble(quip) }
                     if let scores = dog.scores { FitSection(scores: scores) }
@@ -43,6 +47,7 @@ struct DogDetailView: View {
             }
             .padding(.bottom, 24)
         }
+        .background(Theme.background)
         // The photo runs to the top of the screen, under the status bar and the
         // floating back and share buttons.
         .ignoresSafeArea(edges: .top)
@@ -53,6 +58,9 @@ struct DogDetailView: View {
             if faded != photoFaded { photoFaded = faded }
         })
         .safeAreaInset(edge: .bottom) { actionBar }
+        // On a profile the only thing at the bottom is Apply. The tab bar under
+        // it made two bars competing for the same strip, and back is right there.
+        .toolbar(.hidden, for: .tabBar)
         // The bar stays clear over the photo and earns its background — and the
         // dog's name — only once the big name has scrolled up out of sight.
         .navigationTitle(pastHero ? dog.displayName : "")
@@ -133,7 +141,7 @@ struct DogDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
-        .padding(.top, 4)
+        .padding(.top, 22)
         .background(Theme.background)
         .visualEffect { content, proxy in
             let minY = proxy.frame(in: .scrollView(axis: .vertical)).minY

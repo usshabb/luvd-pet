@@ -42,6 +42,11 @@ struct MainTabs: View {
                 .tabItem { Image("LuvdHeart").renderingMode(.template).accessibilityLabel("Saved") }
                 .tag(AppTab.saved)
         }
+        // Scrolling down a feed collapses the tab bar to a small glass pill and
+        // scrolling up restores it: most of the screen goes to the dogs while a
+        // tab stays one tap away. The system's own behaviour on iOS 26; earlier
+        // systems keep the bar as it was.
+        .minimizesTabBarOnScroll()
         .sheet(item: $store.openDog) { dog in
             NavigationStack {
                 DogDetailView(dog: dog)
@@ -184,5 +189,15 @@ struct PressableStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+private extension View {
+    @ViewBuilder func minimizesTabBarOnScroll() -> some View {
+        if #available(iOS 26.0, *) {
+            self.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            self
+        }
     }
 }
