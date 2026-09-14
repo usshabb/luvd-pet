@@ -39,10 +39,17 @@ struct BrowseView: View {
                     // The outline-cropped wordmark at nearly the bar's full
                     // height. The shadowed original is mostly margin, and
                     // fitted here its letters were a third of this size.
+                    // Sized for the space between the bar's buttons, not the
+                    // bar's height. A principal item is only centred while it
+                    // clears both sides; at 128pt it cleared the trailing group
+                    // by ~10pt, and the slightly wider two-per-row glyph on the
+                    // layout toggle tipped it under the bar's minimum, which
+                    // shoves the wordmark left against the gear. 115 × 36 (the
+                    // cropped wordmark's 3.2:1) clears by ~16pt in both states.
                     Image("LogoHeader")
                         .resizable()
                         .scaledToFit()
-                        .frame(height: 40)
+                        .frame(width: 115, height: 36)
                         .accessibilityLabel("LUVD")
                 }
                 ToolbarItem(placement: .topBarLeading) {
