@@ -1963,6 +1963,163 @@ def test_app_api_dogs_and_devices():
     _app._device_hits.clear()
 
 
+def _apple_signer():
+    """A stand-in for Apple: an RSA key, its JWKS entry, and a token minter."""
+    import base64 as _b64
+    import hashlib
+    import time as _time
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    nums = key.public_key().public_numbers()
+    def b64(b):
+        return _b64.urlsafe_b64encode(b).rstrip(b"=").decode()
+    def intb(i):
+        return b64(i.to_bytes((i.bit_length() + 7) // 8, "big"))
+    jwk = {"kid": "TESTKID", "kty": "RSA", "alg": "RS256", "n": intb(nums.n), "e": intb(nums.e)}
+    def mint(nonce="raw-nonce", sub="apple-sub-1", aud="com.luvd.app", exp_in=600,
+             alg="RS256", kid="TESTKID", email="dog@person.com", signer=None):
+        now = int(_time.time())
+        head = b64(json.dumps({"alg": alg, "kid": kid}).encode())
+        body = b64(json.dumps({"iss": "https://appleid.apple.com", "aud": aud, "sub": sub,
+                               "iat": now, "exp": now + exp_in, "email": email,
+                               "nonce": hashlib.sha256(nonce.encode()).hexdigest()}).encode())
+        sig = (signer or key).sign(f"{head}.{body}".encode(), padding.PKCS1v15(), hashes.SHA256())
+        return f"{head}.{body}.{b64(sig)}"
+    return jwk, mint
+
+
+def test_apple_identity_tokens_are_verified_not_trusted():
+    import auth
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    jwk, mint = _apple_signer()
+    real_fetch = auth._fetch_keys
+    auth._fetch_keys = lambda: {"TESTKID": jwk}
+    auth._keys.update(at=0.0, by_kid={})
+    try:
+        claims = auth.verify_identity_token(mint(), "raw-nonce")
+        eq("a good token names its person", claims["sub"], "apple-sub-1")
+        def refused(label, token, nonce="raw-nonce"):
+            try:
+                auth.verify_identity_token(token, nonce)
+                eq(label, "accepted", "refused")
+            except auth.AuthError:
+                eq(label, "refused", "refused")
+        refused("another app's token", mint(aud="com.someone.else"))
+        refused("an expired token", mint(exp_in=-3600))
+        refused("the wrong nonce", mint(), nonce="some-other-nonce")
+        refused("no nonce at all", mint(), nonce="")
+        refused("alg none", mint(alg="none"))
+        other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        refused("signed by someone else's key", mint(signer=other))
+        refused("an unknown key id", mint(kid="NOPE"))
+        refused("garbage", "not.a.jwt")
+    finally:
+        auth._fetch_keys = real_fetch
+        auth._keys.update(at=0.0, by_kid={})
+
+
+def test_accounts_sign_in_sync_and_delete():
+    import app as _app
+    import auth
+    fresh_db("accounts.db")
+    c = _app.app.test_client()
+    jwk, mint = _apple_signer()
+    real_fetch = auth._fetch_keys
+    auth._fetch_keys = lambda: {"TESTKID": jwk}
+    auth._keys.update(at=0.0, by_kid={})
+    _app._auth_hits.clear()
+    try:
+        r = c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "wrong"})
+        eq("a token for another sign-in is refused", r.status_code, 401)
+        r = c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "raw-nonce",
+                                            "name": "Cory O'Keefe"})
+        body = r.get_json()
+        eq("signed in", (r.status_code, body["new"], body["account"]),
+           (200, True, {"email": "dog@person.com", "name": "Cory O'Keefe"}))
+        tok = body["token"]
+        auth_h = {"Authorization": f"Bearer {tok}"}
+        eq("no bearer, no account", c.get("/api/me").status_code, 401)
+        eq("a made-up bearer, no account",
+           c.get("/api/me", headers={"Authorization": "Bearer nope"}).status_code, 401)
+        eq("only a hash of the token is stored",
+           db.connect().execute("SELECT COUNT(*) n FROM sessions WHERE token_hash = ?",
+                                (tok,)).fetchone()["n"], 0)
+
+        phone = [
+            {"id": "nyc:a", "city": "nyc", "name": "Arlo", "photo": "https://e.org/a.jpg",
+             "breed": "Pit mix", "rescue": "Muddy Paws", "saved_at": "2026-09-10T12:00:00Z"},
+            {"id": "nyc:b", "name": "Bea", "photo": "http://insecure/b.jpg", "saved_at": "nonsense"},
+            {"id": ""}, "not a dict",
+        ]
+        r = c.post("/api/me/saved", json={"items": phone, "mode": "merge"}, headers=auth_h)
+        saved = r.get_json()["saved"]
+        eq("merge keeps the good entries and drops the junk", sorted(s["id"] for s in saved),
+           ["nyc:a", "nyc:b"])
+        arlo = next(s for s in saved if s["id"] == "nyc:a")
+        eq("a dog carries enough to draw it later",
+           (arlo["city"], arlo["name"], arlo["photo"], arlo["rescue"]),
+           ("NYC", "Arlo", "https://e.org/a.jpg", "Muddy Paws"))
+        eq("a non-https photo is not kept", next(s for s in saved if s["id"] == "nyc:b")["photo"], None)
+
+        # A second phone signs in to the same Apple id and merges its own list.
+        r = c.post("/api/auth/apple", json={"identity_token": mint(email=None), "nonce": "raw-nonce"})
+        eq("the same person again is not a new account, and keeps their details",
+           (r.get_json()["new"], r.get_json()["account"]["email"], r.get_json()["account"]["name"]),
+           (False, "dog@person.com", "Cory O'Keefe"))
+        eq("and arrives with the saves from the first phone",
+           sorted(s["id"] for s in r.get_json()["saved"]), ["nyc:a", "nyc:b"])
+        tok2 = r.get_json()["token"]
+        auth2 = {"Authorization": f"Bearer {tok2}"}
+        r = c.post("/api/me/saved", headers=auth2, json={"mode": "merge", "items": [
+            {"id": "nyc:a", "saved_at": "2026-09-01T08:00:00Z"},
+            {"id": "la:c", "city": "LA", "name": "Cleo", "saved_at": "2026-09-12T09:00:00Z"}]})
+        rows = r.get_json()["saved"]
+        eq("merging on sign-in loses nothing", sorted(s["id"] for s in rows), ["la:c", "nyc:a", "nyc:b"])
+        eq("a dog saved on both keeps the earlier date",
+           next(s for s in rows if s["id"] == "nyc:a")["saved_at"], "2026-09-01T08:00:00Z")
+        # Bea's date was unreadable, so she was stamped with the moment she
+        # synced — today, after every dated save.
+        eq("newest save first", [r["id"] for r in rows], ["nyc:b", "la:c", "nyc:a"])
+
+        r = c.post("/api/me/saved", headers=auth_h, json={"mode": "replace", "items": [
+            {"id": "la:c", "saved_at": "2026-09-12T09:00:00Z"}]})
+        eq("replace makes an unsave on one phone an unsave on the account",
+           [s["id"] for s in r.get_json()["saved"]], ["la:c"])
+        eq("and keeps what it already knew about the dog",
+           r.get_json()["saved"][0]["name"], "Cleo")
+
+        eq("cities: unknown refused", c.post("/api/me/cities", headers=auth_h,
+                                             json={"cities": ["NYC", "ZZZ"]}).status_code, 400)
+        eq("cities saved", c.post("/api/me/cities", headers=auth_h,
+                                  json={"cities": ["la", "NYC"]}).get_json()["cities"], ["LA", "NYC"])
+        eq("and restored on the next sign-in",
+           c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "raw-nonce"})
+            .get_json()["cities"], ["LA", "NYC"])
+
+        eq("signing out ends that phone's session",
+           c.post("/api/auth/signout", headers=auth2).get_json()["ended"], True)
+        eq("which then cannot be used", c.get("/api/me", headers=auth2).status_code, 401)
+        eq("while the other phone stays signed in", c.get("/api/me", headers=auth_h).status_code, 200)
+
+        eq("dev sign-in does not exist unless switched on",
+           c.post("/api/auth/dev", json={}).status_code, 404)
+
+        eq("delete", c.post("/api/me/delete", headers=auth_h).get_json()["ok"], True)
+        conn = db.connect()
+        eq("deleting leaves nothing behind",
+           [conn.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()["n"]
+            for t in ("users", "sessions", "user_saved")], [0, 0, 0])
+        eq("and the deleted account's session is dead", c.get("/api/me", headers=auth_h).status_code, 401)
+        r = c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "raw-nonce"})
+        eq("signing in again afterwards starts a fresh, empty account",
+           (r.get_json()["new"], r.get_json()["saved"]), (True, []))
+    finally:
+        auth._fetch_keys = real_fetch
+        auth._keys.update(at=0.0, by_kid={})
+        _app._auth_hits.clear()
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

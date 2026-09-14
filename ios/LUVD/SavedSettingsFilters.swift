@@ -25,6 +25,7 @@ struct SavedView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
+                            if store.account == nil { SaveSyncCard() }
                             let available = store.savedAvailable
                             if !available.isEmpty {
                                 LazyVGrid(columns: columns, spacing: 18) {
@@ -119,6 +120,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                AccountSection()
+
                 Section {
                     ForEach(City.all) { city in
                         let on = store.cities.contains(city)
@@ -178,6 +181,9 @@ struct SettingsView: View {
                     LabeledContent("Server", value: API.base.absoluteString)
                     LabeledContent("Push token", value: store.deviceToken.map { String($0.prefix(12)) + "…" } ?? "none yet")
                     LabeledContent("Registered with server", value: store.tokenRegistered ? "Yes" : "No")
+                    if store.account == nil && API.base != API.productionBase {
+                        Button("Dev sign-in (local server)") { Task { await store.signInDev() } }
+                    }
                     if let problem = store.pushProblem {
                         Text(problem).font(.footnote).foregroundStyle(.secondary)
                     }

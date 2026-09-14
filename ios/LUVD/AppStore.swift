@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -70,6 +71,15 @@ final class AppStore {
     private(set) var tokenRegistered = false
     private(set) var pushProblem: String?
 
+    // Account
+    /// Set while signed in. The session token is in the keychain.
+    private(set) var account: Account?
+    private(set) var accountProblem: String?
+    /// The local saved list has changes the account hasn't heard about yet.
+    private var savedDirty = false
+    private var savedSync: Task<Void, Never>?
+    private var lastAccountRefresh: Date?
+
     // Discover
     private(set) var lastDeckAction: DeckAction?
     struct DeckAction: Equatable { let dogID: String; let saved: Bool }
@@ -82,6 +92,9 @@ final class AppStore {
         static let skipped = "skipped.v1"
         static let token = "deviceToken"
         static let seenStories = "seenStories.v1"
+        static let account = "account.v1"
+        static let savedDirty = "savedDirty"
+        static let session = "session"
     }
 
     init() {
@@ -96,6 +109,18 @@ final class AppStore {
         skipped = Set(defaults.stringArray(forKey: Key.skipped) ?? [])
         seenStories = Set(defaults.stringArray(forKey: Key.seenStories) ?? [])
         deviceToken = defaults.string(forKey: Key.token)
+        // A keychain item outlives a deleted app; UserDefaults does not. An
+        // account record with no token means a reinstall, and a token with no
+        // record means one — either way, start signed out.
+        if let data = defaults.data(forKey: Key.account),
+           let a = try? JSONDecoder().decode(Account.self, from: data),
+           Keychain.get(Key.session) != nil {
+            account = a
+        } else {
+            Keychain.delete(Key.session)
+            defaults.removeObject(forKey: Key.account)
+        }
+        savedDirty = defaults.bool(forKey: Key.savedDirty)
     }
 
     var isOnboarded: Bool { !cities.isEmpty }
@@ -125,11 +150,14 @@ final class AppStore {
             UIApplication.shared.registerForRemoteNotifications()
         }
         if isOnboarded && dogs.isEmpty { await load() }
+        await refreshAccount()
     }
 
-    /// Onboarding's one tap: follow that city, ask to notify, load the dogs.
-    func choose(_ chosen: City) async {
-        setCities([chosen])
+    /// Onboarding's last step: follow those cities, ask to notify, load the dogs.
+    func start(with chosen: [City]) async {
+        guard !chosen.isEmpty else { return }
+        setCities(chosen)
+        pushAccountCities()
         Haptics.thud()
         async let loading: Void = load()
         await requestNotifications()
@@ -146,6 +174,7 @@ final class AppStore {
             setCities(cities + [c])
         }
         Haptics.selection()
+        pushAccountCities()
         await load(fresh: true)
         await registerToken(force: true)
     }
@@ -345,8 +374,199 @@ final class AppStore {
         if changed { persistSaved() }
     }
 
-    private func persistSaved() {
+    private func persistSaved(sync: Bool = true) {
         if let data = try? JSONEncoder().encode(saved) { defaults.set(data, forKey: Key.saved) }
+        guard sync, account != nil else { return }
+        setSavedDirty(true)
+        scheduleSavedSync()
+    }
+
+    // MARK: - Account
+
+    private var sessionToken: String? { Keychain.get(Key.session) }
+
+    /// The result of Apple's sheet. Returns true once signed in to LUVD.
+    func signIn(with result: Result<ASAuthorization, Error>, nonce: String) async -> Bool {
+        accountProblem = nil
+        switch result {
+        case .failure(let error):
+            if (error as? ASAuthorizationError)?.code != .canceled {
+                accountProblem = "Apple sign-in didn't finish. Try again."
+            }
+            return false
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                  let tokenData = credential.identityToken,
+                  let identityToken = String(data: tokenData, encoding: .utf8) else {
+                accountProblem = "Apple sign-in didn't finish. Try again."
+                return false
+            }
+            let code = credential.authorizationCode.flatMap { String(data: $0, encoding: .utf8) }
+            let name = credential.fullName.map {
+                PersonNameComponentsFormatter.localizedString(from: $0, style: .default)
+            }
+            do {
+                let signed = try await API.signInWithApple(identityToken: identityToken,
+                                                           authorizationCode: code,
+                                                           nonce: nonce, name: name)
+                await adopt(signed)
+                return true
+            } catch {
+                accountProblem = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                return false
+            }
+        }
+    }
+
+    #if DEBUG
+    /// Signs in against a dev server started with LUVD_DEV_AUTH=1, for the
+    /// simulator, where Apple's sheet may have no Apple ID behind it.
+    func signInDev() async {
+        do { await adopt(try await API.signInDev(who: "tester")) } catch {
+            accountProblem = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+    #endif
+
+    /// A fresh session: keep it, fold this phone's saves into the account, and
+    /// pick up the account's cities if this phone has none yet.
+    private func adopt(_ signed: API.SignedIn) async {
+        Keychain.set(signed.token, for: Key.session)
+        account = signed.account
+        if let data = try? JSONEncoder().encode(signed.account) { defaults.set(data, forKey: Key.account) }
+        Haptics.saved()
+
+        if saved.isEmpty {
+            applyServerSaved(signed.saved)
+        } else if let merged = try? await API.syncSaved(saved.map(savedItem), replace: false, token: signed.token) {
+            applyServerSaved(merged)
+        } else {
+            setSavedDirty(true)
+        }
+
+        let theirs = City.all.filter { signed.cities.contains($0.code) }
+        if cities.isEmpty, !theirs.isEmpty {
+            await start(with: theirs)
+        } else if !cities.isEmpty {
+            pushAccountCities()
+        }
+        lastAccountRefresh = Date()
+    }
+
+    /// On launch and on return to the app: send unsynced changes, or pick up
+    /// saves made on another phone.
+    func refreshAccount(force: Bool = false) async {
+        guard account != nil, let token = sessionToken else { return }
+        if !force, let last = lastAccountRefresh, Date().timeIntervalSince(last) < 60 { return }
+        lastAccountRefresh = Date()
+        do {
+            if savedDirty {
+                let rows = try await API.syncSaved(saved.map(savedItem), replace: true, token: token)
+                setSavedDirty(false)
+                applyServerSaved(rows)
+            } else {
+                let me = try await API.me(token: token)
+                account = me.account
+                applyServerSaved(me.saved)
+            }
+            accountProblem = nil
+        } catch API.AccountError.signedOut {
+            clearAccount(keepSaved: true)
+            accountProblem = API.AccountError.signedOut.errorDescription
+        } catch {
+            // Offline or a server hiccup: the local list stays as it is and the
+            // dirty flag makes sure the change goes up next time.
+        }
+    }
+
+    func signOut() async {
+        if let token = sessionToken {
+            if savedDirty { _ = try? await API.syncSaved(saved.map(savedItem), replace: true, token: token) }
+            await API.signOut(token: token)
+        }
+        // Saves belong to the account now; leaving them would hand them to
+        // whoever signs in on this phone next.
+        clearAccount(keepSaved: false)
+        Haptics.tap()
+    }
+
+    func deleteAccount() async {
+        guard let token = sessionToken else { return }
+        do {
+            try await API.deleteAccount(token: token)
+            clearAccount(keepSaved: false)
+            accountProblem = nil
+        } catch {
+            accountProblem = "Couldn't delete your account. Check your connection and try again."
+        }
+    }
+
+    private func clearAccount(keepSaved: Bool) {
+        savedSync?.cancel()
+        Keychain.delete(Key.session)
+        defaults.removeObject(forKey: Key.account)
+        account = nil
+        setSavedDirty(false)
+        if !keepSaved {
+            saved = []
+            persistSaved(sync: false)
+        }
+    }
+
+    private func setSavedDirty(_ dirty: Bool) {
+        savedDirty = dirty
+        defaults.set(dirty, forKey: Key.savedDirty)
+    }
+
+    /// Collapses a burst of hearts into one request.
+    private func scheduleSavedSync() {
+        savedSync?.cancel()
+        savedSync = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled, let self, let token = self.sessionToken else { return }
+            do {
+                _ = try await API.syncSaved(self.saved.map(self.savedItem), replace: true, token: token)
+                if !Task.isCancelled { self.setSavedDirty(false) }
+            } catch API.AccountError.signedOut {
+                self.clearAccount(keepSaved: true)
+                self.accountProblem = API.AccountError.signedOut.errorDescription
+            } catch {}
+        }
+    }
+
+    private func pushAccountCities() {
+        guard account != nil, let token = sessionToken, !cities.isEmpty else { return }
+        let list = cities
+        Task { try? await API.setAccountCities(list, token: token) }
+    }
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private func savedItem(_ s: SavedSnapshot) -> API.SavedItem {
+        API.SavedItem(id: s.id, city: s.city.isEmpty ? nil : s.city, name: s.name, photo: s.photo,
+                      breed: s.breed, rescue: s.rescue,
+                      saved_at: Self.isoFormatter.string(from: s.savedAt))
+    }
+
+    private func applyServerSaved(_ items: [API.SavedItem]) {
+        let local = Dictionary(saved.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let list = items.map { i -> SavedSnapshot in
+            let d = byID[i.id]
+            return SavedSnapshot(id: i.id,
+                                 name: d?.name ?? i.name ?? local[i.id]?.name ?? "A saved dog",
+                                 photo: d?.photos.first ?? i.photo ?? local[i.id]?.photo,
+                                 breed: d?.displayBreed ?? i.breed ?? local[i.id]?.breed ?? "",
+                                 rescue: d?.sourceLabel ?? i.rescue ?? local[i.id]?.rescue,
+                                 city: i.city ?? d?.cityCode ?? local[i.id]?.city ?? "",
+                                 savedAt: Self.isoFormatter.date(from: i.saved_at) ?? Date())
+        }.sorted { $0.savedAt > $1.savedAt }
+        guard list != saved else { return }
+        saved = list
+        persistSaved(sync: false)
     }
 
     // MARK: - Discover

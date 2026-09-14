@@ -18,6 +18,7 @@ struct LUVDApp: App {
                     Task {
                         await store.refreshNotificationStatus()
                         await store.refreshIfStale()
+                        await store.refreshAccount()
                     }
                 }
         }

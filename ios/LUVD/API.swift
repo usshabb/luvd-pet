@@ -124,6 +124,114 @@ enum API {
         _ = try? await post("api/devices/delete", ["token": token])
     }
 
+    // MARK: account
+
+    struct SavedItem: Codable {
+        let id: String
+        var city: String?
+        var name: String?
+        var photo: String?
+        var breed: String?
+        var rescue: String?
+        var saved_at: String
+    }
+
+    struct SignedIn: Decodable {
+        let token: String
+        let account: Account
+        let cities: [String]
+        let saved: [SavedItem]
+    }
+
+    struct Me: Decodable {
+        let account: Account
+        let cities: [String]
+        let saved: [SavedItem]
+    }
+
+    private struct SavedEnvelope: Decodable { let saved: [SavedItem] }
+
+    enum AccountError: LocalizedError {
+        case signedOut
+        case unavailable
+        case refused
+
+        var errorDescription: String? {
+            switch self {
+            case .signedOut: return "You were signed out. Sign in again to keep syncing."
+            case .unavailable: return "Accounts aren't switched on yet. Your saves stay on this phone for now."
+            case .refused: return "Apple sign-in couldn't be confirmed. Try again."
+            }
+        }
+    }
+
+    static func signInWithApple(identityToken: String, authorizationCode: String?,
+                                nonce: String, name: String?) async throws -> SignedIn {
+        var body: [String: Any] = ["identity_token": identityToken, "nonce": nonce]
+        if let authorizationCode { body["authorization_code"] = authorizationCode }
+        if let name, !name.isEmpty { body["name"] = name }
+        return try await send("api/auth/apple", body: body, token: nil)
+    }
+
+    #if DEBUG
+    static func signInDev(who: String) async throws -> SignedIn {
+        try await send("api/auth/dev", body: ["who": who], token: nil)
+    }
+    #endif
+
+    static func me(token: String) async throws -> Me {
+        try await send("api/me", body: nil, token: token)
+    }
+
+    static func syncSaved(_ items: [SavedItem], replace: Bool, token: String) async throws -> [SavedItem] {
+        let body: [String: Any] = [
+            "mode": replace ? "replace" : "merge",
+            "items": items.map { i -> [String: Any] in
+                var d: [String: Any] = ["id": i.id, "saved_at": i.saved_at]
+                d["city"] = i.city; d["name"] = i.name; d["photo"] = i.photo
+                d["breed"] = i.breed; d["rescue"] = i.rescue
+                return d.compactMapValues { $0 }
+            },
+        ]
+        let env: SavedEnvelope = try await send("api/me/saved", body: body, token: token)
+        return env.saved
+    }
+
+    static func setAccountCities(_ cities: [City], token: String) async throws {
+        struct OK: Decodable {}
+        let _: OK = try await send("api/me/cities", body: ["cities": cities.map(\.code)], token: token)
+    }
+
+    static func signOut(token: String) async {
+        struct OK: Decodable {}
+        let _: OK? = try? await send("api/auth/signout", body: [:], token: token)
+    }
+
+    static func deleteAccount(token: String) async throws {
+        struct OK: Decodable {}
+        let _: OK = try await send("api/me/delete", body: [:], token: token)
+    }
+
+    /// GET when `body` is nil, POST JSON otherwise. A 401 is a signed-out
+    /// session; a 404 is a server from before accounts existed.
+    private static func send<T: Decodable>(_ path: String, body: [String: Any]?, token: String?) async throws -> T {
+        var req = URLRequest(url: base.appendingPathComponent(path))
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        if let body {
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await session.data(for: req)
+        switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
+        case 200: return try JSONDecoder().decode(T.self, from: data)
+        case 401: throw token == nil ? AccountError.refused : AccountError.signedOut
+        case 404, 405: throw AccountError.unavailable
+        case let code: throw APIError.status(code)
+        }
+    }
+
     /// The same counters the website feeds, so app traffic shows up in the
     /// weekly rescue report instead of being invisible to it.
     static func recordView(_ dog: Dog) {

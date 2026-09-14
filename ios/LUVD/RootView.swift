@@ -67,9 +67,32 @@ struct MainTabs: View {
 struct OnboardingView: View {
     @Environment(AppStore.self) private var store
     @State private var preview: [Dog] = []
-    @State private var choosing: City?
+    /// Past the sign-up screen, by signing in or by "Not now".
+    @State private var pickingCities = false
 
     var body: some View {
+        ZStack {
+            if pickingCities || store.account != nil {
+                CityPicker(canGoBack: store.account == nil) {
+                    withAnimation(.easeInOut(duration: 0.3)) { pickingCities = false }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                welcome.transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: store.account != nil)
+        .task {
+            guard preview.isEmpty, let p = try? await API.dogs(for: .nyc) else { return }
+            withAnimation(.easeOut(duration: 0.6)) {
+                preview = Array(p.dogs.filter { !$0.photos.isEmpty }.prefix(12))
+            }
+        }
+    }
+
+    /// Step one: who you are. Signing in is the obvious path; "Not now" is
+    /// always there, because browsing dogs never needs an account.
+    private var welcome: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
                 PhotoWall(dogs: preview)
@@ -94,41 +117,123 @@ struct OnboardingView: View {
                         .font(Theme.display(29))
                         .multilineTextAlignment(.center)
                         .padding(.top, 10)
-                    Text("Only top-rated rescues. A heads-up the moment new dogs are listed.")
+                    Text("Only top-rated rescues. Save the dogs you love and hear the moment new ones are listed.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 8)
 
-                    VStack(spacing: 11) {
-                        ForEach(City.all) { city in
-                            CityButton(city: city, busy: choosing == city) { choose(city) }
-                        }
-                    }
-                    .padding(.top, 26)
+                    AppleSignInButton(label: .continue)
+                        .padding(.top, 28)
 
-                    Text("One tap. No account. We'll ask once to send you new dogs.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 14)
+                    Button("Not now") {
+                        withAnimation(.easeInOut(duration: 0.3)) { pickingCities = true }
+                    }
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(height: 44)
+                    .padding(.top, 6)
+
+                    if let problem = store.accountProblem {
+                        Text(problem)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.red)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    #if DEBUG
+                    if API.base != API.productionBase {
+                        Button("Dev sign-in (local server)") { Task { await store.signInDev() } }
+                            .font(.footnote)
+                    }
+                    #endif
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 20)
-            }
-        }
-        .task {
-            guard preview.isEmpty, let p = try? await API.dogs(for: .nyc) else { return }
-            withAnimation(.easeOut(duration: 0.6)) {
-                preview = Array(p.dogs.filter { !$0.photos.isEmpty }.prefix(12))
+                .padding(.bottom, 12)
             }
         }
     }
+}
 
-    private func choose(_ city: City) {
-        guard choosing == nil else { return }
-        choosing = city
-        Task { await store.choose(city) }
+/// Step two: every city you want, not just one.
+private struct CityPicker: View {
+    @Environment(AppStore.self) private var store
+    let canGoBack: Bool
+    let back: () -> Void
+
+    @State private var picked: Set<City> = []
+    @State private var starting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                if canGoBack {
+                    Button(action: back) {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Back")
+                }
+                Spacer()
+            }
+            .frame(height: 44)
+
+            if let name = store.account?.name?.split(separator: " ").first {
+                Text("Welcome, \(name).")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Theme.red)
+                    .padding(.top, 12)
+            }
+            Text("Where are you looking?")
+                .font(Theme.display(32))
+                .padding(.top, 6)
+            Text("Pick as many cities as you like. Their dogs share one feed, and you can change this any time in Settings.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
+
+            VStack(spacing: 11) {
+                ForEach(City.all) { city in
+                    CityToggle(city: city, on: picked.contains(city)) {
+                        if picked.contains(city) { picked.remove(city) } else { picked.insert(city) }
+                        Haptics.selection()
+                    }
+                }
+            }
+            .padding(.top, 26)
+
+            Spacer()
+
+            Button {
+                starting = true
+                let chosen = City.all.filter { picked.contains($0) }
+                Task { await store.start(with: chosen) }
+            } label: {
+                ZStack {
+                    if starting { ProgressView().tint(.white) } else {
+                        Text(picked.isEmpty ? "Pick a city" : "Show me dogs")
+                            .font(Theme.display(18, .semibold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(picked.isEmpty ? Color.secondary.opacity(0.35) : Theme.red, in: Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(picked.isEmpty || starting)
+            .animation(.easeInOut(duration: 0.2), value: picked.isEmpty)
+
+            Text("We'll ask once to send you new dogs.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 12)
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 12)
+        .background(Theme.background.ignoresSafeArea())
     }
 }
 
@@ -153,9 +258,9 @@ private struct PhotoWall: View {
     }
 }
 
-private struct CityButton: View {
+private struct CityToggle: View {
     let city: City
-    let busy: Bool
+    let on: Bool
     let action: () -> Void
 
     var body: some View {
@@ -171,16 +276,21 @@ private struct CityButton: View {
                     Text(city.blurb).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if busy { ProgressView() } else {
-                    Image(systemName: "chevron.right").font(.body.weight(.semibold)).foregroundStyle(.tertiary)
-                }
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(on ? Theme.red : Color.secondary.opacity(0.45))
+                    .contentTransition(.symbolEffect(.replace))
             }
             .padding(13)
             .background(Theme.groupedSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(on ? Theme.red : .clear, lineWidth: 2)
+            }
             .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
         }
         .buttonStyle(PressableStyle())
-        .accessibilityHint("Shows dogs in \(city.name) and asks to notify you about new ones")
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
