@@ -375,6 +375,17 @@ def run(dry_run=False, city=None):
         print("No new dogs today — no email sent (by design).")
         return dogs
 
+    # Push before the email gates, not behind them. EMAILS_PAUSED is an email
+    # switch, and a morning with no email subscribers can still be a morning
+    # with app installs; push has its own PUSH_PAUSED and its own unconfigured
+    # case, both handled inside. Never fatal — a failed push must not cost the
+    # digest that follows it.
+    try:
+        import push
+        push.send_new_dogs(city, new_today)
+    except Exception as e:
+        print(f"  push failed: {type(e).__name__}: {e}")
+
     # EMAILS_PAUSED stops the subscriber send while leaving the run itself
     # intact: the page renders, dogs are recorded as seen, and today's arrivals
     # are deliberately NOT queued for later — unpausing resumes with tomorrow's

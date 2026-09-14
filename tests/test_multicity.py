@@ -1661,6 +1661,259 @@ def _rules_for(css: str, selector: str):
     return out
 
 
+
+# ------------------------------------------------------------------- app + push
+_APNS_ENV = ("APNS_KEY", "APNS_KEY_ID", "APNS_TEAM_ID", "APNS_BUNDLE_ID", "PUSH_PAUSED")
+
+
+def _with_env(**values):
+    saved = {k: os.environ.get(k) for k in _APNS_ENV}
+    for k in _APNS_ENV:
+        os.environ.pop(k, None)
+    os.environ.update({k: v for k, v in values.items() if v is not None})
+    return saved
+
+
+def _restore_env(saved):
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def _fake_apns_key():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(serialization.Encoding.PEM,
+                            serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    return key, pem
+
+
+def test_push_payload_reads_like_a_person_wrote_it():
+    import push
+    one = [dog("muddypaws", 1, "Fiona")]
+    one[0].breed, one[0].age, one[0].source_label = "Terrier", "2 years", "Muddy Paws Rescue"
+    p = push.build_payload(one, "NYC", "2026-09-14")
+    eq("one dog is named in the title", p["aps"]["alert"]["title"], "Fiona just arrived")
+    eq("and described in the body", p["aps"]["alert"]["body"],
+       "Terrier · 2 years · Muddy Paws Rescue")
+    unknown = [dog("muddypaws", 1, "Fiona")]
+    unknown[0].breed, unknown[0].age, unknown[0].source_label = "Unknown", "5 years", "Muddy Paws Rescue"
+    eq("an 'Unknown' breed never reaches a lock screen",
+       push.build_payload(unknown, "NYC")["aps"]["alert"]["body"], "5 years · Muddy Paws Rescue")
+    two = [dog("muddypaws", 1, "Fiona"), dog("muddypaws", 2, "Loki")]
+    eq("two dogs join with and", push.build_payload(two, "NYC")["aps"]["alert"]["body"],
+       "Meet Fiona and Loki")
+    five = [dog("muddypaws", i, n) for i, n in
+            enumerate(["Fiona", "Loki", "Jaro", "Tina", "Quiche"])]
+    p = push.build_payload(five, "LA")
+    eq("many dogs are counted in the title", p["aps"]["alert"]["title"], "5 new dogs in LA")
+    eq("three named, the rest counted", p["aps"]["alert"]["body"],
+       "Meet Fiona, Loki, Jaro and 2 more")
+    eq("one thread per city", p["aps"]["thread-id"], "new-dogs-LA")
+    many = [dog("muddypaws", i, f"D{i}") for i in range(40)]
+    eq("ids capped for the 4KB payload limit",
+       len(push.build_payload(many, "NYC")["dog_ids"]), push.MAX_IDS)
+    eq("payload fits APNs' 4KB",
+       len(json.dumps(push.build_payload(many, "NYC")).encode()) < 4096, True)
+
+
+def test_push_is_inert_until_configured():
+    import push
+    fresh_db("push_inert.db")
+    db.add_device("a" * 64, "NYC")
+    saved = _with_env()
+    try:
+        eq("unconfigured sends nothing", push.send_new_dogs("NYC", [dog("muddypaws", 1, "F")]), None)
+        _, pem = _fake_apns_key()
+        os.environ.update(APNS_KEY=pem, APNS_KEY_ID="ABC123DEFG",
+                          APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app",
+                          PUSH_PAUSED="1")
+        eq("PUSH_PAUSED sends nothing", push.send_new_dogs("NYC", [dog("muddypaws", 1, "F")]), None)
+        os.environ.pop("PUSH_PAUSED")
+        eq("no dogs sends nothing", push.send_new_dogs("NYC", []), None)
+        eq("no devices in the city sends nothing",
+           push.send_new_dogs("LA", [dog("wagmor", 1, "F")]), None)
+    finally:
+        _restore_env(saved)
+
+
+def test_push_signs_sends_and_prunes():
+    """Real signing, fake Apple. Proves the JWT verifies and dead tokens go."""
+    import base64 as _b64
+    import httpx
+    import push
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    fresh_db("push_send.db")
+    ok, gone, sandbox = "a" * 64, "b" * 64, "c" * 64
+    db.add_device(ok, "NYC")
+    db.add_device(gone, "NYC")
+    db.add_device(sandbox, "NYC", env="sandbox")
+    db.add_device("d" * 64, "LA")
+    key, pem = _fake_apns_key()
+    saved = _with_env(APNS_KEY=pem.replace("\n", "\\n"), APNS_KEY_ID="ABC123DEFG",
+                      APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app")
+    push._jwt.update(token=None, at=0.0)
+    calls = []
+
+    def apple(request):
+        token = request.url.path.rsplit("/", 1)[-1]
+        calls.append((request.url.host, token, dict(request.headers), request.content))
+        if token == gone:
+            return httpx.Response(410, json={"reason": "Unregistered"})
+        return httpx.Response(200)
+
+    try:
+        client = httpx.Client(transport=httpx.MockTransport(apple))
+        result = push.send_new_dogs("NYC", [dog("muddypaws", 1, "Fiona")], client=client)
+    finally:
+        _restore_env(saved)
+        push._jwt.update(token=None, at=0.0)
+
+    eq("two delivered, one dead", (result["sent"], result["dead"]), (2, [gone]))
+    eq("the dead token is pruned", sorted(d["token"] for d in db.devices_for("NYC")),
+       sorted([ok, sandbox]))
+    eq("the LA device was never contacted", any(t == "d" * 64 for _, t, _, _ in calls), False)
+    hosts = {t: h for h, t, _, _ in calls}
+    eq("production token goes to production", hosts[ok], "api.push.apple.com")
+    eq("sandbox token goes to sandbox", hosts[sandbox], "api.sandbox.push.apple.com")
+    headers = calls[0][2]
+    eq("topic is the bundle id", headers["apns-topic"], "com.luvd.app")
+    eq("alert push type", headers["apns-push-type"], "alert")
+    eq("one collapse id per city-morning", headers["apns-collapse-id"].startswith("new-NYC-"), True)
+    eq("body is the built payload", json.loads(calls[0][3])["dog_ids"], ["muddypaws:1"])
+
+    jwt = headers["authorization"].split(" ", 1)[1]
+    head_b64, claims_b64, sig_b64 = jwt.split(".")
+    pad = lambda s: s + "=" * (-len(s) % 4)
+    eq("JWT header names ES256 and the key id",
+       json.loads(_b64.urlsafe_b64decode(pad(head_b64))), {"alg": "ES256", "kid": "ABC123DEFG"})
+    eq("JWT is issued by the team", json.loads(_b64.urlsafe_b64decode(pad(claims_b64)))["iss"],
+       "TEAM123456")
+    raw = _b64.urlsafe_b64decode(pad(sig_b64))
+    eq("signature is raw R||S, not DER", len(raw), 64)
+    try:
+        key.public_key().verify(
+            encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")),
+            f"{head_b64}.{claims_b64}".encode(), ec.ECDSA(hashes.SHA256()))
+        verified = True
+    except Exception:
+        verified = False
+    eq("signature verifies against the key's public half", verified, True)
+
+
+def test_push_retries_a_mislabelled_token_before_deleting_it():
+    import httpx
+    import push
+    fresh_db("push_retry.db")
+    tok = "e" * 64
+    db.add_device(tok, "NYC", env="production")     # really a sandbox token
+    _, pem = _fake_apns_key()
+    saved = _with_env(APNS_KEY=pem, APNS_KEY_ID="ABC123DEFG",
+                      APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app")
+    push._jwt.update(token=None, at=0.0)
+
+    def apple(request):
+        if request.url.host == "api.push.apple.com":
+            return httpx.Response(400, json={"reason": "BadDeviceToken"})
+        return httpx.Response(200)
+
+    try:
+        result = push.send_new_dogs("NYC", [dog("muddypaws", 1, "F")],
+                                    client=httpx.Client(transport=httpx.MockTransport(apple)))
+    finally:
+        _restore_env(saved)
+        push._jwt.update(token=None, at=0.0)
+    eq("delivered via the other host", (result["sent"], result["dead"]), (1, []))
+    eq("and the token survives", len(db.devices_for("NYC")), 1)
+
+
+def test_nightly_run_pushes_new_dogs_but_not_on_a_dry_run():
+    import check
+    import emailer
+    import push
+    fresh_db("push_run.db")
+    pushed = []
+    saved = (check.sources_for_city, emailer.send_digest, check.page.write,
+             check.normalize, check.enrich, check._alert, push.send_new_dogs)
+    try:
+        check.sources_for_city = lambda c: [FakeNYCSource(NYC_DOGS)]
+        emailer.send_digest = lambda *a, **k: None
+        check.page.write = lambda pages, for_date=None: Path("/dev/null")
+        check.normalize = lambda dogs: dogs
+        check.enrich = lambda dogs: dogs
+        check._alert = lambda *a, **k: None
+        push.send_new_dogs = lambda city, dogs, **k: pushed.append(
+            (city, sorted(d.id for d in dogs)))
+        check.run(city="NYC", dry_run=True)
+        eq("dry run pushes nothing", pushed, [])
+        check.run(city="NYC")
+        eq("real run pushes the new dogs once",
+           pushed, [("NYC", ["animalhaven:3", "muddypaws:1", "muddypaws:2"])])
+        # new_today is "first seen today", not "first seen this run", so a
+        # same-day rerun re-sends the morning — exactly as the email digest
+        # does. What keeps that off the lock screen twice is the apns-collapse-id
+        # (new-<city>-<date>, asserted in test_push_signs_sends_and_prunes),
+        # which makes the second notification replace the first.
+        pushed.clear()
+        check.run(city="NYC")
+        eq("a same-day rerun re-sends the same morning",
+           pushed, [("NYC", ["animalhaven:3", "muddypaws:1", "muddypaws:2"])])
+    finally:
+        (check.sources_for_city, emailer.send_digest, check.page.write,
+         check.normalize, check.enrich, check._alert, push.send_new_dogs) = saved
+
+
+def test_app_api_dogs_and_devices():
+    import app as _app
+    import emailer
+    fresh_db("api.db")
+    c = _app.app.test_client()
+    real_page_dogs = emailer._page_dogs
+    rows = {f"t:{i}": {"id": f"t:{i}", "name": f"D{i}", "photos": [f"https://e.org/{j}.jpg" for j in range(12)],
+                       "scores": {"energy": 2}, "secret_internal": "x", "b": "not for the app"}
+            for i in range(3)}
+    try:
+        emailer._page_dogs = lambda code: rows if code == "NYC" else {}
+        r = c.get("/api/dogs?city=nyc")
+        body = r.get_json()
+        eq("dogs served", (r.status_code, body["count"], body["city"]), (200, 3, "NYC"))
+        eq("page order kept", [d["id"] for d in body["dogs"]], ["t:0", "t:1", "t:2"])
+        eq("only named fields leave", "secret_internal" in body["dogs"][0] or "b" in body["dogs"][0], False)
+        eq("photos capped at 8", len(body["dogs"][0]["photos"]), 8)
+        eq("city's own date included", bool(re.match(r"\d{4}-\d{2}-\d{2}$", body["today"])), True)
+        eq("cacheable", "max-age" in r.headers.get("Cache-Control", ""), True)
+        eq("no page yet is a 503, not an empty city", c.get("/api/dogs?city=LA").status_code, 503)
+        eq("unknown city refused", c.get("/api/dogs?city=LAX").status_code, 400)
+    finally:
+        emailer._page_dogs = real_page_dogs
+
+    tok = "ab" * 32
+    _app._device_hits.clear()
+    eq("bad token refused", c.post("/api/devices", json={"token": "xyz", "city": "NYC"}).status_code, 400)
+    eq("unknown city refused", c.post("/api/devices", json={"token": tok, "city": "ZZZ"}).status_code, 400)
+    r = c.post("/api/devices", json={"token": tok, "city": "NYC", "env": "sandbox"})
+    eq("registered", (r.status_code, r.get_json()["changed"]), (200, True))
+    eq("re-registering unchanged is quiet",
+       c.post("/api/devices", json={"token": tok, "city": "NYC", "env": "sandbox"}).get_json()["changed"], False)
+    eq("moving city is a change",
+       c.post("/api/devices", json={"token": tok, "city": "LA", "env": "sandbox"}).get_json()["changed"], True)
+    eq("one row per device", (db.devices_for("NYC"), [d["env"] for d in db.devices_for("LA")]),
+       ([], ["sandbox"]))
+    eq("removed", c.post("/api/devices/delete", json={"token": tok}).get_json()["removed"], True)
+    _app._device_hits.clear()
+    codes = [c.post("/api/devices", json={"token": tok, "city": "NYC"}).status_code
+             for _ in range(_app._DEVICE_MAX + 1)]
+    eq("rate limited honestly", (codes[0], codes[-1]), (200, 429))
+    _app._device_hits.clear()
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

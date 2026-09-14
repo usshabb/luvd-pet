@@ -6,7 +6,7 @@ import base64
 import logging
 import os
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 import threading
 from html import escape as html_escape
@@ -827,6 +827,105 @@ def subscribers():
         return denied
     return jsonify({"total": len(db.list_subscribers()),
                     "by_city": db.subscriber_city_counts()})
+
+
+# ---- app API -------------------------------------------------------------------
+# What the LUVD iOS app reads and writes. Deliberately thin: the dogs come from
+# the same rendered payload the city page is built from, so the app can never
+# show a dog the site does not, and there is no second pipeline to keep in step.
+
+# The fields the app renders. Named rather than passed through wholesale, so a
+# field added to the page for the page's own reasons does not silently become
+# part of an API an installed app depends on.
+_API_DOG_FIELDS = (
+    "id", "name", "path", "photos", "breed", "breed_group", "age", "age_bucket",
+    "sex", "size_bucket", "weight", "adult_lbs", "source", "source_label",
+    "location", "fee", "cta_url", "url", "first_seen", "waiting_days",
+    "program", "program_label", "quip", "scores", "size_outlook",
+    "monthly_cost", "traits", "description",
+)
+# An APNs device token is 32 bytes of hex today; Apple says to treat the length
+# as variable, so this bounds it rather than pinning it.
+_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{64,200}$")
+_DEVICE_MAX = 20
+_device_hits: dict = {}
+
+
+@app.route("/api/dogs")
+def api_dogs():
+    """Every adoptable dog in one city, in the page's own feed order."""
+    import emailer
+    from zoneinfo import ZoneInfo
+
+    asked = (request.args.get("city") or "").strip()
+    # No city means the default; a city we have never heard of is an error. An
+    # app sending "LAX" and silently receiving New York's dogs would be the
+    # same wrong-city bug the email digest spent weeks shaking out.
+    code = cities.canon(asked) if asked else cities.DEFAULT_CITY
+    if not code:
+        return jsonify({"ok": False, "error": "unknown city"}), 400
+    if not cities.is_live(code):
+        return jsonify({"ok": False, "error": "city not open yet"}), 404
+    c = cities.resolve(code)
+    rows = list(emailer._page_dogs(code).values())
+    if not rows:
+        # No page on disk yet — a fresh volume mid-render. 503 rather than an
+        # empty 200, so the app retries instead of telling someone a whole
+        # city has no dogs.
+        return jsonify({"ok": False, "error": "not rendered yet"}), 503
+    dogs = []
+    for r in rows:
+        d = {k: r[k] for k in _API_DOG_FIELDS if k in r}
+        d["photos"] = [p for p in (r.get("photos") or []) if p][:8]
+        dogs.append(d)
+    page = PUBLIC / c.file
+    updated = (datetime.fromtimestamp(page.stat().st_mtime, tz=timezone.utc)
+               .isoformat() if page.exists() else None)
+    resp = jsonify({
+        "ok": True, "city": c.code, "name": c.name, "short": c.short,
+        # The city's date, not the server's or the phone's. "New today" is
+        # judged against first_seen, which is recorded in the city's own zone,
+        # so a phone in another timezone must not decide what today is.
+        "today": datetime.now(ZoneInfo(c.tz)).date().isoformat(),
+        "updated": updated, "count": len(dogs), "dogs": dogs,
+    })
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
+@app.route("/api/devices", methods=["POST"])
+def api_register_device():
+    """Remember a phone that wants to hear about new dogs in one city.
+
+    No form token and no honeypot, unlike the email forms: those exist because
+    a bot that subscribes an address makes us mail a stranger. A fake device
+    token makes us send nothing to anyone — APNs refuses it the first morning
+    and push.py deletes the row. The rate limit is enough to keep the table
+    from being flooded in between.
+    """
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    if not _TOKEN_RE.match(token):
+        return jsonify({"ok": False, "error": "invalid token"}), 400
+    code = cities.canon(str(data.get("city") or "").strip())
+    if not code or not cities.is_live(code):
+        return jsonify({"ok": False, "error": "unknown city"}), 400
+    # Unlike the email forms this answers honestly when throttled: the caller is
+    # our own app, which should back off, not a bot to be kept guessing.
+    if not _rate_ok(_device_hits, _client_ip(), _DEVICE_MAX):
+        return jsonify({"ok": False, "error": "slow down"}), 429
+    env = "sandbox" if data.get("env") == "sandbox" else "production"
+    changed = db.add_device(token, code, env=env)
+    return jsonify({"ok": True, "city": code, "changed": changed})
+
+
+@app.route("/api/devices/delete", methods=["POST"])
+def api_remove_device():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    if not _TOKEN_RE.match(token):
+        return jsonify({"ok": False, "error": "invalid token"}), 400
+    return jsonify({"ok": True, "removed": db.remove_device(token)})
 
 
 @app.route("/cities")

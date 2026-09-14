@@ -5,3 +5,5 @@ anthropic
 python-dotenv
 gunicorn
 Pillow
+httpx[http2]
+cryptography

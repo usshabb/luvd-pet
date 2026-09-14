@@ -140,6 +140,28 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_saved_email ON saved_lists(email)"
         )
+        # A phone that asked to hear about new dogs. The token is Apple's
+        # address for one install of the app, not a person: it names no one,
+        # changes on reinstall, and APNs itself tells us when it stops
+        # working, at which point push.py deletes the row.
+        #
+        # One city per device, keyed on the token, so changing city in the app
+        # is an upsert rather than a second subscription to keep in step.
+        # `env` is which APNs host the token belongs to — a debug build's
+        # token is a sandbox token and production refuses it.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS devices (
+                token TEXT PRIMARY KEY,
+                city TEXT NOT NULL,
+                platform TEXT NOT NULL DEFAULT 'ios',
+                env TEXT NOT NULL DEFAULT 'production',
+                created TEXT DEFAULT (datetime('now')),
+                updated TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_devices_city ON devices(city)"
+        )
         # One row per mail-out, and click counts hanging off it. Deliberately
         # aggregate: a send knows how many opened it, never which addresses, so
         # the privacy page's "anonymous counts" stays literally true. Going
@@ -759,6 +781,50 @@ def email_stats(days: int = 7) -> dict:
         "opens": totals["opens"] if totals else 0,
         "clicks": totals["clicks"] if totals else 0,
     }
+
+
+def add_device(token: str, city: str, env: str = "production",
+               platform: str = "ios") -> bool:
+    """Register or move a device. True when the row is new or its city changed.
+
+    The app re-registers on every launch, since iOS can hand out a new token
+    at any time, so an unchanged re-registration must be a quiet no-op rather
+    than something that looks like a signup.
+    """
+    token = (token or "").strip()
+    env = "sandbox" if env == "sandbox" else "production"
+    with connect() as conn:
+        row = conn.execute("SELECT city, env FROM devices WHERE token = ?",
+                           (token,)).fetchone()
+        conn.execute(
+            "INSERT INTO devices(token, city, platform, env) VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(token) DO UPDATE SET city = excluded.city, "
+            "env = excluded.env, updated = datetime('now')",
+            (token, city, platform[:16], env),
+        )
+    return row is None or row["city"] != city or row["env"] != env
+
+
+def remove_device(token: str) -> bool:
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM devices WHERE token = ?",
+                           ((token or "").strip(),))
+    return bool(cur.rowcount)
+
+
+def devices_for(city: str) -> list:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT token, env FROM devices WHERE city = ? ORDER BY created",
+            (city,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def device_counts() -> dict:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT city, COUNT(*) n FROM devices GROUP BY city").fetchall()
+    return {r["city"]: r["n"] for r in rows}
 
 
 def weekly_report(days: int = 7) -> dict:
