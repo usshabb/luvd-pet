@@ -100,6 +100,8 @@ struct StoryViewer: View {
     @State private var profileDog: Dog?
     @State private var burst = false
     @State private var finished = false
+    @State private var bob = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let perPhoto: TimeInterval = 5
     private let maxSegments = 6
@@ -248,35 +250,70 @@ struct StoryViewer: View {
             if let quip = dog.quip {
                 Text("“\(quip)”").font(Theme.display(19, .semibold)).lineLimit(2)
             }
-            HStack(spacing: 10) {
-                Button { profileDog = dog } label: {
-                    Label("See \(dog.displayName)", systemImage: "chevron.up")
-                        .font(Theme.display(16, .semibold))
-                        .lineLimit(1)
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 16)
-                        .frame(height: 46)
-                        .background(.white, in: Capsule())
-                }
-                Spacer()
-                let saved = store.isSaved(dog)
-                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) { store.toggleSave(dog) } } label: {
-                    Image(systemName: saved ? "heart.fill" : "heart")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(saved ? Theme.red : .white)
-                        .symbolEffect(.bounce, value: saved)
-                        .frame(width: 46, height: 46)
-                }
-                .accessibilityLabel(saved ? "Remove from saved" : "Save \(dog.displayName)")
-                if let url = dog.webURL(base: API.productionBase) {
-                    ShareLink(item: url, message: Text("Meet \(dog.displayName) on LUVD")) {
-                        Image(systemName: "paperplane")
-                            .font(.system(size: 22, weight: .semibold))
-                            .frame(width: 46, height: 46)
-                    }
-                    .accessibilityLabel("Share \(dog.displayName)")
-                }
+            // Instagram's link convention: the call to action centred at the
+            // bottom with a small up arrow above it, which is also the swipe-up
+            // gesture it stands for. Save and share flank it so the row balances.
+            HStack(alignment: .bottom) {
+                saveButton
+                Spacer(minLength: 12)
+                meetButton
+                Spacer(minLength: 12)
+                shareButton
             }
+            .padding(.top, 4)
+        }
+    }
+
+    private var meetButton: some View {
+        Button { profileDog = dog } label: {
+            VStack(spacing: 3) {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 17, weight: .bold))
+                    .offset(y: bob ? -4 : 1)
+                Text("Meet \(dog.displayName)")
+                    .font(Theme.display(16, .semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 20)
+                    .frame(height: 42)
+                    .frame(maxWidth: 230)
+                    .background(.white, in: Capsule())
+            }
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(PressableStyle())
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { bob = true }
+        }
+        .accessibilityLabel("Meet \(dog.displayName)")
+        .accessibilityHint("Opens the full profile. You can also swipe up.")
+    }
+
+    private var saveButton: some View {
+        let saved = store.isSaved(dog)
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) { store.toggleSave(dog) }
+        } label: {
+            Image(systemName: saved ? "heart.fill" : "heart")
+                .font(.system(size: 25, weight: .semibold))
+                .foregroundStyle(saved ? Theme.red : .white)
+                .symbolEffect(.bounce, value: saved)
+                .frame(width: 48, height: 48)
+        }
+        .accessibilityLabel(saved ? "Remove from saved" : "Save \(dog.displayName)")
+    }
+
+    @ViewBuilder private var shareButton: some View {
+        if let url = dog.webURL(base: API.productionBase) {
+            ShareLink(item: url, message: Text("Meet \(dog.displayName) on LUVD")) {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 23, weight: .semibold))
+                    .frame(width: 48, height: 48)
+            }
+            .accessibilityLabel("Share \(dog.displayName)")
+        } else {
+            Color.clear.frame(width: 48, height: 48)
         }
     }
 
