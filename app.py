@@ -930,7 +930,12 @@ def api_register_device():
         return jsonify({"ok": False, "error": "slow down"}), 429
     env = "sandbox" if data.get("env") == "sandbox" else "production"
     changed = db.set_device_cities(token, codes, env=env)
-    return jsonify({"ok": True, "cities": codes, "changed": changed})
+    import push
+    # Tells the app whether mornings will arrive as real push. Until they do,
+    # the app notifies from its own background refresh; once they do, it stops,
+    # so nobody gets the same morning twice.
+    return jsonify({"ok": True, "cities": codes, "changed": changed,
+                    "push": push.configured()})
 
 
 @app.route("/api/devices/delete", methods=["POST"])

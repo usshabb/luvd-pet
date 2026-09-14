@@ -98,42 +98,55 @@ def _join(names: List[str], more: int) -> str:
     return ", ".join(names[:-1]) + f" and {names[-1]}"
 
 
-def build_payload(dogs, city: str, today: str = None) -> dict:
-    """The notification for one city's morning.
+def featured(dogs):
+    """The one dog a morning's notification is about: the first with a photo,
+    in feed order, which is already freshest-first and alternates rescues."""
+    return next((d for d in dogs if d.photos), dogs[0] if dogs else None)
 
-    One dog is named in the title, because a single arrival is news about that
-    dog. Several are counted in the title and named in the body, because the
-    count is the news and the names are the reason to tap.
+
+def _clean_breed(breed: str) -> str:
+    # Rescues type "Unknown" into the breed field as often as they leave it
+    # blank, and a lock screen reading "Unknown · 5 years" sounds like the dog
+    # is a mystery rather than a mix. Say nothing instead.
+    b = (breed or "").strip()
+    return "" if b.lower() in ("unknown", "unknown breed", "n/a", "-") else b
+
+
+def build_payload(dogs, city: str, today: str = None) -> dict:
+    """The notification for one city's morning, built around one dog.
+
+    A count ("5 new dogs in LA") is news about the list; a dog with a name and
+    a face is a reason to open the app. So the title names one dog, the subtitle
+    carries the count, and the photo rides along for the service extension to
+    attach. A tap opens that dog's story, with the rest of the morning queued
+    behind it.
     """
     c = cities.resolve(city)
     n = len(dogs)
-    names = [d.name.strip() for d in dogs if (d.name or "").strip()]
-    if n == 1:
-        d = dogs[0]
-        title = f"{names[0] if names else 'A new dog'} just arrived"
-        # Rescues type "Unknown" into the breed field as often as they leave it
-        # blank, and a lock screen reading "Unknown · 5 years" sounds like the
-        # dog is a mystery rather than a mix. Say nothing instead.
-        breed = (d.breed or "").strip()
-        if breed.lower() in ("unknown", "unknown breed", "n/a", "-"):
-            breed = ""
-        facts = [f for f in (breed, d.age, d.source_label) if f]
-        body = " · ".join(facts) or f"New in {c.short} today"
-    else:
-        title = f"{n} new dogs in {c.short}"
-        shown = names[:NAMED]
-        body = "Meet " + _join(shown, n - len(shown))
+    star = featured(dogs)
+    name = (star.name or "").strip() if star else ""
+    title = f"{name} just arrived" if name else f"New dogs in {c.short}"
+    subtitle = (f"New in {c.short} today" if n == 1
+                else f"{n} new dogs in {c.short} today")
+    facts = [f for f in (_clean_breed(star.breed), star.age, star.source_label) if f] if star else []
+    body = " · ".join(facts) or f"Meet them on LUVD"
+    image = (star.photos[0] if star and star.photos else "") or ""
     return {
         "aps": {
-            "alert": {"title": title, "body": body},
+            "alert": {"title": title, "subtitle": subtitle, "body": body},
             "sound": "default",
             # One thread per city, so a week of mornings stacks as one group
             # on the lock screen instead of seven separate banners.
             "thread-id": f"new-dogs-{c.code}",
+            # Lets the app's Notification Service Extension fetch the photo
+            # and attach it before the banner is shown.
+            "mutable-content": 1,
         },
         "kind": "new_dogs",
         "city": c.code,
         "date": today or "",
+        "featured_id": star.id if star else "",
+        "image": image if image.startswith("https://") else "",
         "dog_ids": [d.id for d in dogs][:MAX_IDS],
     }
 

@@ -1697,23 +1697,33 @@ def test_push_payload_reads_like_a_person_wrote_it():
     one = [dog("muddypaws", 1, "Fiona")]
     one[0].breed, one[0].age, one[0].source_label = "Terrier", "2 years", "Muddy Paws Rescue"
     p = push.build_payload(one, "NYC", "2026-09-14")
-    eq("one dog is named in the title", p["aps"]["alert"]["title"], "Fiona just arrived")
-    eq("and described in the body", p["aps"]["alert"]["body"],
-       "Terrier · 2 years · Muddy Paws Rescue")
+    alert = p["aps"]["alert"]
+    eq("the dog is named in the title", alert["title"], "Fiona just arrived")
+    eq("one dog's subtitle says where", alert["subtitle"], "New in NYC today")
+    eq("and the body describes her", alert["body"], "Terrier · 2 years · Muddy Paws Rescue")
+    eq("the photo can be attached", p["aps"]["mutable-content"], 1)
+    eq("she is the featured dog", p["featured_id"], "muddypaws:1")
+
     unknown = [dog("muddypaws", 1, "Fiona")]
     unknown[0].breed, unknown[0].age, unknown[0].source_label = "Unknown", "5 years", "Muddy Paws Rescue"
     eq("an 'Unknown' breed never reaches a lock screen",
        push.build_payload(unknown, "NYC")["aps"]["alert"]["body"], "5 years · Muddy Paws Rescue")
-    two = [dog("muddypaws", 1, "Fiona"), dog("muddypaws", 2, "Loki")]
-    eq("two dogs join with and", push.build_payload(two, "NYC")["aps"]["alert"]["body"],
-       "Meet Fiona and Loki")
+
     five = [dog("muddypaws", i, n) for i, n in
             enumerate(["Fiona", "Loki", "Jaro", "Tina", "Quiche"])]
+    five[0].photos = []                  # no photo: not the one to feature
     p = push.build_payload(five, "LA")
-    eq("many dogs are counted in the title", p["aps"]["alert"]["title"], "5 new dogs in LA")
-    eq("three named, the rest counted", p["aps"]["alert"]["body"],
-       "Meet Fiona, Loki, Jaro and 2 more")
+    eq("many dogs still lead with one by name", p["aps"]["alert"]["title"], "Loki just arrived")
+    eq("the first dog with a photo is featured", p["featured_id"], five[1].id)
+    eq("the count moves to the subtitle", p["aps"]["alert"]["subtitle"], "5 new dogs in LA today")
+    eq("its photo rides along", p["image"], five[1].photos[0])
+    eq("every new dog is still listed", len(p["dog_ids"]), 5)
     eq("one thread per city", p["aps"]["thread-id"], "new-dogs-LA")
+
+    risky = [dog("muddypaws", 1, "Fiona")]
+    risky[0].photos = ["http://insecure.example/p.jpg"]
+    eq("only an https photo is handed to the extension", push.build_payload(risky, "NYC")["image"], "")
+
     many = [dog("muddypaws", i, f"D{i}") for i in range(40)]
     eq("ids capped for the 4KB payload limit",
        len(push.build_payload(many, "NYC")["dog_ids"]), push.MAX_IDS)
@@ -1932,6 +1942,7 @@ def test_app_api_dogs_and_devices():
         return c.post("/api/devices", json={"token": tok, "env": "sandbox", **body})
     r = reg(cities=["NYC"])
     eq("registered", (r.status_code, r.get_json()["changed"]), (200, True))
+    eq("and told whether real push is on", r.get_json()["push"], False)
     eq("re-registering unchanged is quiet", reg(cities=["NYC"]).get_json()["changed"], False)
     eq("adding a second city is a change", reg(cities=["NYC", "LA"]).get_json()["changed"], True)
     eq("following both is one row per city",
