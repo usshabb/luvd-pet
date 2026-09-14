@@ -140,28 +140,46 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_saved_email ON saved_lists(email)"
         )
-        # A phone that asked to hear about new dogs. The token is Apple's
-        # address for one install of the app, not a person: it names no one,
-        # changes on reinstall, and APNs itself tells us when it stops
-        # working, at which point push.py deletes the row.
+        # A phone that asked to hear about new dogs, one row per city it
+        # follows. The token is Apple's address for one install of the app, not
+        # a person: it names no one, changes on reinstall, and APNs tells us
+        # when it stops working, at which point push.py deletes every row for it.
         #
-        # One city per device, keyed on the token, so changing city in the app
-        # is an upsert rather than a second subscription to keep in step.
-        # `env` is which APNs host the token belongs to — a debug build's
-        # token is a sandbox token and production refuses it.
+        # (token, city) rather than one row per token, because someone looking
+        # in two cities should hear about both — and each city's morning is its
+        # own notification, sent by its own nightly run, so the rows are exactly
+        # the fan-out the sender needs. `env` is which APNs host the token
+        # belongs to; a debug build's token is a sandbox token.
+        #
+        # The branch's first draft keyed this table on token alone. Nothing
+        # with that shape ever reached production, but a dev database that ran
+        # it is carried across rather than dropped, so a registered phone stays
+        # registered.
+        cols = conn.execute("PRAGMA table_info(devices)").fetchall()
+        legacy = bool(cols) and [c["name"] for c in cols if c["pk"]] == ["token"]
+        if legacy:
+            conn.execute("ALTER TABLE devices RENAME TO devices_v1")
+            conn.execute("DROP INDEX IF EXISTS idx_devices_city")
         conn.execute(
             """CREATE TABLE IF NOT EXISTS devices (
-                token TEXT PRIMARY KEY,
+                token TEXT NOT NULL,
                 city TEXT NOT NULL,
                 platform TEXT NOT NULL DEFAULT 'ios',
                 env TEXT NOT NULL DEFAULT 'production',
                 created TEXT DEFAULT (datetime('now')),
-                updated TEXT DEFAULT (datetime('now'))
+                updated TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (token, city)
             )"""
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_devices_city ON devices(city)"
         )
+        if legacy:
+            conn.execute(
+                "INSERT OR IGNORE INTO devices(token, city, platform, env, created, updated) "
+                "SELECT token, city, platform, env, created, updated FROM devices_v1"
+            )
+            conn.execute("DROP TABLE devices_v1")
         # One row per mail-out, and click counts hanging off it. Deliberately
         # aggregate: a send knows how many opened it, never which addresses, so
         # the privacy page's "anonymous counts" stays literally true. Going
@@ -785,27 +803,53 @@ def email_stats(days: int = 7) -> dict:
 
 def add_device(token: str, city: str, env: str = "production",
                platform: str = "ios") -> bool:
-    """Register or move a device. True when the row is new or its city changed.
-
-    The app re-registers on every launch, since iOS can hand out a new token
-    at any time, so an unchanged re-registration must be a quiet no-op rather
-    than something that looks like a signup.
-    """
+    """Follow one more city from a device. True when the row is new or its env moved."""
     token = (token or "").strip()
     env = "sandbox" if env == "sandbox" else "production"
     with connect() as conn:
-        row = conn.execute("SELECT city, env FROM devices WHERE token = ?",
-                           (token,)).fetchone()
+        row = conn.execute("SELECT env FROM devices WHERE token = ? AND city = ?",
+                           (token, city)).fetchone()
         conn.execute(
             "INSERT INTO devices(token, city, platform, env) VALUES(?, ?, ?, ?) "
-            "ON CONFLICT(token) DO UPDATE SET city = excluded.city, "
-            "env = excluded.env, updated = datetime('now')",
+            "ON CONFLICT(token, city) DO UPDATE SET env = excluded.env, "
+            "updated = datetime('now')",
             (token, city, platform[:16], env),
         )
-    return row is None or row["city"] != city or row["env"] != env
+    return row is None or row["env"] != env
+
+
+def set_device_cities(token: str, city_codes, env: str = "production",
+                      platform: str = "ios") -> bool:
+    """Make a device follow exactly `city_codes`. True when anything changed.
+
+    The app sends its whole set on every launch and every change, so this
+    replaces rather than adds: a city unticked in Settings has to stop pushing,
+    and an unchanged re-registration has to be a quiet no-op.
+    """
+    token = (token or "").strip()
+    env = "sandbox" if env == "sandbox" else "production"
+    wanted = list(dict.fromkeys(c for c in city_codes if c))
+    with connect() as conn:
+        before = {r["city"]: r["env"] for r in conn.execute(
+            "SELECT city, env FROM devices WHERE token = ?", (token,))}
+        if wanted:
+            marks = ",".join("?" * len(wanted))
+            conn.execute(f"DELETE FROM devices WHERE token = ? AND city NOT IN ({marks})",
+                         (token, *wanted))
+        else:
+            conn.execute("DELETE FROM devices WHERE token = ?", (token,))
+        for city in wanted:
+            conn.execute(
+                "INSERT INTO devices(token, city, platform, env) VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(token, city) DO UPDATE SET env = excluded.env, "
+                "updated = datetime('now')",
+                (token, city, platform[:16], env),
+            )
+    return set(before) != set(wanted) or any(before[c] != env for c in before if c in wanted)
 
 
 def remove_device(token: str) -> bool:
+    """Forget a device entirely — every city it followed."""
     with connect() as conn:
         cur = conn.execute("DELETE FROM devices WHERE token = ?",
                            ((token or "").strip(),))

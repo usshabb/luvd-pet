@@ -895,7 +895,7 @@ def api_dogs():
 
 @app.route("/api/devices", methods=["POST"])
 def api_register_device():
-    """Remember a phone that wants to hear about new dogs in one city.
+    """Remember a phone and the cities it wants to hear about new dogs in.
 
     No form token and no honeypot, unlike the email forms: those exist because
     a bot that subscribes an address makes us mail a stranger. A fake device
@@ -907,16 +907,30 @@ def api_register_device():
     token = str(data.get("token") or "").strip()
     if not _TOKEN_RE.match(token):
         return jsonify({"ok": False, "error": "invalid token"}), 400
-    code = cities.canon(str(data.get("city") or "").strip())
-    if not code or not cities.is_live(code):
-        return jsonify({"ok": False, "error": "unknown city"}), 400
+    # The whole set of cities the phone follows. `city` (singular) is still
+    # accepted so a single-city client keeps working. Every value is checked
+    # before anything is written: a list with one bad city must not half-apply.
+    raw = data.get("cities")
+    if raw is None:
+        raw = [data.get("city")] if data.get("city") else []
+    if isinstance(raw, str):
+        raw = [raw]
+    codes = []
+    for value in list(raw)[:len(cities.all_codes())]:
+        code = cities.canon(str(value or "").strip())
+        if not code or not cities.is_live(code):
+            return jsonify({"ok": False, "error": "unknown city"}), 400
+        if code not in codes:
+            codes.append(code)
+    if not codes:
+        return jsonify({"ok": False, "error": "no city"}), 400
     # Unlike the email forms this answers honestly when throttled: the caller is
     # our own app, which should back off, not a bot to be kept guessing.
     if not _rate_ok(_device_hits, _client_ip(), _DEVICE_MAX):
         return jsonify({"ok": False, "error": "slow down"}), 429
     env = "sandbox" if data.get("env") == "sandbox" else "production"
-    changed = db.add_device(token, code, env=env)
-    return jsonify({"ok": True, "city": code, "changed": changed})
+    changed = db.set_device_cities(token, codes, env=env)
+    return jsonify({"ok": True, "cities": codes, "changed": changed})
 
 
 @app.route("/api/devices/delete", methods=["POST"])

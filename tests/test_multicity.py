@@ -1756,6 +1756,7 @@ def test_push_signs_sends_and_prunes():
     db.add_device(gone, "NYC")
     db.add_device(sandbox, "NYC", env="sandbox")
     db.add_device("d" * 64, "LA")
+    db.add_device(ok, "LA")             # follows both cities
     key, pem = _fake_apns_key()
     saved = _with_env(APNS_KEY=pem.replace("\n", "\\n"), APNS_KEY_ID="ABC123DEFG",
                       APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app")
@@ -1780,6 +1781,9 @@ def test_push_signs_sends_and_prunes():
     eq("the dead token is pruned", sorted(d["token"] for d in db.devices_for("NYC")),
        sorted([ok, sandbox]))
     eq("the LA device was never contacted", any(t == "d" * 64 for _, t, _, _ in calls), False)
+    eq("a device following both cities hears once from this city's run",
+       sum(1 for _, t, _, _ in calls if t == ok), 1)
+    eq("pruning a dead token clears it from every city", db.devices_for("LA")[0]["token"] != gone, True)
     hosts = {t: h for h, t, _, _ in calls}
     eq("production token goes to production", hosts[ok], "api.push.apple.com")
     eq("sandbox token goes to sandbox", hosts[sandbox], "api.sandbox.push.apple.com")
@@ -1870,6 +1874,32 @@ def test_nightly_run_pushes_new_dogs_but_not_on_a_dry_run():
          check.normalize, check.enrich, check._alert, push.send_new_dogs) = saved
 
 
+def test_devices_table_migrates_from_one_city_per_token():
+    """A dev database from the branch's first draft keeps its registered phone."""
+    path = TMP / "devices_v1.db"
+    if path.exists():
+        path.unlink()
+    con = sqlite3.connect(path)
+    con.execute("""CREATE TABLE devices (token TEXT PRIMARY KEY, city TEXT NOT NULL,
+                   platform TEXT NOT NULL DEFAULT 'ios', env TEXT NOT NULL DEFAULT 'production',
+                   created TEXT DEFAULT (datetime('now')), updated TEXT DEFAULT (datetime('now')))""")
+    con.execute("CREATE INDEX idx_devices_city ON devices(city)")
+    con.execute("INSERT INTO devices(token, city, env) VALUES(?, 'NYC', 'sandbox')", ("f" * 64,))
+    con.commit()
+    con.close()
+    db.DB_PATH = path
+    db.init_db()
+    eq("the old row survives", [d["token"] for d in db.devices_for("NYC")], ["f" * 64])
+    eq("and the phone can now follow a second city",
+       (db.add_device("f" * 64, "LA"), len(db.devices_for("LA"))), (True, 1))
+    with db.connect() as conn:
+        eq("the city index is on the new table",
+           [r["tbl_name"] for r in conn.execute(
+               "SELECT tbl_name FROM sqlite_master WHERE name = 'idx_devices_city'")], ["devices"])
+    db.init_db()
+    eq("migrating twice is harmless", len(db.devices_for("NYC")) + len(db.devices_for("LA")), 2)
+
+
 def test_app_api_dogs_and_devices():
     import app as _app
     import emailer
@@ -1898,15 +1928,23 @@ def test_app_api_dogs_and_devices():
     _app._device_hits.clear()
     eq("bad token refused", c.post("/api/devices", json={"token": "xyz", "city": "NYC"}).status_code, 400)
     eq("unknown city refused", c.post("/api/devices", json={"token": tok, "city": "ZZZ"}).status_code, 400)
-    r = c.post("/api/devices", json={"token": tok, "city": "NYC", "env": "sandbox"})
+    def reg(**body):
+        return c.post("/api/devices", json={"token": tok, "env": "sandbox", **body})
+    r = reg(cities=["NYC"])
     eq("registered", (r.status_code, r.get_json()["changed"]), (200, True))
-    eq("re-registering unchanged is quiet",
-       c.post("/api/devices", json={"token": tok, "city": "NYC", "env": "sandbox"}).get_json()["changed"], False)
-    eq("moving city is a change",
-       c.post("/api/devices", json={"token": tok, "city": "LA", "env": "sandbox"}).get_json()["changed"], True)
-    eq("one row per device", (db.devices_for("NYC"), [d["env"] for d in db.devices_for("LA")]),
-       ([], ["sandbox"]))
+    eq("re-registering unchanged is quiet", reg(cities=["NYC"]).get_json()["changed"], False)
+    eq("adding a second city is a change", reg(cities=["NYC", "LA"]).get_json()["changed"], True)
+    eq("following both is one row per city",
+       (len(db.devices_for("NYC")), len(db.devices_for("LA"))), (1, 1))
+    eq("a list with a bad city is refused whole", reg(cities=["LA", "ZZZ"]).status_code, 400)
+    eq("and changed nothing", (len(db.devices_for("NYC")), len(db.devices_for("LA"))), (1, 1))
+    eq("unticking a city is a change", reg(cities=["LA"]).get_json()["changed"], True)
+    eq("and only that city stops", (db.devices_for("NYC"), len(db.devices_for("LA"))), ([], 1))
+    eq("no city at all is refused", reg(cities=[]).status_code, 400)
+    r = reg(city="nyc")
+    eq("a single city still works", (r.status_code, r.get_json()["cities"]), (200, ["NYC"]))
     eq("removed", c.post("/api/devices/delete", json={"token": tok}).get_json()["removed"], True)
+    eq("from every city", (db.devices_for("NYC"), db.devices_for("LA")), ([], []))
     _app._device_hits.clear()
     codes = [c.post("/api/devices", json={"token": tok, "city": "NYC"}).status_code
              for _ in range(_app._DEVICE_MAX + 1)]
