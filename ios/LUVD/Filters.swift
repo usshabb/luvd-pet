@@ -44,12 +44,15 @@ enum EnergyPref: String, CaseIterable, Identifiable {
 
 /// The multi-select groups. Names and orders mirror the website's pills
 /// (page.py SIZE_ORDER / AGE_ORDER), so a dog is in the same bucket in both.
+/// City only shows once more than one is followed — a group with a single
+/// option is not offered, by the same rule every group follows.
 enum FilterGroup: String, CaseIterable, Identifiable {
-    case size, age, sex, breed, rescue
+    case city, size, age, sex, breed, rescue
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .city: return "City"
         case .size: return "Size when grown"
         case .age: return "Age"
         case .sex: return "Gender"
@@ -60,6 +63,7 @@ enum FilterGroup: String, CaseIterable, Identifiable {
 
     func value(of d: Dog) -> String {
         switch self {
+        case .city: return City.find(d.cityCode)?.name ?? "Other"
         case .size: return d.sizeBucket ?? "Unknown"
         case .age: return d.ageBucket ?? "Unknown"
         case .sex: return d.sex ?? "Unknown"
@@ -72,6 +76,7 @@ enum FilterGroup: String, CaseIterable, Identifiable {
     /// would lead Puppy and Medium would lead Small, which reads as arbitrary.
     var fixedOrder: [String]? {
         switch self {
+        case .city: return City.all.map(\.name)
         case .size: return ["Small", "Medium", "Large", "Unknown"]
         case .age: return ["Puppy", "Young", "Adult", "Senior", "Unknown"]
         case .sex: return ["Female", "Male", "Unknown"]
@@ -126,10 +131,12 @@ struct Filters: Equatable {
         selected[group] = set.isEmpty ? nil : set
     }
 
-    /// OR within a group, AND across groups. `skip` evaluates as if one group
-    /// were clear, which is what makes that group's option counts reachable.
-    func matches(_ d: Dog, today: String, skip: FilterGroup? = nil) -> Bool {
-        if newToday && !d.isNew(today: today) { return false }
+    /// OR within a group, AND across groups. `todays` is each city's own date,
+    /// because "new today" in Los Angeles is not decided by New York's clock.
+    /// `skip` evaluates as if one group were clear, which is what makes that
+    /// group's option counts reachable.
+    func matches(_ d: Dog, todays: [String: String], skip: FilterGroup? = nil) -> Bool {
+        if newToday && !d.isNew(today: todays[d.cityCode]) { return false }
         if fosterOnly && !d.isFoster { return false }
         if apartment && !d.apartmentFriendly { return false }
         if firstTime && !d.firstTimeFriendly { return false }
@@ -141,14 +148,14 @@ struct Filters: Equatable {
         return true
     }
 
-    /// Every value the city has for a group, with live counts. Ordered by the
-    /// city's totals, not the live counts, so rows do not reshuffle under a
+    /// Every value the feed has for a group, with live counts. Ordered by the
+    /// feed's totals, not the live counts, so rows do not reshuffle under a
     /// thumb as other filters change. Catch-alls sink to the bottom.
-    func options(_ group: FilterGroup, in dogs: [Dog], today: String) -> [FilterOption] {
+    func options(_ group: FilterGroup, in dogs: [Dog], todays: [String: String]) -> [FilterOption] {
         var totals: [String: Int] = [:]
         for d in dogs { totals[group.value(of: d), default: 0] += 1 }
         var live: [String: Int] = [:]
-        for d in dogs where matches(d, today: today, skip: group) {
+        for d in dogs where matches(d, todays: todays, skip: group) {
             live[group.value(of: d), default: 0] += 1
         }
         let last = ["Mixed / unknown", "Other", "Unknown"]

@@ -27,7 +27,7 @@ struct DiscoverView: View {
                         .foregroundStyle(.secondary)
                     ZStack {
                         ForEach(Array(deck.prefix(3).enumerated().dropFirst().reversed()), id: \.element.id) { i, dog in
-                            SwipeCard(dog: dog, today: store.today)
+                            SwipeCard(dog: dog, isNew: store.isNew(dog))
                                 .scaleEffect(1 - CGFloat(i) * 0.04)
                                 .offset(y: CGFloat(i) * 12)
                                 .allowsHitTesting(false)
@@ -67,7 +67,7 @@ struct DiscoverView: View {
     }
 
     private func topCard(_ dog: Dog) -> some View {
-        SwipeCard(dog: dog, today: store.today)
+        SwipeCard(dog: dog, isNew: store.isNew(dog))
             .overlay(alignment: .topLeading) {
                 Stamp(text: "SAVE", systemImage: "heart.fill", color: Theme.red)
                     .opacity(Double(max(0, drag.width) / threshold))
@@ -132,8 +132,8 @@ struct DiscoverView: View {
                  ? "Saved dogs are waiting in Saved. New dogs arrive every morning."
                  : "That's everyone matching your filters.")
         } actions: {
-            if store.skippedInCity > 0 {
-                Button("Show the \(store.skippedInCity) skipped again") {
+            if store.skippedInFeed > 0 {
+                Button("Show the \(store.skippedInFeed) skipped again") {
                     withAnimation { store.resetSkipped() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -148,7 +148,7 @@ struct DiscoverView: View {
 
 struct SwipeCard: View {
     let dog: Dog
-    let today: String
+    let isNew: Bool
 
     var body: some View {
         RemoteImage(url: dog.photoURLs.first, maxPixel: 1200)
@@ -160,7 +160,7 @@ struct SwipeCard: View {
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
-                        if dog.isNew(today: today) { PhotoBadge(text: "New today", systemImage: "sparkles", prominent: true) }
+                        if isNew { PhotoBadge(text: "New today", systemImage: "sparkles", prominent: true) }
                         if let energy = dog.energyWord { PhotoBadge(text: energy, systemImage: "bolt.fill") }
                         if dog.apartmentFriendly { PhotoBadge(text: "Apartment-friendly", systemImage: "building.2") }
                     }

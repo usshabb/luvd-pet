@@ -21,11 +21,21 @@ struct BrowseView: View {
             }
             .scrollDismissesKeyboard(.immediately)
             .refreshable { await store.load(fresh: true) }
-            .navigationTitle(store.city.map { "\($0.short) dogs" } ?? "Dogs")
+            // The wordmark, not "NYC dogs": the feed can hold several cities,
+            // and the count line under the search box says which.
+            .navigationTitle("Dogs")
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $store.search,
                         placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Name, breed or rescue")
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Image("Logo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 30)
+                        .accessibilityLabel("LUVD")
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { store.showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
@@ -51,7 +61,7 @@ struct BrowseView: View {
             HStack(spacing: 6) {
                 let shown = store.visibleDogs.count
                 Text(store.filters.isEmpty && store.search.isEmpty
-                     ? "\(store.dogs.count) dogs available"
+                     ? "\(store.dogs.count) dogs in \(store.citiesShort)"
                      : "\(shown) of \(store.dogs.count) dogs")
                     .font(.subheadline.weight(.semibold))
                     .contentTransition(.numericText())
@@ -62,6 +72,11 @@ struct BrowseView: View {
                 }
             }
             .padding(.top, 2)
+            if let problem = store.partialProblem {
+                Label(problem, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -204,7 +219,7 @@ struct DogCard: View {
     }
 
     @ViewBuilder private var badge: some View {
-        if dog.isNew(today: store.today) {
+        if store.isNew(dog) {
             PhotoBadge(text: "New today", systemImage: "sparkles", prominent: true)
         } else if let waiting = dog.waitingLabel {
             PhotoBadge(text: waiting, systemImage: "hourglass")

@@ -27,6 +27,14 @@ struct City: Identifiable, Hashable, Codable {
         return all.first { $0.code == code.uppercased() }
     }
 
+    /// "NYC and LA", "NYC, LA and SF". Short names, for places a line is tight.
+    static func joinedShort(_ list: [City]) -> String { join(list.map(\.short)) }
+    static func joinedNames(_ list: [City]) -> String { join(list.map(\.name)) }
+    private static func join(_ parts: [String]) -> String {
+        guard parts.count > 1 else { return parts.first ?? "" }
+        return parts.dropLast().joined(separator: ", ") + " and " + parts.last!
+    }
+
     /// Today in the city's own zone. "New today" is judged against first_seen,
     /// which the server records in the city's zone, so the phone's clock must
     /// not decide what today is.
@@ -117,6 +125,10 @@ struct Dog: Identifiable, Hashable, Decodable {
     var sizeOutlook: SizeOutlook?
     var monthlyCost: MonthlyCost?
     var traits: [Trait]
+    /// Which followed city this dog was loaded for. Set by the store after a
+    /// fetch, never decoded: the payload is always one city's, so the city is
+    /// a fact about the request, not a field in it.
+    var cityCode = ""
 
     private enum K: String, CodingKey {
         case id, name, path, photos, breed, breed_group, age, age_bucket, sex,

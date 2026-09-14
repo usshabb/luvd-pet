@@ -44,7 +44,7 @@ struct SavedView: View {
                             }
                             let elsewhere = store.savedElsewhere.count
                             if elsewhere > 0 {
-                                Text("\(elsewhere) more saved in another city.")
+                                Text("\(elsewhere) more saved in a city you're not following.")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                         }
@@ -69,8 +69,13 @@ struct SavedView: View {
     /// The website's own ?saved= link, so a list made in the app opens on
     /// luvd.com for whoever it is sent to.
     private var savedLink: URL? {
-        guard let city = store.city else { return nil }
-        let ids = store.savedAvailable.map(\.id)
+        // The website's ?saved= link lives on one city's page and only shows that
+        // page's dogs, so the link is for whichever city most of the list is in.
+        let available = store.savedAvailable
+        let counts = Dictionary(grouping: available, by: \.cityCode).mapValues(\.count)
+        guard let code = counts.max(by: { $0.value < $1.value })?.key,
+              let city = City.find(code) ?? store.city else { return nil }
+        let ids = available.filter { $0.cityCode == city.code }.map(\.id)
         guard !ids.isEmpty else { return nil }
         var comps = URLComponents(url: URL(string: city.path, relativeTo: API.productionBase)!.absoluteURL,
                                   resolvingAgainstBaseURL: false)
@@ -112,10 +117,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("City") {
+                Section {
                     ForEach(City.all) { city in
+                        let on = store.cities.contains(city)
                         Button {
-                            Task { await store.switchCity(city) }
+                            Task { await store.toggleCity(city) }
                         } label: {
                             HStack {
                                 Label {
@@ -124,14 +130,21 @@ struct SettingsView: View {
                                     Image(systemName: city.symbol).foregroundStyle(Theme.red)
                                 }
                                 Spacer()
-                                if store.city == city {
-                                    Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Theme.red)
-                                }
+                                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(on ? Theme.red : Color.secondary.opacity(0.5))
+                                    .contentTransition(.symbolEffect(.replace))
                             }
                             .contentShape(Rectangle())
                         }
-                        .accessibilityAddTraits(store.city == city ? .isSelected : [])
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                        .accessibilityHint(on && store.cities.count == 1
+                                           ? "At least one city stays followed" : "")
                     }
+                } header: {
+                    Text("Cities")
+                } footer: {
+                    Text("Follow as many as you like. Their dogs share one feed, and each city sends its own morning alert.")
                 }
 
                 Section {
@@ -139,12 +152,12 @@ struct SettingsView: View {
                 } header: {
                     Text("New dog alerts")
                 } footer: {
-                    Text("One notification on mornings new dogs are listed in \(store.city?.name ?? "your city"). Nothing else.")
+                    Text("A notification on mornings new dogs are listed in \(store.citiesNames) — one per city. Nothing else.")
                 }
 
                 Section("Discover") {
-                    Button("Show skipped dogs again (\(store.skippedInCity))") { store.resetSkipped() }
-                        .disabled(store.skippedInCity == 0)
+                    Button("Show skipped dogs again (\(store.skippedInFeed))") { store.resetSkipped() }
+                        .disabled(store.skippedInFeed == 0)
                 }
 
                 Section {
@@ -187,7 +200,7 @@ struct SettingsView: View {
     @ViewBuilder private var notificationRow: some View {
         switch store.notificationStatus {
         case .authorized, .provisional, .ephemeral:
-            Label("On for \(store.city?.short ?? "your city")", systemImage: "bell.badge.fill")
+            Label("On for \(store.citiesShort)", systemImage: "bell.badge.fill")
                 .foregroundStyle(.primary)
         case .denied:
             VStack(alignment: .leading, spacing: 8) {
@@ -249,7 +262,7 @@ struct FilterSheet: View {
                         }
                     }
                     ForEach(FilterGroup.allCases) { g in
-                        let options = store.filters.options(g, in: store.searchMatched, today: store.today)
+                        let options = store.filters.options(g, in: store.searchMatched, todays: store.todays)
                         if options.count > 1 {
                             group(g.title) {
                                 FlowLayout {

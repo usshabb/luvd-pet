@@ -49,8 +49,53 @@ def heart_mask() -> Image.Image:
     return mask.crop(mask.getbbox())
 
 
+TAB = ROOT / "ios" / "LUVD" / "Assets.xcassets" / "LuvdHeart.imageset"
+# Points. A tab bar glyph sits in roughly a 25pt square; the heart fills a hair
+# under that so it weighs the same as the SF Symbols beside it.
+TAB_BOX = 25
+TAB_FILL = 0.94
+
+
+def tab_heart(mask: Image.Image):
+    """The wordmark's heart as a template image for the tab bar.
+
+    Black on transparent, marked template, so the tab bar tints it grey when
+    unselected and the accent when selected exactly like a system symbol. Each
+    scale is brought down from one large thresholded mask rather than resized
+    from the next size up, which is what keeps a 50px glyph's edge clean.
+    """
+    w, h = mask.size
+    big_side = 1400
+    k = big_side / max(w, h)
+    big = mask.resize((int(w * k), int(h * k)), Image.LANCZOS)
+    big = big.point(lambda v: 255 if v >= 128 else 0)
+    TAB.mkdir(parents=True, exist_ok=True)
+    images = []
+    for scale in (2, 3):
+        side = TAB_BOX * scale
+        inner = int(side * TAB_FILL)
+        ratio = inner / max(big.size)
+        glyph = big.resize((max(1, int(big.width * ratio)), max(1, int(big.height * ratio))),
+                           Image.LANCZOS)
+        canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        black = Image.new("RGBA", glyph.size, (0, 0, 0, 255))
+        canvas.paste(black, ((side - glyph.width) // 2, (side - glyph.height) // 2), glyph)
+        name = f"luvd-heart@{scale}x.png"
+        canvas.save(TAB / name, "PNG", optimize=True)
+        images.append({"filename": name, "idiom": "universal", "scale": f"{scale}x"})
+    images.insert(0, {"idiom": "universal", "scale": "1x"})
+    import json
+    (TAB / "Contents.json").write_text(json.dumps({
+        "images": images,
+        "info": {"author": "xcode", "version": 1},
+        "properties": {"template-rendering-intent": "template"},
+    }, indent=2) + "\n")
+    print(f"  tab heart {TAB_BOX}pt @2x/@3x -> {TAB.relative_to(ROOT)}")
+
+
 def main():
     mask = heart_mask()
+    tab_heart(mask)
     w, h = mask.size
     target = int(SIZE * FILL)
     scale = target / max(w, h)

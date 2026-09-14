@@ -111,8 +111,10 @@ enum API {
 
     // MARK: writes
 
-    static func registerDevice(token: String, city: City, sandbox: Bool) async throws {
-        let code = try await post("api/devices", ["token": token, "city": city.code,
+    /// Sends the whole set of followed cities; the server replaces what it had,
+    /// so a city unticked in Settings stops pushing.
+    static func registerDevice(token: String, cities: [City], sandbox: Bool) async throws {
+        let code = try await post("api/devices", ["token": token, "cities": cities.map(\.code),
                                                   "env": sandbox ? "sandbox" : "production",
                                                   "platform": "ios"])
         guard code == 200 else { throw APIError.status(code) }
@@ -134,7 +136,7 @@ enum API {
     }
 
     @discardableResult
-    private static func post(_ path: String, _ body: [String: String]) async throws -> Int {
+    private static func post(_ path: String, _ body: [String: Any]) async throws -> Int {
         var req = URLRequest(url: base.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

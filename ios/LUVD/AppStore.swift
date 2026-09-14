@@ -34,16 +34,21 @@ final class AppStore {
     static let shared = AppStore()
 
     // Persisted
-    private(set) var city: City?
+    /// Followed cities, always in City.all order. Never empty once onboarded.
+    private(set) var cities: [City] = []
     private(set) var saved: [SavedSnapshot] = []
     private(set) var skipped: Set<String> = []
 
     // Loaded
     private(set) var dogs: [Dog] = []
     private(set) var byID: [String: Dog] = [:]
-    private(set) var today: String = ""
+    /// Each city's own date, keyed by city code.
+    private(set) var todays: [String: String] = [:]
     private(set) var state: LoadState = .idle
+    /// Set when some followed cities loaded and others did not.
+    private(set) var partialProblem: String?
     private(set) var lastLoaded: Date?
+    private var loadGeneration = 0
 
     // Browsing
     var filters = Filters()
@@ -68,14 +73,18 @@ final class AppStore {
 
     private let defaults = UserDefaults.standard
     private enum Key {
-        static let city = "city"
+        static let cities = "cities"
+        static let legacyCity = "city"
         static let saved = "saved.v1"
         static let skipped = "skipped.v1"
         static let token = "deviceToken"
     }
 
     init() {
-        city = City.find(defaults.string(forKey: Key.city))
+        // One city was the first version's shape; it becomes a list of one.
+        let codes = defaults.stringArray(forKey: Key.cities)
+            ?? [defaults.string(forKey: Key.legacyCity)].compactMap { $0 }
+        cities = City.all.filter { c in codes.contains(c.code) }
         if let data = defaults.data(forKey: Key.saved),
            let list = try? JSONDecoder().decode([SavedSnapshot].self, from: data) {
             saved = list
@@ -84,7 +93,13 @@ final class AppStore {
         deviceToken = defaults.string(forKey: Key.token)
     }
 
-    var isOnboarded: Bool { city != nil }
+    var isOnboarded: Bool { !cities.isEmpty }
+    /// The first followed city, for the few places that need exactly one.
+    var city: City? { cities.first }
+    var citiesShort: String { City.joinedShort(cities) }
+    var citiesNames: String { City.joinedNames(cities) }
+
+    func isNew(_ dog: Dog) -> Bool { dog.isNew(today: todays[dog.cityCode]) }
 
     // MARK: - Lifecycle
 
@@ -95,54 +110,97 @@ final class AppStore {
         if notificationStatus == .authorized || notificationStatus == .provisional {
             UIApplication.shared.registerForRemoteNotifications()
         }
-        if city != nil && dogs.isEmpty { await load() }
+        if isOnboarded && dogs.isEmpty { await load() }
     }
 
-    /// Onboarding's one tap: remember the city, ask to notify, load the dogs.
+    /// Onboarding's one tap: follow that city, ask to notify, load the dogs.
     func choose(_ chosen: City) async {
-        setCity(chosen)
+        setCities([chosen])
         Haptics.thud()
         async let loading: Void = load()
         await requestNotifications()
         await loading
     }
 
-    func switchCity(_ chosen: City) async {
-        guard chosen != city else { return }
-        setCity(chosen)
-        await load()
+    /// Settings: follow or unfollow a city. The last one cannot be unfollowed —
+    /// a feed of no cities is not a state the app has anything to show for.
+    func toggleCity(_ c: City) async {
+        if cities.contains(c) {
+            guard cities.count > 1 else { Haptics.thud(); return }
+            setCities(cities.filter { $0 != c })
+        } else {
+            setCities(cities + [c])
+        }
+        Haptics.selection()
+        await load(fresh: true)
         await registerToken(force: true)
     }
 
-    private func setCity(_ chosen: City) {
-        if chosen != city {
-            dogs = []
-            byID = [:]
-            filters = Filters()
-            search = ""
-            state = .idle
-            tokenRegistered = false
-        }
-        city = chosen
-        defaults.set(chosen.code, forKey: Key.city)
+    private func setCities(_ list: [City]) {
+        let ordered = City.all.filter { list.contains($0) }
+        guard ordered != cities else { return }
+        cities = ordered
+        defaults.set(ordered.map(\.code), forKey: Key.cities)
+        defaults.removeObject(forKey: Key.legacyCity)
+        // A city filter naming a city no longer followed would hide everything.
+        filters.selected[.city] = nil
+        tokenRegistered = false
     }
 
+    /// Loads every followed city at once. A newer call supersedes an older one
+    /// rather than waiting behind it, so following a second city mid-refresh
+    /// still loads it.
     func load(fresh: Bool = false) async {
-        guard let city, state != .loading else { return }
+        guard isOnboarded else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        let wanted = cities
         state = .loading
-        do {
-            let payload = try await API.dogs(for: city, fresh: fresh)
-            guard city == self.city else { return }   // switched mid-flight
-            dogs = payload.dogs
-            byID = Dictionary(payload.dogs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            today = payload.today
-            lastLoaded = Date()
-            state = .loaded
-            refreshSnapshots()
-        } catch {
-            state = .failed((error as? LocalizedError)?.errorDescription
-                            ?? "Couldn't reach LUVD. Check your connection and try again.")
+
+        var payloads: [String: DogsPayload] = [:]
+        var failures: [(City, String)] = []
+        await withTaskGroup(of: (City, DogsPayload?, String?).self) { group in
+            for c in wanted {
+                group.addTask {
+                    do { return (c, try await API.dogs(for: c, fresh: fresh), nil) }
+                    catch {
+                        return (c, nil, (error as? LocalizedError)?.errorDescription
+                                ?? "Couldn't reach LUVD. Check your connection and try again.")
+                    }
+                }
+            }
+            for await (c, payload, problem) in group {
+                if let payload { payloads[c.code] = payload }
+                if let problem { failures.append((c, problem)) }
+            }
         }
+        guard generation == loadGeneration else { return }   // superseded
+
+        if payloads.isEmpty {
+            state = .failed(failures.first?.1 ?? "Couldn't load dogs.")
+            return
+        }
+        // Each city keeps the site's own freshest-first order; followed cities
+        // alternate rank by rank, so neither city's newest dogs are buried
+        // under the other's whole list.
+        var ranked: [(rank: Int, cityIndex: Int, dog: Dog)] = []
+        for (i, c) in wanted.enumerated() {
+            guard let payload = payloads[c.code] else { continue }
+            todays[c.code] = payload.today
+            for (rank, dog) in payload.dogs.enumerated() {
+                var d = dog
+                d.cityCode = c.code
+                ranked.append((rank, i, d))
+            }
+        }
+        ranked.sort { ($0.rank, $0.cityIndex) < ($1.rank, $1.cityIndex) }
+        dogs = ranked.map(\.dog)
+        byID = Dictionary(dogs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        partialProblem = failures.isEmpty ? nil
+            : "Couldn't load \(City.joinedShort(failures.map(\.0))) right now."
+        lastLoaded = Date()
+        state = .loaded
+        refreshSnapshots()
     }
 
     func refreshIfStale() async {
@@ -152,7 +210,7 @@ final class AppStore {
 
     // MARK: - Browsing
 
-    var newTodayCount: Int { dogs.filter { $0.isNew(today: today) }.count }
+    var newTodayCount: Int { dogs.filter { isNew($0) }.count }
 
     /// Dogs matching the search box alone, before filters.
     var searchMatched: [Dog] {
@@ -162,8 +220,8 @@ final class AppStore {
     }
 
     var visibleDogs: [Dog] {
-        let matched = searchMatched.enumerated().filter { filters.matches($0.element, today: today) }
-        // Stable sorts: ties keep the server's freshest-first order.
+        let matched = searchMatched.enumerated().filter { filters.matches($0.element, todays: todays) }
+        // Stable sorts: ties keep the feed's own order.
         func by(_ key: (Dog) -> Double) -> [Dog] {
             matched.sorted { a, b in
                 let ka = key(a.element), kb = key(b.element)
@@ -183,8 +241,10 @@ final class AppStore {
         search = ""
     }
 
+    /// Similar dogs from the same city — a dog you would have to fly to meet is
+    /// not a useful suggestion.
     func similar(to dog: Dog, limit: Int = 10) -> [Dog] {
-        dogs.filter { $0.id != dog.id && !$0.photos.isEmpty
+        dogs.filter { $0.id != dog.id && !$0.photos.isEmpty && $0.cityCode == dog.cityCode
             && ($0.breedGroup == dog.breedGroup || $0.sizeBucket == dog.sizeBucket) }
             .prefix(limit).map { $0 }
     }
@@ -205,7 +265,8 @@ final class AppStore {
         } else {
             saved.insert(SavedSnapshot(id: dog.id, name: dog.name, photo: dog.photos.first,
                                        breed: dog.displayBreed, rescue: dog.sourceLabel,
-                                       city: city?.code ?? "", savedAt: Date()), at: 0)
+                                       city: dog.cityCode.isEmpty ? (city?.code ?? "") : dog.cityCode,
+                                       savedAt: Date()), at: 0)
             Haptics.saved()
         }
         persistSaved()
@@ -218,16 +279,17 @@ final class AppStore {
 
     var savedAvailable: [Dog] { saved.compactMap { byID[$0.id] } }
 
-    /// Saves from this city that are no longer listed. Only claimed after a
-    /// successful load — an empty list mid-fetch is not evidence of anything.
+    /// Saves from followed cities that are no longer listed. Only claimed after
+    /// a successful load — an empty list mid-fetch is not evidence of anything.
     var savedMovedOn: [SavedSnapshot] {
-        guard state == .loaded, let city else { return [] }
-        return saved.filter { $0.city == city.code && byID[$0.id] == nil }
+        guard state == .loaded else { return [] }
+        let followed = Set(cities.map(\.code))
+        return saved.filter { followed.contains($0.city) && byID[$0.id] == nil }
     }
 
     var savedElsewhere: [SavedSnapshot] {
-        guard let city else { return [] }
-        return saved.filter { $0.city != city.code }
+        let followed = Set(cities.map(\.code))
+        return saved.filter { !followed.contains($0.city) }
     }
 
     private func refreshSnapshots() {
@@ -283,11 +345,11 @@ final class AppStore {
         persistSkipped()
     }
 
-    var skippedInCity: Int { dogs.filter { skipped.contains($0.id) }.count }
+    var skippedInFeed: Int { dogs.filter { skipped.contains($0.id) }.count }
 
-    /// Not pruned against the loaded list: that list is one city's, and pruning
-    /// would throw away the other city's skips the moment someone switched.
-    /// Ids are small and a city lists a few hundred dogs, so it stays bounded.
+    /// Not pruned against the loaded feed: an unfollowed city's skips would be
+    /// thrown away the moment it was unticked. Ids are small and bounded by
+    /// the few hundred dogs a city lists.
     private func persistSkipped() {
         defaults.set(Array(skipped), forKey: Key.skipped)
     }
@@ -317,10 +379,10 @@ final class AppStore {
     }
 
     func registerToken(force: Bool = false) async {
-        guard let token = deviceToken, let city else { return }
+        guard let token = deviceToken, isOnboarded else { return }
         if tokenRegistered && !force { return }
         do {
-            try await API.registerDevice(token: token, city: city, sandbox: pushSandbox)
+            try await API.registerDevice(token: token, cities: cities, sandbox: pushSandbox)
             tokenRegistered = true
             pushProblem = nil
         } catch {
@@ -330,25 +392,30 @@ final class AppStore {
     }
 
     /// A tap on a new-dogs notification. One dog opens straight to that dog;
-    /// several open the list filtered to today's arrivals.
+    /// several open that city's arrivals today.
     func handleNotification(cityCode: String?, dogIDs: [String]) async {
-        if let pushed = City.find(cityCode), pushed != city { setCity(pushed) }
+        let pushed = City.find(cityCode)
+        if let pushed, !cities.contains(pushed) {
+            setCities(cities + [pushed])
+            Task { await registerToken(force: true) }
+        }
         // Fresh, not cached: the list the notification is about was published
         // minutes ago, and a five-minute HTTP cache could predate it.
         await load(fresh: true)
         tab = .browse
-        if dogIDs.count == 1, let d = byID[dogIDs[0]] {
-            openDog = d
-        } else if !dogIDs.isEmpty {
+        if dogIDs.count == 1 {
+            if let d = byID[dogIDs[0]] { openDog = d }
+        } else {
             resetBrowsing()
             filters.newToday = true
+            if cities.count > 1, let pushed { filters.selected[.city] = [pushed.name] }
         }
     }
 
     /// `luvd://dog/<id>` opens one dog; `luvd://new?city=NYC[&ids=a,b]` opens
-    /// that morning's arrivals. Routed through the same handler a notification
-    /// tap uses, so an email or a web page can link into the app and land
-    /// exactly where the push would have.
+    /// that city's arrivals. Routed through the same handler a notification tap
+    /// uses, so an email or a web page can link into the app and land exactly
+    /// where the push would have.
     func handleDeepLink(_ url: URL) async {
         guard url.scheme?.lowercased() == "luvd" else { return }
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -359,11 +426,7 @@ final class AppStore {
             await handleNotification(cityCode: value("city"), dogIDs: [id])
         case "new":
             let ids = (value("ids") ?? "").split(separator: ",").map(String.init)
-            await handleNotification(cityCode: value("city"), dogIDs: ids)
-            if ids.count != 1 {
-                resetBrowsing()
-                filters.newToday = true
-            }
+            await handleNotification(cityCode: value("city"), dogIDs: ids.count == 1 ? [] : ids)
         default:
             return
         }
@@ -374,24 +437,25 @@ final class AppStore {
     /// tap-through can be tried without Apple's push service.
     func scheduleTestNotification(single: Bool) async {
         guard let city else { return }
-        let sample = Array(dogs.filter { $0.isNew(today: today) }.prefix(single ? 1 : 5))
-        let dogsToUse = sample.isEmpty ? Array(dogs.prefix(single ? 1 : 5)) : sample
-        guard !dogsToUse.isEmpty else { return }
+        let local = dogs.filter { $0.cityCode == city.code }
+        let fresh = local.filter { isNew($0) }
+        let pick = Array((fresh.isEmpty ? local : fresh).prefix(single ? 1 : 5))
+        guard !pick.isEmpty else { return }
         let content = UNMutableNotificationContent()
-        if single, let d = dogsToUse.first {
+        if single, let d = pick.first {
             content.title = "\(d.name) just arrived"
             content.body = [d.displayBreed, d.age, d.sourceLabel].compactMap { $0 }.joined(separator: " · ")
         } else {
-            let names = dogsToUse.prefix(3).map(\.name)
-            content.title = "\(dogsToUse.count) new dogs in \(city.short)"
-            let more = dogsToUse.count - names.count
+            let names = pick.prefix(3).map(\.name)
+            content.title = "\(pick.count) new dogs in \(city.short)"
+            let more = pick.count - names.count
             content.body = "Meet " + (more > 0
                 ? names.joined(separator: ", ") + " and \(more) more"
                 : ListFormatter.localizedString(byJoining: names))
         }
         content.sound = .default
         content.threadIdentifier = "new-dogs-\(city.code)"
-        content.userInfo = ["kind": "new_dogs", "city": city.code, "dog_ids": dogsToUse.map(\.id)]
+        content.userInfo = ["kind": "new_dogs", "city": city.code, "dog_ids": pick.map(\.id)]
         let request = UNNotificationRequest(
             identifier: UUID().uuidString, content: content,
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: 4, repeats: false))

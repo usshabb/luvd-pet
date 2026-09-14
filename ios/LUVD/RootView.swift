@@ -24,13 +24,15 @@ struct MainTabs: View {
         @Bindable var store = store
         TabView(selection: $store.tab) {
             BrowseView()
-                .tabItem { Label("Dogs", systemImage: "magnifyingglass") }
+                .tabItem { Image(systemName: "dog.fill").accessibilityLabel("Dogs") }
                 .tag(AppTab.browse)
             DiscoverView()
-                .tabItem { Label("Discover", systemImage: "rectangle.stack.fill") }
+                .tabItem { Image(systemName: "rectangle.stack.fill").accessibilityLabel("Discover") }
                 .tag(AppTab.discover)
             SavedView()
-                .tabItem { Label("Saved", systemImage: "heart.fill") }
+                // The wordmark's own V-heart rather than the system heart: the
+                // one mark in the tab bar that says LUVD.
+                .tabItem { Image("LuvdHeart").renderingMode(.template).accessibilityLabel("Saved") }
                 .tag(AppTab.saved)
         }
         .sheet(item: $store.openDog) { dog in

@@ -20,7 +20,7 @@ struct DogDetailView: View {
                     if let outlook = dog.sizeOutlook { SizeSection(outlook: outlook) }
                     if let about = dog.about { aboutSection(about) }
                     if !dog.traits.isEmpty { traitsSection }
-                    if let cost = dog.monthlyCost { CostSection(cost: cost, city: store.city?.short ?? "") }
+                    if let cost = dog.monthlyCost { CostSection(cost: cost, city: City.find(dog.cityCode)?.short ?? store.city?.short ?? "") }
                     if let fee = dog.fee { LabeledRow(title: "Adoption fee", value: fee) }
                 }
                 .padding(.horizontal, 20)
@@ -55,7 +55,7 @@ struct DogDetailView: View {
     private var title: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                if dog.isNew(today: store.today) { Pill(text: "New today", systemImage: "sparkles", tint: Theme.red, filled: true) }
+                if store.isNew(dog) { Pill(text: "New today", systemImage: "sparkles", tint: Theme.red, filled: true) }
                 if let waiting = dog.waitingLabel { Pill(text: waiting, systemImage: "hourglass", tint: Theme.caution) }
                 if dog.isFoster { Pill(text: "Foster-to-adopt", systemImage: "house", tint: Theme.good) }
             }
