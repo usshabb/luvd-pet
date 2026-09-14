@@ -6,7 +6,7 @@ import UIKit
 struct SavedView: View {
     @Environment(AppStore.self) private var store
     @State private var path: [Dog] = []
-    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    private let columns = [GridItem(.flexible())]
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -25,7 +25,7 @@ struct SavedView: View {
                         VStack(alignment: .leading, spacing: 24) {
                             let available = store.savedAvailable
                             if !available.isEmpty {
-                                LazyVGrid(columns: columns, spacing: 18) {
+                                LazyVGrid(columns: columns, spacing: 30) {
                                     ForEach(available) { dog in
                                         DogCard(dog: dog)
                                             .onTapGesture { path.append(dog) }
@@ -231,6 +231,16 @@ struct FilterSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
+                    // Sort lives here now rather than as its own button in the
+                    // bar: one control above the feed, and it opens everything.
+                    group("Sort by") {
+                        FlowLayout {
+                            ForEach(SortOrder.allCases) { order in
+                                ChipButton(title: order.label, systemImage: order.symbol,
+                                           on: store.sort == order) { store.sort = order }
+                            }
+                        }
+                    }
                     group("Show") {
                         FlowLayout {
                             ChipButton(title: "New today", systemImage: "sparkles", on: store.filters.newToday) {
@@ -283,8 +293,13 @@ struct FilterSheet: View {
             }
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 12) {
-                    Button("Clear all") { withAnimation { store.filters = Filters() } }
-                        .disabled(store.filters.isEmpty)
+                    Button("Clear all") {
+                        withAnimation {
+                            store.filters = Filters()
+                            store.sort = .newest
+                        }
+                    }
+                    .disabled(store.filters.isEmpty && store.sort == .newest)
                     Button {
                         dismiss()
                     } label: {

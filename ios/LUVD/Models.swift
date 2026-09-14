@@ -209,6 +209,55 @@ extension Dog {
     }
     var facts: [String] { [age, sex, weight].compactMap { $0 }.filter { !$0.isEmpty } }
 
+    /// The rescue's name without its asterisk-wrapped program tags:
+    /// "Beni *FOSTER / FOSTER-TO-ADOPT *" is Beni, and the foster badge already
+    /// says the rest. Parentheses stay — "(Bonded to Marta)" is something an
+    /// adopter needs to know.
+    var displayName: String {
+        let stripped = name
+            .replacingOccurrences(of: #"\*[^*]*\*?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stripped.isEmpty ? name : stripped
+    }
+
+    /// A clean breed group ("Shepherd", "Terrier") rather than the rescue's free
+    /// text ("Mixed Breed (maybe Shepherd/Hound)"), which stays on the profile.
+    var cardBreed: String {
+        guard let group = breedGroup, group != "Mixed / unknown", group != "Other" else {
+            return "Mixed breed"
+        }
+        return group
+    }
+
+    /// "3 years (approx)" and "approx 9 years" read as 3 years and 9 years. An
+    /// age long enough to crowd the line falls back to its bucket.
+    var cleanAge: String? {
+        let a = (age ?? "")
+            .replacingOccurrences(of: #"\s*\(.*?\)\s*"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^(approx\.?|approximately|about|~)\s*"#, with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if !a.isEmpty && a.count <= 18 { return a }
+        guard let bucket = ageBucket, bucket != "Unknown" else { return nil }
+        return bucket
+    }
+
+    /// Whole pounds: "20.6 lbs" is 21 lbs. Falls back to the grown estimate.
+    var cleanWeight: String? {
+        if let w = weight, let r = w.range(of: #"\d+(\.\d+)?"#, options: .regularExpression),
+           let v = Double(w[r]), v > 0 {
+            return "\(Int(v.rounded())) lbs"
+        }
+        if let a = adultLbs, a > 0 { return "\(Int(a.rounded())) lbs" }
+        return nil
+    }
+
+    /// The one facts line under a card: breed group, age, sex, weight.
+    var cardFacts: [String] {
+        [cardBreed, cleanAge, sex, cleanWeight].compactMap { $0 }.filter { !$0.isEmpty }
+    }
+
     /// Only long waits are worth a badge — they are the dogs a scroll passes.
     /// Very old listing dates are usually a rescue never updating a field, so
     /// past two years this stops counting rather than claim nine years.

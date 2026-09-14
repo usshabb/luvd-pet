@@ -36,7 +36,7 @@ struct DogDetailView: View {
             .padding(.bottom, 24)
         }
         .safeAreaInset(edge: .bottom) { actionBar }
-        .navigationTitle(dog.name)
+        .navigationTitle(dog.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let url = dog.webURL(base: API.productionBase) {
@@ -59,10 +59,11 @@ struct DogDetailView: View {
                 if let waiting = dog.waitingLabel { Pill(text: waiting, systemImage: "hourglass", tint: Theme.caution) }
                 if dog.isFoster { Pill(text: "Foster-to-adopt", systemImage: "house", tint: Theme.good) }
             }
-            Text(dog.name).font(Theme.display(34))
+            Text(dog.displayName).font(Theme.display(34))
             Text(dog.displayBreed).font(.title3.weight(.medium)).foregroundStyle(.secondary)
-            if !dog.facts.isEmpty {
-                Text(dog.facts.joined(separator: " · ")).font(.subheadline.weight(.medium))
+            let facts = [dog.cleanAge, dog.sex, dog.cleanWeight].compactMap { $0 }
+            if !facts.isEmpty {
+                Text(facts.joined(separator: " · ")).font(.subheadline.weight(.medium))
             }
             if let rescue = dog.sourceLabel {
                 Label([rescue, dog.location].compactMap { $0 }.joined(separator: " · "),

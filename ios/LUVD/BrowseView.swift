@@ -5,21 +5,14 @@ struct BrowseView: View {
     @State private var path: [Dog] = []
     @State private var showFilters = false
 
-    /// One big card per row, or two smaller ones. Remembered, so the feed opens
-    /// the way it was left.
-    @AppStorage("feedColumns") private var columnsCount = 1
-
-    private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: columnsCount)
-    }
+    private let gridColumns = [GridItem(.flexible())]
 
     var body: some View {
         @Bindable var store = store
         NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    header
-                    QuickFilters(showFilters: $showFilters)
+                    statusLine
                     content
                 }
                 .padding(.horizontal, 16)
@@ -40,16 +33,13 @@ struct BrowseView: View {
                     // height. The shadowed original is mostly margin, and
                     // fitted here its letters were a third of this size.
                     // Sized for the space between the bar's buttons, not the
-                    // bar's height. A principal item is only centred while it
-                    // clears both sides; at 128pt it cleared the trailing group
-                    // by ~10pt, and the slightly wider two-per-row glyph on the
-                    // layout toggle tipped it under the bar's minimum, which
-                    // shoves the wordmark left against the gear. 115 × 36 (the
-                    // cropped wordmark's 3.2:1) clears by ~16pt in both states.
+                    // bar's height: a principal item is only centred while it
+                    // clears both sides. With a single trailing button 128 × 40
+                    // (the cropped wordmark's 3.2:1) clears comfortably.
                     Image("LogoHeader")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 115, height: 36)
+                        .frame(width: 128, height: 40)
                         .accessibilityLabel("LUVD")
                 }
                 ToolbarItem(placement: .topBarLeading) {
@@ -57,24 +47,17 @@ struct BrowseView: View {
                         .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Haptics.selection()
-                        withAnimation(.snappy) { columnsCount = columnsCount == 1 ? 2 : 1 }
-                    } label: {
-                        Image(systemName: columnsCount == 1 ? "square.grid.2x2" : "rectangle.grid.1x2")
+                    // The only control above the feed. Filled when anything is
+                    // narrowing or reordering it, so its state shows without a
+                    // count or a row of chips to say so.
+                    Button { showFilters = true } label: {
+                        Image(systemName: isNarrowed
+                              ? "line.3.horizontal.decrease.circle.fill"
+                              : "line.3.horizontal.decrease.circle")
                             .contentTransition(.symbolEffect(.replace))
                     }
-                    .accessibilityLabel(columnsCount == 1 ? "Show two dogs per row" : "Show one dog per row")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Picker("Sort", selection: $store.sort) {
-                            ForEach(SortOrder.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .accessibilityLabel("Sort, \(store.sort.label)")
+                    .accessibilityLabel(isNarrowed
+                        ? "Filters and sort, \(store.filters.activeCount) active" : "Filters and sort")
                 }
             }
             .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
@@ -82,34 +65,46 @@ struct BrowseView: View {
         }
     }
 
-    @ViewBuilder private var header: some View {
-        if !store.dogs.isEmpty {
+    private var isNarrowed: Bool {
+        !store.filters.isEmpty || !store.search.isEmpty || store.sort != .newest
+    }
+
+    /// Nothing above the feed by default. Only while the list is filtered,
+    /// searched or re-sorted does one line say how many dogs that left and how
+    /// to get back — the one piece of feedback that is needed, and only when it is.
+    @ViewBuilder private var statusLine: some View {
+        if isNarrowed && !store.dogs.isEmpty {
+            let shown = store.visibleDogs.count
             HStack(spacing: 6) {
-                let shown = store.visibleDogs.count
-                Text(store.filters.isEmpty && store.search.isEmpty
-                     ? "\(store.dogs.count) dogs in \(store.citiesShort)"
-                     : "\(shown) of \(store.dogs.count) dogs")
+                Text(shown == 1 ? "1 dog" : "\(shown) dogs")
                     .font(.subheadline.weight(.semibold))
                     .contentTransition(.numericText())
-                if store.newTodayCount > 0 {
-                    Text("· \(store.newTodayCount) new today")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.red)
+                if store.sort != .newest {
+                    Text("· \(store.sort.label)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer()
+                Button("Clear") {
+                    withAnimation(.snappy) {
+                        store.resetBrowsing()
+                        store.sort = .newest
+                    }
+                }
+                .font(.subheadline.weight(.semibold))
             }
-            .padding(.top, 2)
-            if let problem = store.partialProblem {
-                Label(problem, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+        }
+        if let problem = store.partialProblem {
+            Label(problem, systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder private var content: some View {
         switch (store.state, store.dogs.isEmpty) {
         case (.idle, true), (.loading, true):
-            LazyVGrid(columns: gridColumns, spacing: columnsCount == 1 ? 26 : 18) {
+            LazyVGrid(columns: gridColumns, spacing: 30) {
                 ForEach(0..<6, id: \.self) { _ in CardSkeleton() }
             }
         case (.failed(let message), true):
@@ -135,9 +130,9 @@ struct BrowseView: View {
                 }
                 .padding(.top, 30)
             } else {
-                LazyVGrid(columns: gridColumns, spacing: columnsCount == 1 ? 26 : 18) {
+                LazyVGrid(columns: gridColumns, spacing: 30) {
                     ForEach(dogs) { dog in
-                        DogCard(dog: dog, large: columnsCount == 1)
+                        DogCard(dog: dog)
                             .onTapGesture { path.append(dog) }
                             .accessibilityAddTraits(.isButton)
                             .accessibilityAction { path.append(dog) }
@@ -145,43 +140,6 @@ struct BrowseView: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Quick filters
-
-struct QuickFilters: View {
-    @Environment(AppStore.self) private var store
-    @Binding var showFilters: Bool
-
-    var body: some View {
-        @Bindable var store = store
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ChipButton(title: store.filters.isEmpty ? "Filters" : "Filters · \(store.filters.activeCount)",
-                           systemImage: "line.3.horizontal.decrease",
-                           on: !store.filters.isEmpty) { showFilters = true }
-                if store.newTodayCount > 0 || store.filters.newToday {
-                    ChipButton(title: "New today", badge: store.newTodayCount,
-                               on: store.filters.newToday) { store.filters.newToday.toggle() }
-                }
-                ChipButton(title: "Apartment-friendly", systemImage: "building.2",
-                           on: store.filters.apartment) { store.filters.apartment.toggle() }
-                ChipButton(title: "Good first dog", systemImage: "hand.thumbsup",
-                           on: store.filters.firstTime) { store.filters.firstTime.toggle() }
-                ChipButton(title: "OK home alone", systemImage: "clock",
-                           on: store.filters.okAlone) { store.filters.okAlone.toggle() }
-                ChipButton(title: "Calm", systemImage: "leaf",
-                           on: store.filters.energy == .calm) {
-                    store.filters.energy = store.filters.energy == .calm ? .any : .calm
-                }
-                ChipButton(title: "Small", on: store.filters.values(.size).contains("Small")) {
-                    store.filters.toggle(.size, "Small")
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(.horizontal, -16)
     }
 }
 
@@ -221,73 +179,38 @@ struct ChipButton: View {
 struct DogCard: View {
     @Environment(AppStore.self) private var store
     let dog: Dog
-    /// The one-per-row card: a square photo and room for the facts that make
-    /// someone stop scrolling — who they are, how they'd fit, what the rescue
-    /// says. The two-per-row card is a face and a name.
-    var large = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: large ? 10 : 8) {
-            RemoteImage(url: dog.photoURLs.first, maxPixel: large ? 1100 : 560)
-                .aspectRatio(large ? 1 : 4 / 5, contentMode: .fit)
-                .overlay(alignment: .topTrailing) {
-                    SaveButton(dog: dog, size: large ? 42 : 36).padding(large ? 12 : 8)
-                }
-                .overlay(alignment: .bottomLeading) { badge.padding(large ? 12 : 8) }
-                .clipShape(RoundedRectangle(cornerRadius: large ? 22 : 18, style: .continuous))
-            if large { largeCaption } else { smallCaption }
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-    }
-
-    private var smallCaption: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(dog.name)
-                .font(Theme.display(17))
-                .lineLimit(1)
-            Text([dog.displayBreed, dog.age].compactMap { $0 }.joined(separator: " · "))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 2)
-    }
-
-    private var largeCaption: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(dog.name)
-                    .font(Theme.display(23))
+        VStack(alignment: .leading, spacing: 10) {
+            RemoteImage(url: dog.photoURLs.first, maxPixel: 1100)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay(alignment: .topTrailing) { SaveButton(dog: dog, size: 42).padding(12) }
+                .overlay(alignment: .bottomLeading) { badge.padding(12) }
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            // Three lines, each quieter than the one above: who, what, from
+            // where. Fit chips and the quip live on the profile, where there is
+            // room for them to mean something.
+            VStack(alignment: .leading, spacing: 3) {
+                Text(dog.displayName)
+                    .font(Theme.display(22))
                     .lineLimit(1)
-                Spacer(minLength: 8)
-                if let rescue = rescueLine {
-                    Text(rescue)
-                        .font(.footnote)
+                if !dog.cardFacts.isEmpty {
+                    Text(dog.cardFacts.joined(separator: " · "))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-            }
-            Text(([dog.displayBreed] + dog.facts).joined(separator: " · "))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            let chips = fitChips
-            if !chips.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(chips, id: \.0) { Pill(text: $0.0, systemImage: $0.1) }
+                if let rescue = rescueLine {
+                    Text(rescue)
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
-                .padding(.top, 2)
             }
-            if let quip = dog.quip {
-                Text("“\(quip)”")
-                    .font(.subheadline)
-                    .italic()
-                    .lineLimit(1)
-                    .padding(.top, 1)
-            }
+            .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 
     /// The city rides with the rescue only when more than one is followed.
@@ -295,17 +218,6 @@ struct DogCard: View {
         guard let rescue = dog.sourceLabel else { return nil }
         guard store.cities.count > 1, let city = City.find(dog.cityCode) else { return rescue }
         return "\(rescue) · \(city.short)"
-    }
-
-    /// At most two, so the row never wraps: energy first, then whichever fit
-    /// fact the dog has.
-    private var fitChips: [(String, String)] {
-        var out: [(String, String)] = []
-        if let energy = dog.energyWord { out.append((energy, "bolt.fill")) }
-        if dog.apartmentFriendly { out.append(("Apartment-friendly", "building.2")) }
-        else if dog.firstTimeFriendly { out.append(("Good first dog", "hand.thumbsup")) }
-        else if dog.okAlone { out.append(("OK home alone", "clock")) }
-        return Array(out.prefix(2))
     }
 
     @ViewBuilder private var badge: some View {
@@ -364,11 +276,11 @@ private struct CardSkeleton: View {
     @State private var dim = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(Theme.surface)
-                .aspectRatio(4 / 5, contentMode: .fit)
-            RoundedRectangle(cornerRadius: 4).fill(Theme.surface).frame(width: 90, height: 14)
-            RoundedRectangle(cornerRadius: 4).fill(Theme.surface).frame(width: 130, height: 11)
+                .aspectRatio(1, contentMode: .fit)
+            RoundedRectangle(cornerRadius: 4).fill(Theme.surface).frame(width: 140, height: 18)
+            RoundedRectangle(cornerRadius: 4).fill(Theme.surface).frame(width: 230, height: 13)
         }
         .opacity(dim ? 0.45 : 1)
         .animation(.easeInOut(duration: 0.9).repeatForever(), value: dim)

@@ -164,8 +164,8 @@ struct SwipeCard: View {
                         if let energy = dog.energyWord { PhotoBadge(text: energy, systemImage: "bolt.fill") }
                         if dog.apartmentFriendly { PhotoBadge(text: "Apartment-friendly", systemImage: "building.2") }
                     }
-                    Text(dog.name).font(Theme.display(36)).lineLimit(1).minimumScaleFactor(0.7)
-                    Text(([dog.displayBreed] + dog.facts).joined(separator: " · "))
+                    Text(dog.displayName).font(Theme.display(36)).lineLimit(1).minimumScaleFactor(0.7)
+                    Text(dog.cardFacts.joined(separator: " · "))
                         .font(.subheadline.weight(.medium))
                         .lineLimit(2)
                     if let quip = dog.quip {
