@@ -38,6 +38,9 @@ final class AppStore {
     private(set) var cities: [City] = []
     private(set) var saved: [SavedSnapshot] = []
     private(set) var skipped: Set<String> = []
+    /// New dogs whose story has been watched: their ring greys and they move
+    /// to the end of the row.
+    private(set) var seenStories: Set<String> = []
 
     // Loaded
     private(set) var dogs: [Dog] = []
@@ -78,6 +81,7 @@ final class AppStore {
         static let saved = "saved.v1"
         static let skipped = "skipped.v1"
         static let token = "deviceToken"
+        static let seenStories = "seenStories.v1"
     }
 
     init() {
@@ -90,10 +94,20 @@ final class AppStore {
             saved = list
         }
         skipped = Set(defaults.stringArray(forKey: Key.skipped) ?? [])
+        seenStories = Set(defaults.stringArray(forKey: Key.seenStories) ?? [])
         deviceToken = defaults.string(forKey: Key.token)
     }
 
     var isOnboarded: Bool { !cities.isEmpty }
+
+    /// A first load has finished one way or the other — what the launch
+    /// animation waits for before it reveals the feed.
+    var isSettled: Bool {
+        switch state {
+        case .loaded, .failed: return true
+        case .idle, .loading: return false
+        }
+    }
     /// The first followed city, for the few places that need exactly one.
     var city: City? { cities.first }
     var citiesShort: String { City.joinedShort(cities) }
@@ -201,6 +215,16 @@ final class AppStore {
         lastLoaded = Date()
         state = .loaded
         refreshSnapshots()
+        // Seen-state only matters for today's arrivals; tomorrow's row starts
+        // fresh. Left alone when a city failed, since its new dogs are unknown.
+        if failures.isEmpty {
+            let fresh = Set(dogs.filter { isNew($0) }.map(\.id))
+            let kept = seenStories.intersection(fresh)
+            if kept != seenStories {
+                seenStories = kept
+                defaults.set(Array(kept), forKey: Key.seenStories)
+            }
+        }
     }
 
     func refreshIfStale() async {
@@ -252,6 +276,22 @@ final class AppStore {
     func fromSameRescue(as dog: Dog, limit: Int = 10) -> [Dog] {
         dogs.filter { $0.id != dog.id && $0.source == dog.source && !$0.photos.isEmpty }
             .prefix(limit).map { $0 }
+    }
+
+    // MARK: - Stories
+
+    /// Today's new dogs as stories: unwatched first, then watched, each in feed
+    /// order. They expire with "new today" itself, when the city's next
+    /// morning starts.
+    var storyDogs: [Dog] {
+        let fresh = dogs.filter { isNew($0) && !$0.photos.isEmpty }
+        return fresh.filter { !seenStories.contains($0.id) } + fresh.filter { seenStories.contains($0.id) }
+    }
+
+    func markStorySeen(_ dog: Dog) {
+        guard !seenStories.contains(dog.id) else { return }
+        seenStories.insert(dog.id)
+        defaults.set(Array(seenStories), forKey: Key.seenStories)
     }
 
     // MARK: - Saved

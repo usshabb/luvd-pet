@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @State private var splashDone = false
 
     var body: some View {
         ZStack {
@@ -9,6 +10,12 @@ struct RootView: View {
                 MainTabs().transition(.opacity)
             } else {
                 OnboardingView().transition(.opacity)
+            }
+            if !splashDone {
+                LaunchSplash(ready: store.isSettled || !store.isOnboarded) {
+                    splashDone = true
+                }
+                .zIndex(10)
             }
         }
         .animation(.easeInOut(duration: 0.35), value: store.isOnboarded)

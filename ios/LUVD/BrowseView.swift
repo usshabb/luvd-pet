@@ -4,64 +4,120 @@ struct BrowseView: View {
     @Environment(AppStore.self) private var store
     @State private var path: [Dog] = []
     @State private var showFilters = false
+    @State private var headerHidden = false
+    @State private var storyLaunch: StoryLaunch?
+    @State private var tracker = ScrollTracker()
+    @FocusState private var searchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     private let gridColumns = [GridItem(.flexible())]
 
     var body: some View {
-        @Bindable var store = store
         NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    // Stories only for the whole feed: a narrowed list is a
+                    // search, and a row of rings would compete with it.
+                    if !isNarrowed {
+                        StoriesRow { dogs, index in storyLaunch = StoryLaunch(dogs: dogs, index: index) }
+                    }
                     statusLine
                     content
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 4)
                 .padding(.bottom, 28)
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: FeedOffsetKey.self,
+                                           value: g.frame(in: .named("feed")).minY)
+                })
             }
+            .coordinateSpace(name: "feed")
+            .modifier(ScrollOffsetReader { trackScroll($0) })
             .scrollDismissesKeyboard(.immediately)
             .refreshable { await store.load(fresh: true) }
-            // The wordmark, not "NYC dogs": the feed can hold several cities,
-            // and the count line under the search box says which.
+            // The header is an inset rather than the system bar so it can slide
+            // away smoothly; the feed scrolls underneath it either way.
+            .safeAreaInset(edge: .top, spacing: 0) { header }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationTitle("Dogs")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $store.search,
-                        placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Name, breed or rescue")
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    // The outline-cropped wordmark at nearly the bar's full
-                    // height. The shadowed original is mostly margin, and
-                    // fitted here its letters were a third of this size.
-                    // Sized for the space between the bar's buttons, not the
-                    // bar's height: a principal item is only centred while it
-                    // clears both sides. With a single trailing button 128 × 40
-                    // (the cropped wordmark's 3.2:1) clears comfortably.
-                    Image("LogoHeader")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 128, height: 40)
-                        .accessibilityLabel("LUVD")
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { store.showSettings = true } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    // The only control above the feed. Filled when anything is
-                    // narrowing or reordering it, so its state shows without a
-                    // count or a row of chips to say so.
-                    Button { showFilters = true } label: {
-                        Image(systemName: isNarrowed
-                              ? "line.3.horizontal.decrease.circle.fill"
-                              : "line.3.horizontal.decrease.circle")
-                            .contentTransition(.symbolEffect(.replace))
-                    }
-                    .accessibilityLabel(isNarrowed
-                        ? "Filters and sort, \(store.filters.activeCount) active" : "Filters and sort")
-                }
-            }
             .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
             .sheet(isPresented: $showFilters) { FilterSheet() }
+            .fullScreenCover(item: $storyLaunch) { launch in
+                StoryViewer(dogs: launch.dogs, startIndex: launch.index)
+            }
+        }
+        // A solid strip behind the clock, so photos never slide under the status
+        // bar while the header is away. background(_:ignoresSafeAreaEdges:) is
+        // the mechanism a navigation bar uses to paint up behind the clock; a
+        // measured strip read the inset back as zero once it was allowed into
+        // the safe area, and drew nothing. Only on the feed itself: a profile
+        // has its own bar.
+        .overlay(alignment: .top) {
+            if path.isEmpty {
+                Color.clear
+                    .frame(height: 0)
+                    .background(Theme.background, ignoresSafeAreaEdges: .top)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// Gear, wordmark, Filters, and search — Instagram's shape: it slides away
+    /// while scrolling down the feed and returns the moment the scroll turns
+    /// back up. The tab bar stays, as Instagram's does; that is how you get
+    /// around, and hiding it would cost a gesture every time.
+    private var header: some View {
+        @Bindable var store = store
+        return VStack(spacing: 10) {
+            HStack {
+                HeaderButton(systemImage: "gearshape", label: "Settings") { store.showSettings = true }
+                Spacer()
+                Image("LogoHeader")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 128, height: 40)
+                    .accessibilityLabel("LUVD")
+                Spacer()
+                HeaderButton(systemImage: isNarrowed
+                             ? "line.3.horizontal.decrease.circle.fill"
+                             : "line.3.horizontal.decrease.circle",
+                             label: isNarrowed
+                             ? "Filters and sort, \(store.filters.activeCount) active"
+                             : "Filters and sort") { showFilters = true }
+            }
+            SearchField(text: $store.search, focused: $searchFocused)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+        .padding(.bottom, 10)
+        .background(Theme.background)
+        .offset(y: headerHidden && !reduceMotion ? -170 : 0)
+        .opacity(headerHidden ? 0 : 1)
+        .allowsHitTesting(!headerHidden)
+        .accessibilityHidden(headerHidden)
+        .animation(.easeInOut(duration: 0.24), value: headerHidden)
+    }
+
+    /// Hides on a real scroll down, shows on a real scroll up. Travel is summed
+    /// in one direction before anything moves, so a wobble of the thumb does not
+    /// flicker the header. Near the top it is always shown, and it never hides
+    /// while search is being typed into or VoiceOver is on.
+    private func trackScroll(_ y: CGFloat) {
+        let delta = y - tracker.last
+        tracker.last = y
+        guard !voiceOver, !searchFocused, y < -60 else {
+            tracker.travel = 0
+            if headerHidden { headerHidden = false }
+            return
+        }
+        if (delta < 0) != (tracker.travel < 0) { tracker.travel = 0 }
+        tracker.travel += delta
+        if tracker.travel < -28, !headerHidden {
+            headerHidden = true
+        } else if tracker.travel > 22, headerHidden {
+            headerHidden = false
         }
     }
 
@@ -179,8 +235,36 @@ struct ChipButton: View {
 struct DogCard: View {
     @Environment(AppStore.self) private var store
     let dog: Dog
+    /// Saved's two-up card: a portrait photo, the name and one short line, so
+    /// a list of favourites can be taken in at a glance.
+    var compact = false
 
     var body: some View {
+        if compact { compactBody } else { fullBody }
+    }
+
+    private var compactBody: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            RemoteImage(url: dog.photoURLs.first, maxPixel: 560)
+                .aspectRatio(4 / 5, contentMode: .fit)
+                .overlay(alignment: .topTrailing) { SaveButton(dog: dog, size: 34).padding(8) }
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(dog.displayName)
+                    .font(Theme.display(16))
+                    .lineLimit(1)
+                Text([dog.cardBreed, dog.cleanAge].compactMap { $0 }.joined(separator: " · "))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 2)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var fullBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             RemoteImage(url: dog.photoURLs.first, maxPixel: 1100)
                 .aspectRatio(1, contentMode: .fit)
@@ -286,5 +370,85 @@ private struct CardSkeleton: View {
         .animation(.easeInOut(duration: 0.9).repeatForever(), value: dim)
         .onAppear { dim = true }
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Header pieces
+
+private struct FeedOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Reports the feed's scroll position as content minY: 0 at rest, negative as
+/// the feed scrolls down. iOS 18+ reads the scroll view's real offset; a
+/// preference measured from inside the content stopped arriving during scrolls
+/// there, which left the header never hiding. iOS 17 keeps the preference.
+private struct ScrollOffsetReader: ViewModifier {
+    let onChange: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top
+            } action: { _, offset in
+                onChange(-offset)
+            }
+        } else {
+            content.onPreferenceChange(FeedOffsetKey.self, perform: onChange)
+        }
+    }
+}
+
+/// Scroll bookkeeping that must not re-render the feed at scroll frame rate:
+/// a reference type mutated in place, so only `headerHidden` flipping does.
+private final class ScrollTracker {
+    var last: CGFloat = 0
+    var travel: CGFloat = 0
+}
+
+private struct HeaderButton: View {
+    let systemImage: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Theme.red)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel(label)
+    }
+}
+
+private struct SearchField: View {
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Name, breed or rescue", text: $text)
+                .focused(focused)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(Theme.surface, in: Capsule())
     }
 }

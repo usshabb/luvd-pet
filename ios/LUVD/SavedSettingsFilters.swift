@@ -6,7 +6,9 @@ import UIKit
 struct SavedView: View {
     @Environment(AppStore.self) private var store
     @State private var path: [Dog] = []
-    private let columns = [GridItem(.flexible())]
+    /// Two up, unlike the feed: Saved is a list you already know, and seeing
+    /// more of it at once matters more than seeing each dog large.
+    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -25,9 +27,9 @@ struct SavedView: View {
                         VStack(alignment: .leading, spacing: 24) {
                             let available = store.savedAvailable
                             if !available.isEmpty {
-                                LazyVGrid(columns: columns, spacing: 30) {
+                                LazyVGrid(columns: columns, spacing: 18) {
                                     ForEach(available) { dog in
-                                        DogCard(dog: dog)
+                                        DogCard(dog: dog, compact: true)
                                             .onTapGesture { path.append(dog) }
                                             .accessibilityAddTraits(.isButton)
                                     }
