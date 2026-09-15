@@ -60,7 +60,17 @@ final class AppStore {
     var search = ""
 
     // Navigation
-    var tab: AppTab = .browse
+    var tab: AppTab = .browse {
+        didSet { if tab != oldValue { tabBarCompact = false } }
+    }
+    /// The tab bar a little smaller while a feed scrolls down. Set by the feed.
+    var tabBarCompact = false
+    /// Tabs currently showing a pushed profile, which has its own bottom bar.
+    private(set) var tabBarHiddenOn: Set<AppTab> = []
+
+    func setTabBar(hidden: Bool, on tab: AppTab) {
+        if hidden { tabBarHiddenOn.insert(tab) } else { tabBarHiddenOn.remove(tab) }
+    }
     /// Set by a notification tap; the root presents it.
     var openDog: Dog?
     var showSettings = false

@@ -31,22 +31,25 @@ struct MainTabs: View {
         @Bindable var store = store
         TabView(selection: $store.tab) {
             BrowseView()
-                .tabItem { Image(systemName: "dog.fill").accessibilityLabel("Dogs") }
+                .toolbar(.hidden, for: .tabBar)
                 .tag(AppTab.browse)
             DiscoverView()
-                .tabItem { Image(systemName: "rectangle.stack.fill").accessibilityLabel("Discover") }
+                .toolbar(.hidden, for: .tabBar)
                 .tag(AppTab.discover)
             SavedView()
-                // The wordmark's own V-heart rather than the system heart: the
-                // one mark in the tab bar that says LUVD.
-                .tabItem { Image("LuvdHeart").renderingMode(.template).accessibilityLabel("Saved") }
+                .toolbar(.hidden, for: .tabBar)
                 .tag(AppTab.saved)
         }
-        // Scrolling down a feed collapses the tab bar to a small glass pill and
-        // scrolling up restores it: most of the screen goes to the dogs while a
-        // tab stays one tap away. The system's own behaviour on iOS 26; earlier
-        // systems keep the bar as it was.
-        .minimizesTabBarOnScroll()
+        // LUVD's own bar rather than the system's. On iOS 26 the system bar
+        // collapses into the corner on scroll; this one stays where the thumb
+        // expects it and only eases a little smaller, then back.
+        .overlay(alignment: .bottom) {
+            if !store.tabBarHiddenOn.contains(store.tab) {
+                LuvdTabBar()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: store.tabBarHiddenOn.contains(store.tab))
         .sheet(item: $store.openDog) { dog in
             NavigationStack {
                 DogDetailView(dog: dog)
@@ -302,12 +305,78 @@ struct PressableStyle: ButtonStyle {
     }
 }
 
+// MARK: - Tab bar
+
+/// Room a tab's content leaves at the bottom for the floating bar.
+enum TabBarMetrics {
+    static let reserved: CGFloat = 74
+}
+
+extension View {
+    /// Lets a tab's scrolling content pass under the bar but end above it.
+    func reservesTabBarSpace() -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: TabBarMetrics.reserved) }
+    }
+}
+
+struct LuvdTabBar: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selection
+
+    var body: some View {
+        let compact = store.tabBarCompact && !reduceMotion
+        HStack(spacing: 2) {
+            item(.browse, label: "Dogs") { DogFaceIcon() }
+            item(.discover, label: "Discover") { Image(systemName: "rectangle.stack.fill") }
+            item(.saved, label: "Saved") { Image("LuvdHeart").renderingMode(.template) }
+        }
+        .padding(5)
+        .glassCapsule()
+        // Smaller, not gone: still one tap away, just quieter while reading.
+        .scaleEffect(compact ? 0.84 : 1, anchor: .bottom)
+        .offset(y: compact ? 6 : 0)
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: compact)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Tabs")
+    }
+
+    private func item<Icon: View>(_ tab: AppTab, label: String, @ViewBuilder icon: () -> Icon) -> some View {
+        let selected = store.tab == tab
+        return Button {
+            guard !selected else { return }
+            Haptics.selection()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { store.tab = tab }
+        } label: {
+            icon()
+                .font(.system(size: 22, weight: .semibold))
+                .frame(width: 26, height: 26)
+                .foregroundStyle(selected ? Theme.red : Color.primary)
+                .frame(width: 70, height: 50)
+                .background {
+                    if selected {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.08))
+                            .matchedGeometryEffect(id: "selected", in: selection)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+}
+
 private extension View {
-    @ViewBuilder func minimizesTabBarOnScroll() -> some View {
+    @ViewBuilder func glassCapsule() -> some View {
         if #available(iOS 26.0, *) {
-            self.tabBarMinimizeBehavior(.onScrollDown)
+            self.glassEffect(.regular.interactive(), in: Capsule())
         } else {
             self
+                .background(.regularMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.12), radius: 14, y: 4)
         }
     }
 }

@@ -34,6 +34,7 @@ struct BrowseView: View {
                 })
             }
             .coordinateSpace(name: "feed")
+            .reservesTabBarSpace()
             .modifier(ScrollOffsetReader { trackScroll($0) })
             .scrollDismissesKeyboard(.immediately)
             .refreshable { await store.load(fresh: true) }
@@ -47,6 +48,17 @@ struct BrowseView: View {
             .fullScreenCover(item: $storyLaunch) { launch in
                 StoryViewer(dogs: launch.dogs, startIndex: launch.index)
             }
+        }
+        // The tab bar follows the header: a little smaller while the header is
+        // away, full size when it returns. A profile has its own bottom bar.
+        .onChange(of: headerHidden) { _, hidden in
+            if store.tab == .browse { store.tabBarCompact = hidden }
+        }
+        .onChange(of: store.tab) { _, tab in
+            if tab == .browse { store.tabBarCompact = headerHidden }
+        }
+        .onChange(of: path.isEmpty, initial: true) { _, empty in
+            store.setTabBar(hidden: !empty, on: .browse)
         }
         // A solid strip behind the clock, so photos never slide under the status
         // bar while the header is away. background(_:ignoresSafeAreaEdges:) is

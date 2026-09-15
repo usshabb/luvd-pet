@@ -69,6 +69,16 @@ struct DogDetailView: View {
         .toolbarColorScheme(photoFaded ? nil : .dark, for: .navigationBar)
         .animation(.easeInOut(duration: 0.2), value: pastHero)
         .toolbar {
+            // The system's inline title is small; once the big name has scrolled
+            // away, the bar carries it at a size that still reads as the name.
+            ToolbarItem(placement: .principal) {
+                Text(dog.displayName)
+                    .font(Theme.display(21))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .opacity(pastHero ? 1 : 0)
+                    .accessibilityHidden(!pastHero)
+            }
             if let url = dog.webURL(base: API.productionBase) {
                 ToolbarItem(placement: .topBarTrailing) {
                     ShareLink(item: url, message: Text("Meet \(dog.name) on LUVD")) {

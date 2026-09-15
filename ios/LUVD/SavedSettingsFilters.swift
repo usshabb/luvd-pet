@@ -55,6 +55,7 @@ struct SavedView: View {
                     }
                 }
             }
+            .reservesTabBarSpace()
             .navigationTitle("Saved")
             .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
             .toolbar {
@@ -66,6 +67,9 @@ struct SavedView: View {
                     }
                 }
             }
+        }
+        .onChange(of: path.isEmpty, initial: true) { _, empty in
+            store.setTabBar(hidden: !empty, on: .saved)
         }
     }
 

@@ -40,6 +40,7 @@ struct DiscoverView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
+            .reservesTabBarSpace()
             .navigationTitle("Discover")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
