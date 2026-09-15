@@ -179,6 +179,19 @@ enum API {
     }
     #endif
 
+    /// True when the server has accounts (an unauthenticated /api/me is a
+    /// 401), false when it predates them (404/405), nil when it can't be told.
+    static func accountsAvailable() async -> Bool? {
+        var req = URLRequest(url: base.appendingPathComponent("api/me"))
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let (_, response) = try? await session.data(for: req) else { return nil }
+        switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
+        case 401: return true
+        case 404, 405: return false
+        default: return nil
+        }
+    }
+
     static func me(token: String) async throws -> Me {
         try await send("api/me", body: nil, token: token)
     }

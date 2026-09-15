@@ -85,6 +85,7 @@ struct OnboardingView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: store.account != nil)
+        .task { await store.checkAccountsAvailable() }
         .task {
             guard preview.isEmpty, let p = try? await API.dogs(for: .nyc) else { return }
             withAnimation(.easeOut(duration: 0.6)) {
@@ -126,16 +127,32 @@ struct OnboardingView: View {
                         .multilineTextAlignment(.center)
                         .padding(.top, 8)
 
-                    AppleSignInButton(label: .continue)
-                        .padding(.top, 28)
+                    if store.accountsAvailable {
+                        AppleSignInButton(label: .continue)
+                            .padding(.top, 28)
 
-                    Button("Not now") {
-                        withAnimation(.easeInOut(duration: 0.3)) { pickingCities = true }
+                        Button("Not now") {
+                            withAnimation(.easeInOut(duration: 0.3)) { pickingCities = true }
+                        }
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(height: 44)
+                        .padding(.top, 6)
+                    } else {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.3)) { pickingCities = true }
+                        } label: {
+                            Text("Get started")
+                                .font(Theme.display(18, .semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 56)
+                                .background(Theme.red, in: Capsule())
+                        }
+                        .buttonStyle(PressableStyle())
+                        .padding(.top, 28)
+                        .padding(.bottom, 44)
                     }
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(height: 44)
-                    .padding(.top, 6)
 
                     if let problem = store.accountProblem {
                         Text(problem)
@@ -327,7 +344,7 @@ struct LuvdTabBar: View {
     var body: some View {
         let compact = store.tabBarCompact && !reduceMotion
         HStack(spacing: 2) {
-            item(.browse, label: "Dogs") { DogFaceIcon() }
+            item(.browse, label: "Dogs") { PawPrintIcon() }
             item(.discover, label: "Discover") { Image(systemName: "rectangle.stack.fill") }
             item(.saved, label: "Saved") { Image("LuvdHeart").renderingMode(.template) }
         }

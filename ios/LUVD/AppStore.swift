@@ -85,6 +85,9 @@ final class AppStore {
     /// Set while signed in. The session token is in the keychain.
     private(set) var account: Account?
     private(set) var accountProblem: String?
+    /// Whether the server has accounts. Until it does, the app shows no
+    /// sign-in anywhere rather than a button that can only fail.
+    private(set) var accountsAvailable = false
     /// The local saved list has changes the account hasn't heard about yet.
     private var savedDirty = false
     private var savedSync: Task<Void, Never>?
@@ -105,6 +108,7 @@ final class AppStore {
         static let account = "account.v1"
         static let savedDirty = "savedDirty"
         static let session = "session"
+        static let accountsAvailable = "accountsAvailable"
     }
 
     init() {
@@ -131,6 +135,14 @@ final class AppStore {
             defaults.removeObject(forKey: Key.account)
         }
         savedDirty = defaults.bool(forKey: Key.savedDirty)
+        accountsAvailable = defaults.bool(forKey: Key.accountsAvailable)
+    }
+
+    /// Asks the server once per launch whether accounts exist there yet.
+    func checkAccountsAvailable() async {
+        guard let available = await API.accountsAvailable() else { return }
+        accountsAvailable = available
+        defaults.set(available, forKey: Key.accountsAvailable)
     }
 
     var isOnboarded: Bool { !cities.isEmpty }
@@ -160,6 +172,7 @@ final class AppStore {
             UIApplication.shared.registerForRemoteNotifications()
         }
         if isOnboarded && dogs.isEmpty { await load() }
+        await checkAccountsAvailable()
         await refreshAccount()
     }
 

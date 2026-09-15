@@ -25,7 +25,7 @@ struct SavedView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
-                            if store.account == nil { SaveSyncCard() }
+                            if store.account == nil && store.accountsAvailable { SaveSyncCard() }
                             let available = store.savedAvailable
                             if !available.isEmpty {
                                 LazyVGrid(columns: columns, spacing: 18) {
@@ -124,7 +124,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                AccountSection()
+                if store.accountsAvailable || store.account != nil { AccountSection() }
 
                 Section {
                     ForEach(City.all) { city in
@@ -171,9 +171,6 @@ struct SettingsView: View {
 
                 Section {
                     Link(destination: API.productionBase) { Label("luvd.com", systemImage: "safari") }
-                    Link(destination: URL(string: "https://instagram.com/liveluvd")!) {
-                        Label("Instagram", systemImage: "camera")
-                    }
                 } header: {
                     Text("About")
                 } footer: {

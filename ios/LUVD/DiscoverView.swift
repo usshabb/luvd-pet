@@ -22,7 +22,7 @@ struct DiscoverView: View {
                 } else if deck.isEmpty {
                     emptyState.frame(maxHeight: .infinity)
                 } else {
-                    Text("Swipe right to save · left to skip · tap for details")
+                    Text("Heart to save · skip to see the next dog · tap for details")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     ZStack {
