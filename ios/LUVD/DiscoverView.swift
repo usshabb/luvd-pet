@@ -50,9 +50,8 @@ struct DiscoverView: View {
             .navigationTitle("Discover")
             .sheet(item: $detail) { dog in
                 NavigationStack {
-                    DogDetailView(dog: dog)
+                    DogDetailView(dog: dog, isSheet: true)
                         .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
-                        .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { detail = nil } } }
                 }
             }
         }

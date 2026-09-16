@@ -137,9 +137,8 @@ struct StoryViewer: View {
         .onChange(of: isPaused) { _, paused in paused ? pause() : resume() }
         .sheet(item: $profileDog) { d in
             NavigationStack {
-                DogDetailView(dog: d)
+                DogDetailView(dog: d, isSheet: true)
                     .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
-                    .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { profileDog = nil } } }
             }
         }
     }

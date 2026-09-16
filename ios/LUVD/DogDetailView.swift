@@ -4,6 +4,11 @@ import SwiftUI
 struct DogDetailView: View {
     @Environment(AppStore.self) private var store
     let dog: Dog
+    /// Presented as a sheet rather than pushed: the profile carries its own
+    /// Done button, so it can be white over the photo like everything else in
+    /// that bar and red once the bar has a background.
+    var isSheet = false
+    @Environment(\.dismiss) private var dismiss
 
     @State private var page = 0
     @State private var applyURL: URL?
@@ -69,6 +74,12 @@ struct DogDetailView: View {
         .toolbarColorScheme(photoFaded ? nil : .dark, for: .navigationBar)
         .animation(.easeInOut(duration: 0.2), value: pastHero)
         .toolbar {
+            if isSheet {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(photoFaded ? AnyShapeStyle(Theme.red) : AnyShapeStyle(.white))
+                }
+            }
             // The system's inline title is small; once the big name has scrolled
             // away, the bar carries it at a size that still reads as the name.
             ToolbarItem(placement: .principal) {
@@ -82,7 +93,11 @@ struct DogDetailView: View {
             if let url = dog.webURL(base: API.productionBase) {
                 ToolbarItem(placement: .topBarTrailing) {
                     ShareLink(item: url, message: Text("Meet \(dog.name) on LUVD")) {
+                        // White while it sits on the photo, where the app's red
+                        // reads as a stray mark; red once the bar has a
+                        // background under it, like every other button.
                         Image(systemName: "square.and.arrow.up")
+                            .foregroundStyle(photoFaded ? AnyShapeStyle(Theme.red) : AnyShapeStyle(.white))
                     }
                     .simultaneousGesture(TapGesture().onEnded { API.recordOutbound(dog, kind: "share") })
                 }

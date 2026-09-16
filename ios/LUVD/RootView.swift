@@ -52,13 +52,8 @@ struct MainTabs: View {
         .animation(.easeInOut(duration: 0.22), value: store.tabBarHiddenOn.contains(store.tab))
         .sheet(item: $store.openDog) { dog in
             NavigationStack {
-                DogDetailView(dog: dog)
+                DogDetailView(dog: dog, isSheet: true)
                     .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Done") { store.openDog = nil }
-                        }
-                    }
             }
         }
         .sheet(isPresented: $store.showSettings) { SettingsView() }
