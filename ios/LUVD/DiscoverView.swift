@@ -35,11 +35,10 @@ struct DiscoverView: View {
                             }
                             topCard(deck[0])
                         }
-                        .aspectRatio(0.78, contentMode: .fit)
+                        .aspectRatio(0.68, contentMode: .fit)
                         .frame(maxHeight: .infinity)
                         controls(deck[0])
                     }
-                    .overlay(alignment: .topLeading) { undoButton }
                     .overlay(alignment: .topTrailing) { filterCount }
                 }
             }
@@ -93,25 +92,6 @@ struct DiscoverView: View {
             .id(dog.id)
     }
 
-    /// Only there once there is something to undo, floating over the card's
-    /// corner now that there is no navigation bar to hold it.
-    @ViewBuilder private var undoButton: some View {
-        if store.lastDeckAction != nil {
-            Button { store.undoDeck() } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 42)
-                    .background(.black.opacity(0.35), in: Circle())
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .buttonStyle(PressableStyle())
-            .padding(14)
-            .accessibilityLabel("Undo")
-            .transition(.scale.combined(with: .opacity))
-        }
-    }
-
     @ViewBuilder private var filterCount: some View {
         if !store.filters.isEmpty {
             Text("\(store.filters.activeCount) filter\(store.filters.activeCount == 1 ? "" : "s") on")
@@ -126,7 +106,7 @@ struct DiscoverView: View {
 
     /// Skip and save, in their own row under the card.
     private func controls(_ dog: Dog) -> some View {
-        HStack(spacing: 40) {
+        HStack(spacing: 20) {
             RoundAction(systemImage: "xmark", tint: .secondary, size: 64) { fling(dog, save: false) }
                 .accessibilityLabel("Skip \(dog.name)")
             RoundAction(systemImage: "heart.fill", tint: Theme.red, size: 64) { fling(dog, save: true) }
