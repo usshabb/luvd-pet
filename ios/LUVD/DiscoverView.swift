@@ -35,7 +35,7 @@ struct DiscoverView: View {
                             }
                             topCard(deck[0])
                         }
-                        .aspectRatio(0.68, contentMode: .fit)
+                        .aspectRatio(0.62, contentMode: .fit)
                         .frame(maxHeight: .infinity)
                         controls(deck[0])
                     }
