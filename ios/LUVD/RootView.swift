@@ -381,7 +381,7 @@ struct LuvdTabBar: View {
     }
 }
 
-private extension View {
+extension View {
     @ViewBuilder func glassCapsule() -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular.interactive(), in: Capsule())

@@ -22,10 +22,11 @@ struct DiscoverView: View {
                 } else if deck.isEmpty {
                     emptyState.frame(maxHeight: .infinity)
                 } else {
-                    // A portrait card with the buttons under it. The card is
-                    // shaped rather than stretched, so the photo never towers
-                    // and the row below has room of its own.
-                    VStack(spacing: 20) {
+                    // The controls straddle the card's bottom edge, so they
+                    // read as part of the dog rather than as a separate row
+                    // stranded between the card and the tab bar. The capsule is
+                    // glass, so the photo carries on through it.
+                    Group {
                         ZStack {
                             ForEach(Array(deck.prefix(3).enumerated().dropFirst().reversed()), id: \.element.id) { i, dog in
                                 SwipeCard(dog: dog, isNew: store.isNew(dog))
@@ -37,7 +38,8 @@ struct DiscoverView: View {
                         }
                         .aspectRatio(0.62, contentMode: .fit)
                         .frame(maxHeight: .infinity)
-                        controls(deck[0])
+                        .overlay(alignment: .bottom) { controls(deck[0]).offset(y: 32) }
+                        .padding(.bottom, 32)
                     }
                     .overlay(alignment: .topTrailing) { filterCount }
                 }
@@ -104,14 +106,33 @@ struct DiscoverView: View {
         }
     }
 
-    /// Skip and save, in their own row under the card.
+    /// Skip and save in one glass capsule, the same material as the tab bar
+    /// below them: a single control under the card rather than two loose
+    /// buttons floating in the gap.
     private func controls(_ dog: Dog) -> some View {
-        HStack(spacing: 20) {
-            RoundAction(systemImage: "xmark", tint: .secondary, size: 64) { fling(dog, save: false) }
-                .accessibilityLabel("Skip \(dog.name)")
-            RoundAction(systemImage: "heart.fill", tint: Theme.red, size: 64) { fling(dog, save: true) }
-                .accessibilityLabel("Save \(dog.name)")
+        HStack(spacing: 4) {
+            controlButton(systemImage: "xmark", tint: .secondary, label: "Skip \(dog.name)") {
+                fling(dog, save: false)
+            }
+            controlButton(systemImage: "heart.fill", tint: Theme.red, label: "Save \(dog.name)") {
+                fling(dog, save: true)
+            }
         }
+        .padding(5)
+        .glassCapsule()
+    }
+
+    private func controlButton(systemImage: String, tint: Color, label: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 78, height: 54)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel(label)
     }
 
     private func fling(_ dog: Dog, save: Bool) {
@@ -182,7 +203,7 @@ struct SwipeCard: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
-                .padding(.bottom, 22)
+                .padding(.bottom, 30)
             }
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
