@@ -61,8 +61,15 @@ final class AppStore {
 
     // Navigation
     var tab: AppTab = .browse {
-        didSet { if tab != oldValue { tabBarCompact = false } }
+        didSet {
+            guard tab != oldValue else { return }
+            tabBarCompact = false
+            if tab == .discover { demonstrateSwipe() }
+        }
     }
+    /// How far the demonstration is holding the top card off centre. The card
+    /// adds this to its own drag, so the two are the same motion.
+    private(set) var coachOffset: CGFloat = 0
     /// The tab bar a little smaller while a feed scrolls down. Set by the feed.
     var tabBarCompact = false
     /// Tabs currently showing a pushed profile, which has its own bottom bar.
@@ -146,6 +153,40 @@ final class AppStore {
         guard !discoverCoached else { return }
         discoverCoached = true
         defaults.set(true, forKey: Key.discoverCoached)
+    }
+
+    /// The first arrival on Discover: tip the top card right and then left, far
+    /// enough for the SAVE and SKIP stamps to show, so the gesture is
+    /// demonstrated rather than described.
+    ///
+    /// Run from here rather than from the view: an appearance trigger inside
+    /// DiscoverView never fired, and switching to the tab always does.
+    private func demonstrateSwipe() {
+        guard !discoverCoached else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            for step: CGFloat in [130, 0, -130, 0] {
+                guard coachDemoRunning else { break }
+                withAnimation(.easeInOut(duration: 0.45)) { coachOffset = step }
+                try? await Task.sleep(for: .milliseconds(step == 0 ? 260 : 700))
+            }
+            coachOffset = 0
+            coachDemoRunning = false
+            // Claimed at the end, so the caption stays up for the whole
+            // demonstration rather than vanishing as it starts.
+            markDiscoverCoached()
+        }
+        coachDemoRunning = true
+    }
+
+    private var coachDemoRunning = false
+
+    /// A real touch ends the demonstration where it stands.
+    func cancelSwipeDemo() {
+        guard coachDemoRunning || coachOffset != 0 else { return }
+        coachDemoRunning = false
+        markDiscoverCoached()
+        withAnimation(.easeOut(duration: 0.2)) { coachOffset = 0 }
     }
 
     /// Asks the server once per launch whether accounts exist there yet.

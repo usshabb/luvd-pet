@@ -25,23 +25,21 @@ struct DiscoverView: View {
                 } else if deck.isEmpty {
                     emptyState.frame(maxHeight: .infinity)
                 } else {
-                    // Card, then its controls just below in one glass capsule —
-                    // close enough to belong to the dog, clear of the photo.
-                    VStack(spacing: 16) {
-                        ZStack {
+                    // Just the card. Skip and save were a second bar competing
+                    // with the tab bar for the same strip; the swipe is the
+                    // gesture this screen is for, and the first card says so.
+                    ZStack {
                             ForEach(Array(deck.prefix(3).enumerated().dropFirst().reversed()), id: \.element.id) { i, dog in
-                                SwipeCard(dog: dog, isNew: store.isNew(dog))
-                                    .scaleEffect(1 - CGFloat(i) * 0.04)
-                                    .offset(y: CGFloat(i) * 12)
-                                    .allowsHitTesting(false)
-                            }
-                            topCard(deck[0])
+                            SwipeCard(dog: dog, isNew: store.isNew(dog))
+                                .scaleEffect(1 - CGFloat(i) * 0.04)
+                                .offset(y: CGFloat(i) * 12)
+                                .allowsHitTesting(false)
                         }
-                        .aspectRatio(0.62, contentMode: .fit)
-                        .frame(maxHeight: .infinity)
-                        .overlay(alignment: .top) { coachHint }
-                        controls(deck[0])
+                        topCard(deck[0])
                     }
+                    .aspectRatio(0.58, contentMode: .fit)
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .top) { coachHint }
                     .overlay(alignment: .topTrailing) { filterCount }
                 }
             }
@@ -66,20 +64,21 @@ struct DiscoverView: View {
         SwipeCard(dog: dog, isNew: store.isNew(dog))
             .overlay(alignment: .topLeading) {
                 Stamp(text: "SAVE", systemImage: "heart.fill", color: Theme.red)
-                    .opacity(Double(max(0, drag.width) / threshold))
+                    .opacity(Double(max(0, drag.width + store.coachOffset) / threshold))
                     .padding(22)
             }
             .overlay(alignment: .topTrailing) {
                 Stamp(text: "SKIP", systemImage: "xmark", color: .gray)
-                    .opacity(Double(max(0, -drag.width) / threshold))
+                    .opacity(Double(max(0, -(drag.width + store.coachOffset)) / threshold))
                     .padding(22)
             }
-            .offset(drag)
-            .rotationEffect(.degrees(Double(drag.width / 22)), anchor: .bottom)
+            .offset(x: drag.width + store.coachOffset, y: drag.height)
+            .rotationEffect(.degrees(Double((drag.width + store.coachOffset) / 22)), anchor: .bottom)
             .onTapGesture { detail = dog }
             .gesture(
                 DragGesture()
                     .onChanged {
+                        store.cancelSwipeDemo()
                         withAnimation(.easeOut(duration: 0.3)) { store.markDiscoverCoached() }
                         if !flinging { drag = $0.translation }
                     }
@@ -108,35 +107,6 @@ struct DiscoverView: View {
                 .background(Theme.red, in: Capsule())
                 .padding(14)
         }
-    }
-
-    /// Skip and save in one glass capsule, the same material as the tab bar
-    /// below them: a single control under the card rather than two loose
-    /// buttons floating in the gap.
-    private func controls(_ dog: Dog) -> some View {
-        HStack(spacing: 4) {
-            controlButton(systemImage: "xmark", tint: .secondary, label: "Skip \(dog.name)") {
-                fling(dog, save: false)
-            }
-            controlButton(systemImage: "heart.fill", tint: Theme.red, label: "Save \(dog.name)") {
-                fling(dog, save: true)
-            }
-        }
-        .padding(5)
-        .glassCapsule()
-    }
-
-    private func controlButton(systemImage: String, tint: Color, label: String,
-                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 24, weight: .bold))
-                .foregroundStyle(tint)
-                .frame(width: 78, height: 54)
-                .contentShape(Capsule())
-        }
-        .buttonStyle(PressableStyle())
-        .accessibilityLabel(label)
     }
 
     /// Says what to do until the first time anything is done, then never
