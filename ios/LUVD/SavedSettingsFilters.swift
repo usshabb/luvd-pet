@@ -57,12 +57,18 @@ struct SavedView: View {
             }
             .reservesTabBarSpace()
             // Inline, so the title shares the line with Share instead of
-            // spending a row on itself — and nothing at all when the list is
-            // empty, where the empty state already says what this is.
+            // spending a row on itself — but in the display face at a size
+            // that still reads as a title, not as a caption. Nothing at all
+            // when the list is empty, where the empty state says what this is.
             .navigationTitle(store.saved.isEmpty ? "" : "Saved")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: Dog.self) { DogDetailView(dog: $0) }
             .toolbar {
+                if !store.saved.isEmpty {
+                    ToolbarItem(placement: .principal) {
+                        Text("Saved").font(Theme.display(26))
+                    }
+                }
                 if let link = savedLink {
                     ToolbarItem(placement: .topBarTrailing) {
                         ShareLink(item: link, message: Text("Dogs I saved on LUVD")) {
