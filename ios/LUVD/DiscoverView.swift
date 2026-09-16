@@ -22,20 +22,23 @@ struct DiscoverView: View {
                 } else if deck.isEmpty {
                     emptyState.frame(maxHeight: .infinity)
                 } else {
-                    // The buttons live on the card, at the bottom of the photo.
-                    // Floating them between the card and the tab bar left an
-                    // orphan strip belonging to neither.
-                    ZStack {
-                        ForEach(Array(deck.prefix(3).enumerated().dropFirst().reversed()), id: \.element.id) { i, dog in
-                            SwipeCard(dog: dog, isNew: store.isNew(dog))
-                                .scaleEffect(1 - CGFloat(i) * 0.04)
-                                .offset(y: CGFloat(i) * 12)
-                                .allowsHitTesting(false)
+                    // A portrait card with the buttons under it. The card is
+                    // shaped rather than stretched, so the photo never towers
+                    // and the row below has room of its own.
+                    VStack(spacing: 20) {
+                        ZStack {
+                            ForEach(Array(deck.prefix(3).enumerated().dropFirst().reversed()), id: \.element.id) { i, dog in
+                                SwipeCard(dog: dog, isNew: store.isNew(dog))
+                                    .scaleEffect(1 - CGFloat(i) * 0.04)
+                                    .offset(y: CGFloat(i) * 12)
+                                    .allowsHitTesting(false)
+                            }
+                            topCard(deck[0])
                         }
-                        topCard(deck[0])
+                        .aspectRatio(0.78, contentMode: .fit)
+                        .frame(maxHeight: .infinity)
+                        controls(deck[0])
                     }
-                    .frame(maxHeight: .infinity)
-                    .overlay(alignment: .bottom) { controls(deck[0]).padding(.bottom, 18) }
                     .overlay(alignment: .topLeading) { undoButton }
                     .overlay(alignment: .topTrailing) { filterCount }
                 }
@@ -90,17 +93,6 @@ struct DiscoverView: View {
             .id(dog.id)
     }
 
-    /// Skip and save, sitting on the photo at the bottom of the card. No
-    /// details button — tapping the dog opens the profile.
-    private func controls(_ dog: Dog) -> some View {
-        HStack(spacing: 44) {
-            RoundAction(systemImage: "xmark", tint: .secondary, size: 66) { fling(dog, save: false) }
-                .accessibilityLabel("Skip \(dog.name)")
-            RoundAction(systemImage: "heart.fill", tint: Theme.red, size: 66) { fling(dog, save: true) }
-                .accessibilityLabel("Save \(dog.name)")
-        }
-    }
-
     /// Only there once there is something to undo, floating over the card's
     /// corner now that there is no navigation bar to hold it.
     @ViewBuilder private var undoButton: some View {
@@ -129,6 +121,16 @@ struct DiscoverView: View {
                 .frame(height: 30)
                 .background(Theme.red, in: Capsule())
                 .padding(14)
+        }
+    }
+
+    /// Skip and save, in their own row under the card.
+    private func controls(_ dog: Dog) -> some View {
+        HStack(spacing: 40) {
+            RoundAction(systemImage: "xmark", tint: .secondary, size: 64) { fling(dog, save: false) }
+                .accessibilityLabel("Skip \(dog.name)")
+            RoundAction(systemImage: "heart.fill", tint: Theme.red, size: 64) { fling(dog, save: true) }
+                .accessibilityLabel("Save \(dog.name)")
         }
     }
 
@@ -200,8 +202,7 @@ struct SwipeCard: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
-                // Clear of the buttons that sit on the same bottom edge.
-                .padding(.bottom, 96)
+                .padding(.bottom, 22)
             }
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
             .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
