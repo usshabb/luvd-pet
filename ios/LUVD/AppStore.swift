@@ -95,6 +95,8 @@ final class AppStore {
 
     // Discover
     private(set) var lastDeckAction: DeckAction?
+    /// Whether the swipe has been demonstrated. Once only, ever.
+    private(set) var discoverCoached = false
     struct DeckAction: Equatable { let dogID: String; let saved: Bool }
 
     private let defaults = UserDefaults.standard
@@ -109,6 +111,7 @@ final class AppStore {
         static let savedDirty = "savedDirty"
         static let session = "session"
         static let accountsAvailable = "accountsAvailable"
+        static let discoverCoached = "discoverCoached.v1"
     }
 
     init() {
@@ -136,6 +139,13 @@ final class AppStore {
         }
         savedDirty = defaults.bool(forKey: Key.savedDirty)
         accountsAvailable = defaults.bool(forKey: Key.accountsAvailable)
+        discoverCoached = defaults.bool(forKey: Key.discoverCoached)
+    }
+
+    func markDiscoverCoached() {
+        guard !discoverCoached else { return }
+        discoverCoached = true
+        defaults.set(true, forKey: Key.discoverCoached)
     }
 
     /// Asks the server once per launch whether accounts exist there yet.

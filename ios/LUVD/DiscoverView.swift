@@ -15,18 +15,19 @@ struct DiscoverView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            // A concrete container, not a Group: lifecycle modifiers attached
+            // to a Group are applied per branch and never ran the first-run
+            // demonstration below.
+            ZStack {
                 let deck = store.deck
                 if store.dogs.isEmpty && store.state != .loaded {
                     ProgressView().frame(maxHeight: .infinity)
                 } else if deck.isEmpty {
                     emptyState.frame(maxHeight: .infinity)
                 } else {
-                    // The controls straddle the card's bottom edge, so they
-                    // read as part of the dog rather than as a separate row
-                    // stranded between the card and the tab bar. The capsule is
-                    // glass, so the photo carries on through it.
-                    Group {
+                    // Card, then its controls just below in one glass capsule —
+                    // close enough to belong to the dog, clear of the photo.
+                    VStack(spacing: 16) {
                         ZStack {
                             ForEach(Array(deck.prefix(3).enumerated().dropFirst().reversed()), id: \.element.id) { i, dog in
                                 SwipeCard(dog: dog, isNew: store.isNew(dog))
@@ -38,8 +39,8 @@ struct DiscoverView: View {
                         }
                         .aspectRatio(0.62, contentMode: .fit)
                         .frame(maxHeight: .infinity)
-                        .overlay(alignment: .bottom) { controls(deck[0]).offset(y: 32) }
-                        .padding(.bottom, 32)
+                        .overlay(alignment: .top) { coachHint }
+                        controls(deck[0])
                     }
                     .overlay(alignment: .topTrailing) { filterCount }
                 }
@@ -49,7 +50,7 @@ struct DiscoverView: View {
             .padding(.bottom, 6)
             .reservesTabBarSpace()
             // No title bar: the card is the screen, and what to do with it is
-            // obvious from the two buttons on its edge.
+            // shown once, by the card itself.
             .toolbar(.hidden, for: .navigationBar)
             .navigationTitle("Discover")
             .sheet(item: $detail) { dog in
@@ -78,7 +79,10 @@ struct DiscoverView: View {
             .onTapGesture { detail = dog }
             .gesture(
                 DragGesture()
-                    .onChanged { if !flinging { drag = $0.translation } }
+                    .onChanged {
+                        withAnimation(.easeOut(duration: 0.3)) { store.markDiscoverCoached() }
+                        if !flinging { drag = $0.translation }
+                    }
                     .onEnded { value in
                         let travel = value.translation.width + value.predictedEndTranslation.width * 0.25
                         if travel > threshold { fling(dog, save: true) }
@@ -135,8 +139,26 @@ struct DiscoverView: View {
         .accessibilityLabel(label)
     }
 
+    /// Says what to do until the first time anything is done, then never
+    /// again. Driven by state rather than by a timer or an appearance
+    /// callback, so there is nothing to miss or to fire twice.
+    @ViewBuilder private var coachHint: some View {
+        if !store.discoverCoached {
+            Text("Swipe right to save · left to skip")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(.black.opacity(0.6), in: Capsule())
+                .padding(.top, 16)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
+    }
+
     private func fling(_ dog: Dog, save: Bool) {
         guard !flinging else { return }
+        withAnimation(.easeOut(duration: 0.3)) { store.markDiscoverCoached() }
         flinging = true
         if save { Haptics.saved() }
         withAnimation(.easeIn(duration: 0.22)) {
