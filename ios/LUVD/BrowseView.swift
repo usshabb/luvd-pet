@@ -5,6 +5,7 @@ struct BrowseView: View {
     @State private var path: [Dog] = []
     @State private var showFilters = false
     @State private var headerHidden = false
+    @State private var searchOpen = false
     @State private var storyLaunch: StoryLaunch?
     @State private var tracker = ScrollTracker()
     @FocusState private var searchFocused: Bool
@@ -83,23 +84,40 @@ struct BrowseView: View {
     private var header: some View {
         @Bindable var store = store
         return VStack(spacing: 10) {
-            HStack {
-                HeaderButton(systemImage: "gearshape", label: "Settings") { store.showSettings = true }
-                Spacer()
+            // The wordmark is centred by the stack behind the buttons, so it
+            // stays centred however many buttons flank it.
+            ZStack {
                 Image("LogoHeader")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 128, height: 40)
                     .accessibilityLabel("LUVD")
-                Spacer()
-                HeaderButton(systemImage: isNarrowed
-                             ? "line.3.horizontal.decrease.circle.fill"
-                             : "line.3.horizontal.decrease.circle",
-                             label: isNarrowed
-                             ? "Filters and sort, \(store.filters.activeCount) active"
-                             : "Filters and sort") { showFilters = true }
+                HStack(spacing: 8) {
+                    HeaderButton(systemImage: "gearshape", label: "Settings") { store.showSettings = true }
+                    Spacer()
+                    // Search is occasional; a whole row of the feed is too much
+                    // to spend on it, so it waits behind its own icon.
+                    HeaderButton(systemImage: "magnifyingglass", label: "Search") {
+                        withAnimation(.easeInOut(duration: 0.22)) { searchOpen = true }
+                        searchFocused = true
+                    }
+                    HeaderButton(systemImage: isNarrowed
+                                 ? "line.3.horizontal.decrease.circle.fill"
+                                 : "line.3.horizontal.decrease.circle",
+                                 label: isNarrowed
+                                 ? "Filters and sort, \(store.filters.activeCount) active"
+                                 : "Filters and sort") { showFilters = true }
+                }
             }
-            SearchField(text: $store.search, focused: $searchFocused)
+            if searchOpen || !store.search.isEmpty {
+                SearchField(text: $store.search, focused: $searchFocused)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        // Closes itself once it is neither being typed into nor holding a search.
+        .onChange(of: searchFocused) { _, focused in
+            guard !focused, store.search.isEmpty else { return }
+            withAnimation(.easeInOut(duration: 0.22)) { searchOpen = false }
         }
         .padding(.horizontal, 16)
         .padding(.top, 2)

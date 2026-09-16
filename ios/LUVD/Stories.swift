@@ -27,10 +27,9 @@ struct StoriesRow: View {
     var body: some View {
         let dogs = store.storyDogs
         if !dogs.isEmpty {
+            // No heading: the rings say new on their own, the way a row of
+            // stories does, and the feed starts that much higher.
             VStack(alignment: .leading, spacing: 8) {
-                Text("New")
-                    .font(Theme.display(17))
-                    .accessibilityAddTraits(.isHeader)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(Array(dogs.enumerated()), id: \.element.id) { index, dog in
@@ -44,6 +43,7 @@ struct StoriesRow: View {
                     .padding(.vertical, 2)
                 }
                 .padding(.horizontal, -16)
+                .accessibilityLabel("New dogs today")
             }
             .padding(.bottom, 4)
         }
