@@ -383,12 +383,14 @@ final class AppStore {
 
     // MARK: - Stories
 
-    /// Today's new dogs as stories: unwatched first, then watched, each in feed
-    /// order. They expire with "new today" itself, when the city's next
-    /// morning starts.
+    /// Today's new dogs you have not watched yet, in feed order. They expire
+    /// with "new today" itself, when the city's next morning starts.
     var storyDogs: [Dog] {
-        let fresh = dogs.filter { isNew($0) && !$0.photos.isEmpty }
-        return fresh.filter { !seenStories.contains($0.id) } + fresh.filter { seenStories.contains($0.id) }
+        // Watched arrivals leave the row rather than greying at the end of it.
+        // Nobody rewatches a dog's arrival the way they rewatch a friend's
+        // story; the dog stays in the feed with its New today badge, and an
+        // empty row is the quiet way of saying you have seen everyone.
+        dogs.filter { isNew($0) && !$0.photos.isEmpty && !seenStories.contains($0.id) }
     }
 
     func markStorySeen(_ dog: Dog) {
