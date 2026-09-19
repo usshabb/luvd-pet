@@ -56,6 +56,11 @@ struct DogDetailView: View {
         // The photo runs to the top of the screen, under the status bar and the
         // floating back and share buttons.
         .ignoresSafeArea(edges: .top)
+        // iOS 26 paints a scroll edge effect under the navigation bar, separate
+        // from the bar background hidden below; on iOS 27 it shows as a white
+        // band across the top of the photo. The bar earns its own background
+        // once the name scrolls up, so the effect has nothing left to do.
+        .hidesTopScrollEdgeEffect()
         .modifier(DetailScrollReader { offset in
             let past = offset > heroHeight - 40
             if past != pastHero { pastHero = past }
@@ -490,6 +495,16 @@ private struct DetailScrollReader: ViewModifier {
             }
         } else {
             content
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder func hidesTopScrollEdgeEffect() -> some View {
+        if #available(iOS 26.0, *) {
+            self.scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            self
         }
     }
 }
