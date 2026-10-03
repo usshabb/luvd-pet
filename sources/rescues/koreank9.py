@@ -30,6 +30,12 @@ from typing import List
 from ..base import Dog
 from ..petstablished import PetstablishedSource
 
+# Verified 2026-10-03 on Korean K9's adoption page and the public detail API:
+# Cookie is Available on the rescue's site but absent from shelter_pets.
+# Recheck the live detail on every run; never force an adopted/pending dog in.
+# This is an explicit feed exception, not a substitute for roster audits.
+DETAIL_RECHECK_IDS = ("2721643",)
+
 FOSTER_FIRST = "5: Foster First"
 FOSTER_TO_ADOPT_URL = "https://www.koreank9rescue.org/foster-to-adopt/"
 
@@ -60,6 +66,20 @@ class KoreanK9Source(PetstablishedSource):
     def fetch(self, prefs: dict) -> List[Dog]:
         self._locations_seen = []
         dogs = super().fetch(prefs)
+        present = {d.id for d in dogs}
+        with self._session() as session:
+            for pet_id in DETAIL_RECHECK_IDS:
+                if f"{self.name}:{pet_id}" in present:
+                    continue
+                pet = self._get(session, f"pet/{pet_id}").get("pet")
+                if not isinstance(pet, dict) or str(pet.get("id")) != pet_id:
+                    raise ValueError(f"invalid recheck detail for {pet_id}")
+                if str(pet.get("shelter_id")) != self.org_id or pet.get("animal") != "Dog":
+                    continue
+                dog = self._to_dog(pet)
+                if dog and self.route(dog, str(pet.get("current_location") or "").strip()):
+                    dog.listed_since = self._listed_since(pet)
+                    dogs.append(dog)
         self._check_foster_split(dogs)
         return dogs
 
@@ -74,6 +94,8 @@ class KoreanK9Source(PetstablishedSource):
         deleting dogs is the worse failure.
         """
         if not location:
+            print(f"  WARN  {self.name:<14} excluded {dog.name} ({dog.id}): "
+                  "blank location; verify against the rescue's public pages")
             return False
         if self._locations_seen is not None:
             self._locations_seen.append(location)

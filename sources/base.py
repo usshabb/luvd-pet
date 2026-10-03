@@ -181,3 +181,11 @@ def clean_text(s: str, limit: int = 4000) -> str:
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()[:limit]
+
+
+def cached_detail(dog_id: str, prefs: dict):
+    """A copy of known details during a roster-only poll; new dogs get fetched."""
+    if not prefs.get("_roster_only"):
+        return None
+    import copy
+    return copy.deepcopy(prefs.get("_cached_dogs", {}).get(dog_id))

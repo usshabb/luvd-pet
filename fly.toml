@@ -7,6 +7,10 @@ primary_region = "ewr"
 [build]
   dockerfile = "Dockerfile"
 
+[env]
+  LUVD_ROSTER_INTERVAL_SECONDS = "900"
+  LUVD_DETAIL_INTERVAL_SECONDS = "3600"
+
 [processes]
   app = "sh /app/fly-start.sh"
 

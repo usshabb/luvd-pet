@@ -304,6 +304,20 @@ def init_db():
             "ON events(city, starts_on)"
         )
         _migrate(conn)
+        had_receipts = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='push_receipts'"
+        ).fetchone()
+        conn.execute("""CREATE TABLE IF NOT EXISTS push_receipts (
+            token TEXT NOT NULL, dog_id TEXT NOT NULL, first_seen TEXT NOT NULL,
+            sent_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (token, dog_id, first_seen)
+        )""")
+        if not had_receipts:
+            # Upgrading must not announce the existing catalogue again.
+            conn.execute("""INSERT OR IGNORE INTO push_receipts(token, dog_id, first_seen)
+                SELECT d.token, s.dog_id, date(s.first_seen)
+                FROM devices d JOIN seen_dogs s ON d.city = s.city
+                WHERE s.gone_on IS NULL""")
         # seed defaults if empty
         cur = conn.execute("SELECT COUNT(*) AS n FROM prefs")
         if cur.fetchone()["n"] == 0:
@@ -338,6 +352,7 @@ def _migrate(conn):
         # list. NULL means a row recorded before the column existed, which by
         # definition means New York; the backfill below settles it, and every
         # read COALESCEs so a half-migrated file still answers correctly.
+        ("devices", "instant_updates", "INTEGER NOT NULL DEFAULT 0"),
         ("seen_dogs", "city", "TEXT"),
         # The day a dog stopped being listed anywhere. NULL means still listed.
         # This replaces deleting the row, which threw away the only record that
@@ -461,7 +476,7 @@ def record_seen(dogs, today_iso: str) -> dict:
         conn.executemany(
             "INSERT OR IGNORE INTO seen_dogs(dog_id, source, name, url, matched, "
             "first_seen, city) VALUES(?, ?, ?, ?, 1, ?, ?)",
-            [(d.id, d.source, d.name, d.url, today_iso,
+            [(d.id, d.source, d.name, d.url, d.first_seen or today_iso,
               getattr(d, "city", "") or cities.DEFAULT_CITY) for d in dogs],
         )
         # Keep the latest version of every dog, so one that leaves can still be
@@ -906,10 +921,11 @@ def remove_device(token: str) -> bool:
     return bool(cur.rowcount)
 
 
-def devices_for(city: str) -> list:
+def devices_for(city: str, instant_only=False) -> list:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT token, env FROM devices WHERE city = ? ORDER BY created",
+            "SELECT token, env FROM devices WHERE city = ? "
+            + ("AND instant_updates = 1 " if instant_only else "") + "ORDER BY created",
             (city,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -1355,3 +1371,26 @@ def subscriber_city_counts() -> dict:
 if __name__ == "__main__":
     init_db()
     print("DB initialized at", DB_PATH)
+
+
+def pending_push_dogs(token, dogs, fallback_date):
+    with connect() as conn:
+        sent = {(row["dog_id"], row["first_seen"]) for row in conn.execute(
+            "SELECT dog_id, first_seen FROM push_receipts WHERE token = ?", (token,))}
+    return [d for d in dogs if (d.id, d.first_seen or fallback_date) not in sent]
+
+
+def record_push_delivery(token, dogs, fallback_date):
+    with connect() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO push_receipts(token, dog_id, first_seen) VALUES (?, ?, ?)",
+            [(token, d.id, d.first_seen or fallback_date) for d in dogs])
+
+
+def set_instant_updates(token, enabled):
+    with connect() as conn:
+        changed = conn.execute(
+            "UPDATE devices SET instant_updates = ?, updated = datetime('now') "
+            "WHERE token = ? AND instant_updates != ?",
+            (int(enabled), token, int(enabled))).rowcount
+    return bool(changed)

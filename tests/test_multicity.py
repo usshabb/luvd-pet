@@ -828,7 +828,14 @@ def test_events_email_points_at_its_own_city():
        "See Adoptable Dogs" in with_url, False)
 
     no_url = dict(base, rescue="Muddy Paws Rescue", url="")
-    fallback = emailer.build_events_html([no_url], "NYC")
+    # A fresh checkout has no generated rescue pages. Seed the page this case
+    # explicitly requires instead of depending on a prior live scrape.
+    from unittest.mock import patch
+    fixture = TMP / "event-cta-public"
+    (fixture / "rescue").mkdir(parents=True, exist_ok=True)
+    (fixture / "rescue/muddy-paws-rescue.html").write_text("fixture")
+    with patch.object(emailer, "PUBLIC", fixture):
+        fallback = emailer.build_events_html([no_url], "NYC")
     eq("no url falls back to that rescue's dogs",
        "See Adoptable Dogs" in fallback, True)
 

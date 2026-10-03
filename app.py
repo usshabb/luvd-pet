@@ -529,6 +529,29 @@ def sitemap():
         f"<url><loc>{site}/</loc></url></urlset>", mimetype="application/xml")
 
 
+@app.route("/health/scrapers")
+def scraper_health_status():
+    import scraper_health
+    try:
+        result = scraper_health.status()
+    except Exception:
+        app.logger.exception("Could not read scraper health")
+        result = {"ok": False, "error": "health unavailable"}
+    response = jsonify(result)
+    response.status_code = 200 if result["ok"] else 503
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Robots-Tag"] = "noindex"
+    return response
+
+
+@app.after_request
+def _generated_asset_cache(response):
+    if response.status_code == 200 and re.fullmatch(
+            r"/assets/generated/[a-f0-9]{20}\.(css|js)", request.path):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
 @app.route("/views")
 def views():
     """Live per-dog counts plus the site-wide total, fetched on page load."""
@@ -929,7 +952,12 @@ def api_register_device():
     if not _rate_ok(_device_hits, _client_ip(), _DEVICE_MAX):
         return jsonify({"ok": False, "error": "slow down"}), 429
     env = "sandbox" if data.get("env") == "sandbox" else "production"
+    instant = data.get("instant_updates")
+    if instant is not None and not isinstance(instant, bool):
+        return jsonify({"ok": False, "error": "instant_updates must be a boolean"}), 400
     changed = db.set_device_cities(token, codes, env=env)
+    if instant is not None:
+        changed = db.set_instant_updates(token, instant) or changed
     import push
     # Tells the app whether mornings will arrive as real push. Until they do,
     # the app notifies from its own background refresh; once they do, it stops,

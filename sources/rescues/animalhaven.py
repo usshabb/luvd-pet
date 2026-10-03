@@ -27,7 +27,7 @@ import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
 
-from ..base import Dog, Source, clean_text
+from ..base import cached_detail, Dog, Source, clean_text
 
 SITE = "https://animalhaven.org"
 LISTING_URL = f"{SITE}/adopt/dogs"
@@ -140,6 +140,10 @@ class AnimalHavenSource(Source):
         for card in cards:
             dog = self._from_card(card)
             if dog is None:
+                continue
+            cached = cached_detail(dog.id, prefs)
+            if cached:
+                dogs.append(cached)
                 continue
             # Enrich from the detail page; failures leave listing data intact.
             self._enrich(session, dog)
