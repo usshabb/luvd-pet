@@ -52,6 +52,30 @@ def _alert(subject: str, body: str):
         print(f"  alert failed: {type(e).__name__}: {e}")
 
 
+def _previous_source_dogs(source, city):
+    """Keep the last published roster during an outage; never call it fresh."""
+    from dataclasses import fields
+    from sources.base import Dog
+    import emailer
+    allowed = {f.name for f in fields(Dog)}
+    dogs = []
+    for row in emailer._page_dogs(city).values():
+        if row.get("source") != source.name:
+            continue
+        values = {k: v for k, v in row.items() if k in allowed}
+        values["adopt_url"] = row.get("cta_url") or row.get("url") or ""
+        values["city"] = city
+        try:
+            dogs.append(Dog(**values))
+        except (TypeError, ValueError):
+            continue
+    return dogs
+
+
+def _failed_names(failures):
+    return {failure.split(" (", 1)[0] for failure in failures}
+
+
 def collect(prefs, city=None, verbose=True):
     """Every currently-adoptable dog in one city, deduped across its sources.
 
@@ -64,13 +88,22 @@ def collect(prefs, city=None, verbose=True):
             if verbose:
                 print(f"  skip  {source.name:<14} (not configured)")
             continue
+        source_prefs = dict(prefs)
+        if prefs.get("_roster_only"):
+            source_prefs["_cached_dogs"] = {
+                d.id: d for d in _previous_source_dogs(source, city)
+            }
         try:
-            found = source.fetch(prefs)
+            found = source.fetch(source_prefs)
         except Exception as e:
             if verbose:
                 print(f"  ERROR {source.name:<14} {type(e).__name__}: {e}")
             failures.append(f"{source.name} ({type(e).__name__}: {e})")
-            continue
+            found = _previous_source_dogs(source, city)
+            if verbose and found:
+                print(f"  stale {source.name:<14} retaining {len(found)} previously published dogs")
+            if not found:
+                continue
 
         # A source that suddenly returns nothing is usually a broken selector,
         # not an empty shelter — worth an alert either way.
@@ -78,6 +111,7 @@ def collect(prefs, city=None, verbose=True):
             if verbose:
                 print(f"  WARN  {source.name:<14} returned 0 dogs")
             failures.append(f"{source.name} (returned 0 dogs)")
+            found = _previous_source_dogs(source, city)
 
         kept = 0
         # Fuzzy name|breed matching only catches the SAME dog listed by two
@@ -181,7 +215,7 @@ def _group_by_day(dogs, fallback_iso: str):
     return groups, sorted(groups.items(), key=lambda kv: kv[0], reverse=True)
 
 
-def _passive_pages(city, prefs) -> dict:
+def _passive_pages(city, prefs, statuses=None) -> dict:
     """The other live cities' rosters, so this run can republish their pages.
 
     Read-only by construction: no record_seen, no forget_missing, no
@@ -201,12 +235,14 @@ def _passive_pages(city, prefs) -> dict:
             continue
         try:
             dogs, failures = collect(prefs, other, verbose=False)
+            if statuses is not None:
+                statuses[other] = failures
         except Exception as e:
             print(f"  {other}: fetch failed ({type(e).__name__}: {e}) — leaving "
                   f"its page as it is")
             continue
-        if not dogs:
-            print(f"  {other}: no dogs returned — leaving its page as it is")
+        if not dogs or all(d.source in _failed_names(failures) for d in dogs):
+            print(f"  {other}: no fresh dogs returned — leaving its page as it is")
             _alert(f"LUVD {other}: no dogs while running {city}",
                    f"{city}'s run also fetches {other} so both pages can be "
                    f"published together, and {other} returned nothing. Its "
@@ -215,8 +251,9 @@ def _passive_pages(city, prefs) -> dict:
         dogs = enrich(normalize(dogs))
         seen = db.first_seen_map(d.id for d in dogs)
         other_today = cities.today(other).isoformat()
+        published_dates = _published_dates(other)
         for d in dogs:
-            d.first_seen = seen.get(d.id, other_today)
+            d.first_seen = seen.get(d.id) or published_dates.get(d.id) or other_today
         _, dated = _group_by_day(dogs, other_today)
         if failures:
             print(f"  {other}: {len(dogs)} dogs ({len(failures)} source(s) "
@@ -227,10 +264,17 @@ def _passive_pages(city, prefs) -> dict:
     return out
 
 
-def run(dry_run=False, city=None):
+def _published_dates(city):
+    import emailer
+    return {key: row.get("first_seen") for key, row in emailer._page_dogs(city).items()}
+
+
+def run(dry_run=False, city=None, refresh=False, roster_only=False):
     db.init_db()
     city = cities.canon(city) or cities.default_run_city()
     prefs = db.get_prefs()
+    prefs["_roster_only"] = roster_only
+    read_only = dry_run or refresh
     # Each city's day is measured on its own clock, so a dog listed at 9pm
     # Pacific is still a Pacific Tuesday. The container's TZ is fixed, so this
     # is read from the city rather than from the ambient one.
@@ -245,12 +289,12 @@ def run(dry_run=False, city=None):
     if failures:
         print(f"\n!! {len(failures)} source(s) FAILED: {', '.join(failures)}")
         _alert(f"LUVD {city}: {len(failures)} scraper(s) failed",
-               "These sources returned nothing this morning:\n  - "
+               "These sources did not complete a fresh roster:\n  - "
                + "\n  - ".join(failures)
-               + "\n\nThe page was still built from the sources that worked.")
+               + "\n\nTheir last published rosters were retained where available.")
 
-    if not dogs:
-        print("No dogs returned by any source — leaving the existing page alone.")
+    if not dogs or all(d.source in _failed_names(failures) for d in dogs):
+        print("No fresh dogs returned by any source — leaving the existing page alone.")
         _alert(f"LUVD {city}: ALL scrapers failed",
                "No source returned a dog. The page was left untouched.")
         return []
@@ -272,8 +316,13 @@ def run(dry_run=False, city=None):
 
     dogs = enrich(normalize(dogs))
 
-    if dry_run:
-        seen = db.first_seen_map(d.id for d in dogs)
+    previous = db.first_seen_map(d.id for d in dogs)
+    published_dates = _published_dates(city)
+    for d in dogs:
+        d.first_seen = previous.get(d.id) or published_dates.get(d.id) or today
+    unrecorded = {d.id for d in dogs if d.id not in previous}
+    if read_only:
+        seen = {d.id: d.first_seen for d in dogs}
     else:
         seen = db.record_seen(dogs, today)
         # Scoped to this city, so a run can only forget its own dogs. Unscoped,
@@ -294,7 +343,7 @@ def run(dry_run=False, city=None):
             # A source that returned nothing has told us nothing, and treating
             # its silence as "every one of these dogs was adopted" is what reset
             # a whole roster's first_seen dates and mailed them out as new.
-            reported = {d.source for d in dogs}
+            reported = {d.source for d in dogs} - _failed_names(failures)
             adopted = db.forget_missing((d.id for d in dogs), city=city,
                                         sources=reported)
             quiet = [s.name for s in sources_for_city(city)
@@ -313,7 +362,7 @@ def run(dry_run=False, city=None):
         names = ", ".join(d.name for d in gained[:8])
         more = f" (+{len(gained) - 8} more)" if len(gained) > 8 else ""
         print(f"  📸 {len(gained)} dog(s) gained photos: {names}{more}")
-    if not dry_run:
+    if not read_only:
         db.update_photo_state(dogs)
 
     for d in dogs:
@@ -321,7 +370,12 @@ def run(dry_run=False, city=None):
 
     groups, dated = _group_by_day(dogs, today)
 
-    new_today = groups.get(today, [])
+    # Retained outage data is not evidence of a new dog and must not trigger
+    # an email or push notification.
+    new_today = [d for d in dogs
+                 if (d.first_seen == today or d.id in unrecorded)
+                 and d.source not in _failed_names(failures)]
+    new_today = order_for_feed(new_today, today_d)
     print(f"\n{len(dogs)} adoptable dogs across {len(dated)} day(s); "
           f"{len(new_today)} new today.")
 
@@ -335,7 +389,11 @@ def run(dry_run=False, city=None):
     # That is what keeps this city's run from being able to change anything a
     # reader of another city's page sees.
     pages = {city: dated}
-    pages.update(_passive_pages(city, prefs))
+    statuses = {city: failures}
+    if refresh:
+        pages.update(_passive_pages(city, prefs, statuses))
+    else:
+        pages.update(_passive_pages(city, prefs))
     # Default city first, so its URLs lead the sitemap as they always have.
     pages = {k: pages[k] for k in cities.live_codes() if k in pages}
 
@@ -348,7 +406,7 @@ def run(dry_run=False, city=None):
     # only the default city's run rebuilds them so a second city cannot quietly
     # replace New York's faces with its own.
     photographed = [d for d in dogs if d.photos]
-    if city == cities.DEFAULT_CITY:
+    if city == cities.DEFAULT_CITY and not roster_only:
         try:
             import og_image
             og = og_image.build(photographed, total=len(dogs))
@@ -364,6 +422,21 @@ def run(dry_run=False, city=None):
             print(f"Montage:      {montage.build(photographed)}")
         except Exception as e:
             print(f"  montage skipped ({type(e).__name__}: {e})")
+
+    if refresh:
+        import push
+        for code, dated_dogs in pages.items():
+            current = [d for _, group in dated_dogs for d in group
+                       if d.source not in _failed_names(statuses.get(code, []))]
+            recorded = db.first_seen_map(d.id for d in current)
+            candidates = [d for d in current if d.id not in recorded
+                          or d.first_seen == cities.today(code).isoformat()]
+            try:
+                push.send_new_dogs(code, candidates, instant_only=True)
+            except Exception as exc:
+                print(f"  push refresh failed for {code}: {type(exc).__name__}: {exc}")
+        print("(refresh: listings published; subscriber email stays on the morning schedule)")
+        return dogs
 
     if dry_run:
         for d in new_today[:10]:
@@ -439,9 +512,18 @@ def _parse_args(argv=None):
     # fly-start.sh's boot render depends on exactly that.
     p.add_argument("--dry-run", action="store_true",
                    help="rebuild the page; record nothing, mail nobody")
+    p.add_argument("--refresh", action="store_true",
+                   help="refresh all pages and send deduplicated opt-in push; no digest")
+    p.add_argument("--roster-only", action="store_true",
+                   help="reuse known details; fetch full details only for new dogs")
     p.add_argument("--city", default=None, metavar="CODE",
                    help="which city to run (default: the live city)")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.roster_only and not args.refresh:
+        p.error("--roster-only requires --refresh")
+    if args.dry_run and args.refresh:
+        p.error("--dry-run and --refresh are mutually exclusive")
+    return args
 
 
 if __name__ == "__main__":
@@ -450,8 +532,10 @@ if __name__ == "__main__":
     if args.city and not cities.canon(args.city):
         sys.exit(f"Unknown city {args.city!r}. Known: "
                  f"{', '.join(cities.all_codes())}")
-    run(dry_run=dry, city=args.city)
-    if not dry:
+    result = run(dry_run=dry, city=args.city, refresh=args.refresh, roster_only=args.roster_only)
+    if not result:
+        sys.exit(1)
+    if not dry and not args.refresh:
         # Nightly re-mirror of the subscriber backup sheet, so a webhook that
         # failed at signup time heals within a day. Never fails the scrape.
         import sheet_sync

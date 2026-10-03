@@ -86,6 +86,49 @@ The real morning run: rebuilds the page, records what was shown, emails subscrib
 Serves the page at http://127.0.0.1:8000 and accepts subscribe POSTs.
 `GET /subscribers` lists signups.
 
+## Listing freshness
+
+On Fly, `fly-start.sh` serializes roster checks every 15 minutes, full detail
+refreshes every hour, and each city's existing 05:30 local-time digest. The
+intervals are set in `fly.toml`. A new dog gets its detail fetched immediately;
+known dogs reuse previously verified details during the lighter roster polls.
+An overdue morning run takes priority over refresh work, and a 30-minute process
+timeout prevents a stuck scraper from stopping future checks.
+
+`check.py --refresh --roster-only` performs a quick check; `check.py --refresh`
+performs a full refresh. Both publish all live cities without sending subscriber
+email or consuming the next morning's new-dog digest. `--dry-run` remains the
+no-push, no-digest preview path. First observation dates survive refreshes and
+midnight; dogs found after yesterday's digest still reach this morning's email.
+
+Daytime push alerts require the app's **Notify me as new dogs arrive** opt-in.
+Existing devices remain on morning alerts. Delivery receipts are stored per
+device, dog, and arrival date so successful deliveries are not repeated on later
+polls or during the morning run. Failed deliveries can retry. APNs configuration
+and `PUSH_PAUSED` still apply. As with any remote delivery, a process crash after
+Apple accepts a push but before its receipt is saved can cause a retry; stable
+APNs collapse IDs reduce this window's duplicate notifications.
+
+The scraper audit can be rerun without rendering pages, changing dog history,
+or notifying anyone:
+
+```bash
+.venv/bin/python tools/check_scrapers.py --output /tmp/luvd-scrapers.json
+.venv/bin/python tools/check_scrapers.py --source koreank9
+.venv/bin/python tests/test_scrapers.py
+.venv/bin/python tests/test_refresh.py
+```
+
+The audit exits 1 for an empty/failed roster and 2 when detail pages are
+unavailable and roster data was used. Failed roster fetches retain the last
+published source data; they do not establish adoptions or trigger new-dog alerts.
+Adopt-a-Pet walks every available-roster page and excludes nearby recommendations.
+Korean K9's Cookie (`2721643`) is a documented search-feed exception: the live
+detail is rechecked each run and included only while available in the correct
+rescue/program. Blank Korean K9 locations are logged for review, not silently
+assumed to be new programs. Fifteen-minute polling cannot overcome delays in a
+rescue's own publishing feed, so periodic source-to-site comparisons still matter.
+
 ## The subscriber list, and its backup
 
 SQLite on the Fly volume is the source of truth for `subscribers`. `sheet_sync.py`

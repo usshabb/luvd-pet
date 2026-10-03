@@ -70,8 +70,14 @@ render() {
   fi
   # Never fatal: a failed scrape must leave the previous page being served
   # rather than taking the container down with it.
-  python "$@" || true
+  # A hung scraper must not stop every subsequent refresh indefinitely.
+  status=0
+  timeout 1800 python "$@" || status=$?
   rmdir "$RENDER_LOCK" 2>/dev/null || true
+  if [ "$status" -ne 0 ]; then
+    echo "render: failed with status $status; the scheduler will retry"
+  fi
+  return "$status"
 }
 
 # Backgrounded so gunicorn below starts and answers requests immediately — the
@@ -105,25 +111,31 @@ render() {
 
   if [ ! -f /data/public/index.html ]; then
     echo "boot: no page on the volume — rendering now"
-    render check.py --dry-run
-    printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+    if render check.py --dry-run; then
+      printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+    fi
   elif [ "$RENDERED_BY" != "$BUILD_ID" ]; then
     # New code. Render regardless of how recently the last one ran — a deploy
     # that does not reach the volume is a deploy that did nothing.
     echo "boot: page was built by a different release — re-rendering"
-    render check.py --dry-run
-    printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+    if render check.py --dry-run; then
+      printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+    fi
   elif [ -n "$(find /data/public/index.html -mmin -"$RENDER_FRESH_MIN" 2>/dev/null)" ]; then
     # Same code, rendered moments ago: a restart, a failed health check, a
     # machine move. Don't hammer the rescues for a page that is already current.
     echo "boot: same release and page is under ${RENDER_FRESH_MIN}m old — skipping"
   else
     echo "boot: re-rendering so this deploy's changes go live"
-    render check.py --dry-run
-    printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+    if render check.py --dry-run; then
+      printf '%s' "$BUILD_ID" > "$BUILD_STAMP"
+    fi
   fi
 
-  # Sleep until the next city's 05:30, run that city, repeat. Mondays also send
+  # Poll rosters every 15 minutes and refresh all details hourly between the
+  # cities' 05:30 digest runs. New dogs receive detail fetches immediately;
+  # only devices that explicitly opt in receive the daytime alerts.
+  # Mondays also send
   # the per-rescue digest. These are the real runs — they record what was seen
   # and mail the digest.
   #
@@ -140,6 +152,8 @@ render() {
   # The two cities' runs share the render lock, so they serialise rather than
   # tearing public/ between them if one overruns into the other. Nothing new is
   # needed for that — it is the same mutex the boot render already uses.
+  last_roster=$(date +%s)
+  last_full=$last_roster
   while true; do
     schedule=$(python cities.py --next) || schedule=""
     if [ -z "$schedule" ]; then
@@ -151,10 +165,41 @@ render() {
     fi
     wait_s=${schedule%% *}
     due=${schedule#* }
-    echo "cron: next run in ${wait_s}s for: ${due}"
-    sleep "$wait_s"
+    echo "cron: next morning run in ${wait_s}s for: ${due}"
+    daily_due=$(($(date +%s) + wait_s))
+    # Preserve this deadline while polls run. Recomputing cities.py --next
+    # after a slow poll could otherwise skip today's morning run entirely.
+    while true; do
+      plan=$(python refresh_schedule.py --daily-due "$daily_due" \
+        --last-roster "$last_roster" --last-full "$last_full") || plan="60 retry"
+      wait_refresh=${plan%% *}
+      action=${plan#* }
+      sleep "$wait_refresh"
+      [ "$action" = daily ] && break
+      [ "$action" = retry ] && continue
+      started=$(date +%s)
+      # Sleep may resume late after a pause; let the overdue digest win.
+      [ "$started" -ge "$daily_due" ] && break
+      if [ "$action" = full ]; then
+        echo "refresh: hourly full details"
+        if render check.py --refresh; then
+          last_full=$started
+        else
+          # Retry on the next roster tick, not in a tight loop.
+          last_full=$((started - ${LUVD_DETAIL_INTERVAL_SECONDS:-3600} + ${LUVD_ROSTER_INTERVAL_SECONDS:-900}))
+        fi
+      else
+        echo "refresh: 15-minute roster check"
+        render check.py --refresh --roster-only || true
+      fi
+      last_roster=$started
+    done
     for city in $due; do
-      render check.py --city "$city"
+      started=$(date +%s)
+      if render check.py --city "$city"; then
+        last_full=$started
+      fi
+      last_roster=$started
       # Mondays, that city's week of in-person events. Per city and inside this
       # loop, because it is each city's own Monday that matters and each city's
       # own list that gets mailed — unlike the weekly report below, which is one

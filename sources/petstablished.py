@@ -24,10 +24,12 @@ from datetime import date
 from typing import List, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import cities
 
-from .base import Dog, Source, clean_text
+from .base import cached_detail, Dog, Source, clean_text
 from .dates import listing_date
 
 API_ROOT = "https://petstablished.com/api/v2/public/search"
@@ -231,27 +233,41 @@ class PetstablishedSource(Source):
     def _session(self) -> requests.Session:
         session = requests.Session()
         session.headers.update(_HEADERS)
+        session.mount("https://", HTTPAdapter(max_retries=Retry(
+            total=2, backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+        )))
         return session
 
     def _get(self, session: requests.Session, path: str, **params) -> dict:
         resp = session.get(f"{API_ROOT}/{path}", params=params, timeout=TIMEOUT)
         resp.raise_for_status()
         payload = resp.json()
-        return payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            raise ValueError(f"invalid Petstablished response: {path}")
+        return payload
 
     # --------------------------------------------------------------- fetch --
 
     def fetch(self, prefs: dict) -> List[Dog]:
+        self.detail_warnings = []
         session = self._session()
 
         records, seen_ids, page, total_pages = [], set(), 1, 1
         while page <= min(total_pages, MAX_PAGES):
             payload = self._get(session, f"shelter_pets/{self.org_id}",
                                 animal="Dog", page=page)
-            batch = payload.get("pets") or []
-            if not batch:
-                break
+            batch = payload.get("pets")
+            if not isinstance(batch, list):
+                raise ValueError("Petstablished roster missing pets array")
             total_pages = max(int(payload.get("total_page") or 1), 1)
+            if total_pages > MAX_PAGES:
+                raise ValueError(f"Petstablished roster exceeds {MAX_PAGES} pages")
+            if not batch:
+                if page > 1 or total_pages > 1:
+                    raise ValueError(f"unexpected empty Petstablished page {page}")
+                break
             for rec in batch:
                 # Pagination can repeat a record if the roster shifts between
                 # requests; the id is authoritative.
@@ -271,16 +287,31 @@ class PetstablishedSource(Source):
                 dogs.append(dog)
 
         if self.fetch_traits or self.route_by_location or self.fetch_listed_since:
-            dogs = self._walk_details(session, dogs)
+            dogs = self._walk_details(session, dogs, prefs)
         return dogs
 
     def _walk_details(self, session: requests.Session,
-                      dogs: List[Dog]) -> List[Dog]:
+                      dogs: List[Dog], prefs=None) -> List[Dog]:
         """One detail call per dog, for traits, a listing date and/or routing."""
         kept = []
         for dog in dogs:
+            cached = cached_detail(dog.id, prefs or {})
+            if cached:
+                # Availability came from today's roster; the complete details
+                # and Korean K9 program were verified on the full refresh.
+                kept.append(cached)
+                continue
             pet = self._detail(session, dog)
+            if pet is None:
+                self.detail_warnings = getattr(self, "detail_warnings", []) + [dog.id]
+                print(f"  WARN  {self.name}: detail unavailable for {dog.id}")
+                if self.route_by_location:
+                    raise RuntimeError(f"routing detail unavailable for {dog.id}")
             if pet is not None:
+                # The search index can lag behind the detail record.
+                status = str(pet.get("status") or "").strip().lower()
+                if pet.get("no_longer_available") or (status and status not in _ADOPTABLE_STATUSES):
+                    continue
                 if self.fetch_traits:
                     self._apply_detail(dog, pet)
                 if self.fetch_listed_since:
@@ -389,7 +420,10 @@ class PetstablishedSource(Source):
         """
         pet_id = dog.id.split(":", 1)[-1]
         try:
-            return (self._get(session, f"pet/{pet_id}") or {}).get("pet") or {}
+            pet = self._get(session, f"pet/{pet_id}").get("pet")
+            if not isinstance(pet, dict) or str(pet.get("id")) != pet_id:
+                return None
+            return pet
         except (requests.RequestException, ValueError):
             return None
 

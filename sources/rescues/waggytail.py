@@ -44,7 +44,7 @@ from typing import List, Optional
 
 import requests
 
-from ..base import Dog, Source, clean_text
+from ..base import cached_detail, Dog, Source, clean_text
 from ..dates import listing_date
 
 API = "https://petstablished.com/api/v2/public/search"
@@ -123,6 +123,10 @@ class WaggytailSource(Source):
                 continue
             seen.add(pet_id)
             if not self._is_available(rec):
+                continue
+            cached = cached_detail(f"{self.name}:{pet_id}", prefs)
+            if cached:
+                dogs.append(cached)
                 continue
             # Best-effort enrichment; the listing record alone is enough.
             detail = self._detail(session, pet_id)

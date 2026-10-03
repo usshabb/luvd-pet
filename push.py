@@ -220,7 +220,7 @@ def send(devices: Iterable[Tuple[str, str]], payload: dict,
     return {"sent": sent, "failed": failed, "dead": dead}
 
 
-def send_new_dogs(city: str, dogs, client=None) -> Optional[dict]:
+def send_new_dogs(city: str, dogs, client=None, instant_only=False) -> Optional[dict]:
     """Tell every device following `city` about this morning's new dogs.
 
     Returns None when nothing was attempted — no dogs, paused, unconfigured, or
@@ -236,7 +236,7 @@ def send_new_dogs(city: str, dogs, client=None) -> Optional[dict]:
     if not configured():
         print("  (APNS_* unset — push not sent)")
         return None
-    devices = db.devices_for(city)
+    devices = db.devices_for(city, instant_only=instant_only)
     if not devices:
         print(f"  no {city} devices registered for push")
         return None
@@ -244,9 +244,34 @@ def send_new_dogs(city: str, dogs, client=None) -> Optional[dict]:
     from zoneinfo import ZoneInfo
     c = cities.resolve(city)
     today = datetime.now(ZoneInfo(c.tz)).date().isoformat()
-    result = send([(d["token"], d["env"]) for d in devices],
-                  build_payload(dogs, city, today),
-                  collapse_id=f"new-{c.code}-{today}", client=client)
+    # Receipts are per device and arrival, so a successful phone is never
+    # notified again when another phone needs a retry on the next poll.
+    pending = [(device, db.pending_push_dogs(device["token"], dogs, today))
+               for device in devices]
+    pending = [(device, batch) for device, batch in pending if batch]
+    if not pending:
+        return None
+    import hashlib
+    import httpx
+    own = client is None
+    if own:
+        client = httpx.Client(http2=True, timeout=15)
+    result = {"sent": 0, "failed": 0, "dead": []}
+    try:
+        for device, batch in pending:
+            key = "|".join(sorted(d.id + ":" + (d.first_seen or today) for d in batch))
+            collapse = f"new-{c.code}-{hashlib.sha256(key.encode()).hexdigest()[:24]}"
+            delivered = send([(device["token"], device["env"])],
+                             build_payload(batch, city, today), collapse_id=collapse,
+                             client=client)
+            result["sent"] += delivered["sent"]
+            result["failed"] += delivered["failed"]
+            result["dead"].extend(delivered["dead"])
+            if delivered["sent"]:
+                db.record_push_delivery(device["token"], batch, today)
+    finally:
+        if own:
+            client.close()
     for token in result["dead"]:
         db.remove_device(token)
     extra = ""

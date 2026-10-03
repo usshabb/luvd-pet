@@ -929,7 +929,12 @@ def api_register_device():
     if not _rate_ok(_device_hits, _client_ip(), _DEVICE_MAX):
         return jsonify({"ok": False, "error": "slow down"}), 429
     env = "sandbox" if data.get("env") == "sandbox" else "production"
+    instant = data.get("instant_updates")
+    if instant is not None and not isinstance(instant, bool):
+        return jsonify({"ok": False, "error": "instant_updates must be a boolean"}), 400
     changed = db.set_device_cities(token, codes, env=env)
+    if instant is not None:
+        changed = db.set_instant_updates(token, instant) or changed
     import push
     # Tells the app whether mornings will arrive as real push. Until they do,
     # the app notifies from its own background refresh; once they do, it stops,

@@ -45,7 +45,7 @@ from typing import Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 
-from ..base import Dog, Source, clean_text
+from ..base import cached_detail, Dog, Source, clean_text
 from ..dates import listing_date
 
 BASE = "https://24petconnect.com"
@@ -230,7 +230,10 @@ class PetConnectSource(Source):
 
         dogs = list(seen.values())
 
+        dogs = [cached_detail(d.id, prefs) or d for d in dogs]
         for dog in dogs[:MAX_DETAIL_FETCHES]:
+            if cached_detail(dog.id, prefs):
+                continue
             try:
                 self._enrich(dog)
             except Exception:
