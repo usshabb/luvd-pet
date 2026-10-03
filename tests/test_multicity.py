@@ -1661,6 +1661,465 @@ def _rules_for(css: str, selector: str):
     return out
 
 
+
+# ------------------------------------------------------------------- app + push
+_APNS_ENV = ("APNS_KEY", "APNS_KEY_ID", "APNS_TEAM_ID", "APNS_BUNDLE_ID", "PUSH_PAUSED")
+
+
+def _with_env(**values):
+    saved = {k: os.environ.get(k) for k in _APNS_ENV}
+    for k in _APNS_ENV:
+        os.environ.pop(k, None)
+    os.environ.update({k: v for k, v in values.items() if v is not None})
+    return saved
+
+
+def _restore_env(saved):
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def _fake_apns_key():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(serialization.Encoding.PEM,
+                            serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    return key, pem
+
+
+def test_push_payload_reads_like_a_person_wrote_it():
+    import push
+    one = [dog("muddypaws", 1, "Fiona")]
+    one[0].breed, one[0].age, one[0].source_label = "Terrier", "2 years", "Muddy Paws Rescue"
+    p = push.build_payload(one, "NYC", "2026-09-14")
+    alert = p["aps"]["alert"]
+    eq("the dog is named in the title", alert["title"], "Fiona just arrived")
+    eq("one dog's subtitle says where", alert["subtitle"], "New in NYC today")
+    eq("and the body describes her", alert["body"], "Terrier · 2 years · Muddy Paws Rescue")
+    eq("the photo can be attached", p["aps"]["mutable-content"], 1)
+    eq("she is the featured dog", p["featured_id"], "muddypaws:1")
+
+    unknown = [dog("muddypaws", 1, "Fiona")]
+    unknown[0].breed, unknown[0].age, unknown[0].source_label = "Unknown", "5 years", "Muddy Paws Rescue"
+    eq("an 'Unknown' breed never reaches a lock screen",
+       push.build_payload(unknown, "NYC")["aps"]["alert"]["body"], "5 years · Muddy Paws Rescue")
+
+    five = [dog("muddypaws", i, n) for i, n in
+            enumerate(["Fiona", "Loki", "Jaro", "Tina", "Quiche"])]
+    five[0].photos = []                  # no photo: not the one to feature
+    p = push.build_payload(five, "LA")
+    eq("many dogs still lead with one by name", p["aps"]["alert"]["title"], "Loki just arrived")
+    eq("the first dog with a photo is featured", p["featured_id"], five[1].id)
+    eq("the count moves to the subtitle", p["aps"]["alert"]["subtitle"], "5 new dogs in LA today")
+    eq("its photo rides along", p["image"], five[1].photos[0])
+    eq("every new dog is still listed", len(p["dog_ids"]), 5)
+    eq("one thread per city", p["aps"]["thread-id"], "new-dogs-LA")
+
+    risky = [dog("muddypaws", 1, "Fiona")]
+    risky[0].photos = ["http://insecure.example/p.jpg"]
+    eq("only an https photo is handed to the extension", push.build_payload(risky, "NYC")["image"], "")
+
+    many = [dog("muddypaws", i, f"D{i}") for i in range(40)]
+    eq("ids capped for the 4KB payload limit",
+       len(push.build_payload(many, "NYC")["dog_ids"]), push.MAX_IDS)
+    eq("payload fits APNs' 4KB",
+       len(json.dumps(push.build_payload(many, "NYC")).encode()) < 4096, True)
+
+
+def test_push_is_inert_until_configured():
+    import push
+    fresh_db("push_inert.db")
+    db.add_device("a" * 64, "NYC")
+    saved = _with_env()
+    try:
+        eq("unconfigured sends nothing", push.send_new_dogs("NYC", [dog("muddypaws", 1, "F")]), None)
+        _, pem = _fake_apns_key()
+        os.environ.update(APNS_KEY=pem, APNS_KEY_ID="ABC123DEFG",
+                          APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app",
+                          PUSH_PAUSED="1")
+        eq("PUSH_PAUSED sends nothing", push.send_new_dogs("NYC", [dog("muddypaws", 1, "F")]), None)
+        os.environ.pop("PUSH_PAUSED")
+        eq("no dogs sends nothing", push.send_new_dogs("NYC", []), None)
+        eq("no devices in the city sends nothing",
+           push.send_new_dogs("LA", [dog("wagmor", 1, "F")]), None)
+    finally:
+        _restore_env(saved)
+
+
+def test_push_signs_sends_and_prunes():
+    """Real signing, fake Apple. Proves the JWT verifies and dead tokens go."""
+    import base64 as _b64
+    import httpx
+    import push
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    fresh_db("push_send.db")
+    ok, gone, sandbox = "a" * 64, "b" * 64, "c" * 64
+    db.add_device(ok, "NYC")
+    db.add_device(gone, "NYC")
+    db.add_device(sandbox, "NYC", env="sandbox")
+    db.add_device("d" * 64, "LA")
+    db.add_device(ok, "LA")             # follows both cities
+    key, pem = _fake_apns_key()
+    saved = _with_env(APNS_KEY=pem.replace("\n", "\\n"), APNS_KEY_ID="ABC123DEFG",
+                      APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app")
+    push._jwt.update(token=None, at=0.0)
+    calls = []
+
+    def apple(request):
+        token = request.url.path.rsplit("/", 1)[-1]
+        calls.append((request.url.host, token, dict(request.headers), request.content))
+        if token == gone:
+            return httpx.Response(410, json={"reason": "Unregistered"})
+        return httpx.Response(200)
+
+    try:
+        client = httpx.Client(transport=httpx.MockTransport(apple))
+        result = push.send_new_dogs("NYC", [dog("muddypaws", 1, "Fiona")], client=client)
+    finally:
+        _restore_env(saved)
+        push._jwt.update(token=None, at=0.0)
+
+    eq("two delivered, one dead", (result["sent"], result["dead"]), (2, [gone]))
+    eq("the dead token is pruned", sorted(d["token"] for d in db.devices_for("NYC")),
+       sorted([ok, sandbox]))
+    eq("the LA device was never contacted", any(t == "d" * 64 for _, t, _, _ in calls), False)
+    eq("a device following both cities hears once from this city's run",
+       sum(1 for _, t, _, _ in calls if t == ok), 1)
+    eq("pruning a dead token clears it from every city", db.devices_for("LA")[0]["token"] != gone, True)
+    hosts = {t: h for h, t, _, _ in calls}
+    eq("production token goes to production", hosts[ok], "api.push.apple.com")
+    eq("sandbox token goes to sandbox", hosts[sandbox], "api.sandbox.push.apple.com")
+    headers = calls[0][2]
+    eq("topic is the bundle id", headers["apns-topic"], "com.luvd.app")
+    eq("alert push type", headers["apns-push-type"], "alert")
+    eq("one collapse id per city-morning", headers["apns-collapse-id"].startswith("new-NYC-"), True)
+    eq("body is the built payload", json.loads(calls[0][3])["dog_ids"], ["muddypaws:1"])
+
+    jwt = headers["authorization"].split(" ", 1)[1]
+    head_b64, claims_b64, sig_b64 = jwt.split(".")
+    pad = lambda s: s + "=" * (-len(s) % 4)
+    eq("JWT header names ES256 and the key id",
+       json.loads(_b64.urlsafe_b64decode(pad(head_b64))), {"alg": "ES256", "kid": "ABC123DEFG"})
+    eq("JWT is issued by the team", json.loads(_b64.urlsafe_b64decode(pad(claims_b64)))["iss"],
+       "TEAM123456")
+    raw = _b64.urlsafe_b64decode(pad(sig_b64))
+    eq("signature is raw R||S, not DER", len(raw), 64)
+    try:
+        key.public_key().verify(
+            encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")),
+            f"{head_b64}.{claims_b64}".encode(), ec.ECDSA(hashes.SHA256()))
+        verified = True
+    except Exception:
+        verified = False
+    eq("signature verifies against the key's public half", verified, True)
+
+
+def test_push_retries_a_mislabelled_token_before_deleting_it():
+    import httpx
+    import push
+    fresh_db("push_retry.db")
+    tok = "e" * 64
+    db.add_device(tok, "NYC", env="production")     # really a sandbox token
+    _, pem = _fake_apns_key()
+    saved = _with_env(APNS_KEY=pem, APNS_KEY_ID="ABC123DEFG",
+                      APNS_TEAM_ID="TEAM123456", APNS_BUNDLE_ID="com.luvd.app")
+    push._jwt.update(token=None, at=0.0)
+
+    def apple(request):
+        if request.url.host == "api.push.apple.com":
+            return httpx.Response(400, json={"reason": "BadDeviceToken"})
+        return httpx.Response(200)
+
+    try:
+        result = push.send_new_dogs("NYC", [dog("muddypaws", 1, "F")],
+                                    client=httpx.Client(transport=httpx.MockTransport(apple)))
+    finally:
+        _restore_env(saved)
+        push._jwt.update(token=None, at=0.0)
+    eq("delivered via the other host", (result["sent"], result["dead"]), (1, []))
+    eq("and the token survives", len(db.devices_for("NYC")), 1)
+
+
+def test_nightly_run_pushes_new_dogs_but_not_on_a_dry_run():
+    import check
+    import emailer
+    import push
+    fresh_db("push_run.db")
+    pushed = []
+    saved = (check.sources_for_city, emailer.send_digest, check.page.write,
+             check.normalize, check.enrich, check._alert, push.send_new_dogs)
+    try:
+        check.sources_for_city = lambda c: [FakeNYCSource(NYC_DOGS)]
+        emailer.send_digest = lambda *a, **k: None
+        check.page.write = lambda pages, for_date=None: Path("/dev/null")
+        check.normalize = lambda dogs: dogs
+        check.enrich = lambda dogs: dogs
+        check._alert = lambda *a, **k: None
+        push.send_new_dogs = lambda city, dogs, **k: pushed.append(
+            (city, sorted(d.id for d in dogs)))
+        check.run(city="NYC", dry_run=True)
+        eq("dry run pushes nothing", pushed, [])
+        check.run(city="NYC")
+        eq("real run pushes the new dogs once",
+           pushed, [("NYC", ["animalhaven:3", "muddypaws:1", "muddypaws:2"])])
+        # new_today is "first seen today", not "first seen this run", so a
+        # same-day rerun re-sends the morning — exactly as the email digest
+        # does. What keeps that off the lock screen twice is the apns-collapse-id
+        # (new-<city>-<date>, asserted in test_push_signs_sends_and_prunes),
+        # which makes the second notification replace the first.
+        pushed.clear()
+        check.run(city="NYC")
+        eq("a same-day rerun re-sends the same morning",
+           pushed, [("NYC", ["animalhaven:3", "muddypaws:1", "muddypaws:2"])])
+    finally:
+        (check.sources_for_city, emailer.send_digest, check.page.write,
+         check.normalize, check.enrich, check._alert, push.send_new_dogs) = saved
+
+
+def test_devices_table_migrates_from_one_city_per_token():
+    """A dev database from the branch's first draft keeps its registered phone."""
+    path = TMP / "devices_v1.db"
+    if path.exists():
+        path.unlink()
+    con = sqlite3.connect(path)
+    con.execute("""CREATE TABLE devices (token TEXT PRIMARY KEY, city TEXT NOT NULL,
+                   platform TEXT NOT NULL DEFAULT 'ios', env TEXT NOT NULL DEFAULT 'production',
+                   created TEXT DEFAULT (datetime('now')), updated TEXT DEFAULT (datetime('now')))""")
+    con.execute("CREATE INDEX idx_devices_city ON devices(city)")
+    con.execute("INSERT INTO devices(token, city, env) VALUES(?, 'NYC', 'sandbox')", ("f" * 64,))
+    con.commit()
+    con.close()
+    db.DB_PATH = path
+    db.init_db()
+    eq("the old row survives", [d["token"] for d in db.devices_for("NYC")], ["f" * 64])
+    eq("and the phone can now follow a second city",
+       (db.add_device("f" * 64, "LA"), len(db.devices_for("LA"))), (True, 1))
+    with db.connect() as conn:
+        eq("the city index is on the new table",
+           [r["tbl_name"] for r in conn.execute(
+               "SELECT tbl_name FROM sqlite_master WHERE name = 'idx_devices_city'")], ["devices"])
+    db.init_db()
+    eq("migrating twice is harmless", len(db.devices_for("NYC")) + len(db.devices_for("LA")), 2)
+
+
+def test_app_api_dogs_and_devices():
+    import app as _app
+    import emailer
+    fresh_db("api.db")
+    c = _app.app.test_client()
+    real_page_dogs = emailer._page_dogs
+    rows = {f"t:{i}": {"id": f"t:{i}", "name": f"D{i}", "photos": [f"https://e.org/{j}.jpg" for j in range(12)],
+                       "scores": {"energy": 2}, "secret_internal": "x", "b": "not for the app"}
+            for i in range(3)}
+    try:
+        emailer._page_dogs = lambda code: rows if code == "NYC" else {}
+        r = c.get("/api/dogs?city=nyc")
+        body = r.get_json()
+        eq("dogs served", (r.status_code, body["count"], body["city"]), (200, 3, "NYC"))
+        eq("page order kept", [d["id"] for d in body["dogs"]], ["t:0", "t:1", "t:2"])
+        eq("only named fields leave", "secret_internal" in body["dogs"][0] or "b" in body["dogs"][0], False)
+        eq("photos capped at 8", len(body["dogs"][0]["photos"]), 8)
+        eq("city's own date included", bool(re.match(r"\d{4}-\d{2}-\d{2}$", body["today"])), True)
+        eq("cacheable", "max-age" in r.headers.get("Cache-Control", ""), True)
+        eq("no page yet is a 503, not an empty city", c.get("/api/dogs?city=LA").status_code, 503)
+        eq("unknown city refused", c.get("/api/dogs?city=LAX").status_code, 400)
+    finally:
+        emailer._page_dogs = real_page_dogs
+
+    tok = "ab" * 32
+    _app._device_hits.clear()
+    eq("bad token refused", c.post("/api/devices", json={"token": "xyz", "city": "NYC"}).status_code, 400)
+    eq("unknown city refused", c.post("/api/devices", json={"token": tok, "city": "ZZZ"}).status_code, 400)
+    def reg(**body):
+        return c.post("/api/devices", json={"token": tok, "env": "sandbox", **body})
+    r = reg(cities=["NYC"])
+    eq("registered", (r.status_code, r.get_json()["changed"]), (200, True))
+    eq("and told whether real push is on", r.get_json()["push"], False)
+    eq("re-registering unchanged is quiet", reg(cities=["NYC"]).get_json()["changed"], False)
+    eq("adding a second city is a change", reg(cities=["NYC", "LA"]).get_json()["changed"], True)
+    eq("following both is one row per city",
+       (len(db.devices_for("NYC")), len(db.devices_for("LA"))), (1, 1))
+    eq("a list with a bad city is refused whole", reg(cities=["LA", "ZZZ"]).status_code, 400)
+    eq("and changed nothing", (len(db.devices_for("NYC")), len(db.devices_for("LA"))), (1, 1))
+    eq("unticking a city is a change", reg(cities=["LA"]).get_json()["changed"], True)
+    eq("and only that city stops", (db.devices_for("NYC"), len(db.devices_for("LA"))), ([], 1))
+    eq("no city at all is refused", reg(cities=[]).status_code, 400)
+    r = reg(city="nyc")
+    eq("a single city still works", (r.status_code, r.get_json()["cities"]), (200, ["NYC"]))
+    eq("removed", c.post("/api/devices/delete", json={"token": tok}).get_json()["removed"], True)
+    eq("from every city", (db.devices_for("NYC"), db.devices_for("LA")), ([], []))
+    _app._device_hits.clear()
+    codes = [c.post("/api/devices", json={"token": tok, "city": "NYC"}).status_code
+             for _ in range(_app._DEVICE_MAX + 1)]
+    eq("rate limited honestly", (codes[0], codes[-1]), (200, 429))
+    _app._device_hits.clear()
+
+
+def _apple_signer():
+    """A stand-in for Apple: an RSA key, its JWKS entry, and a token minter."""
+    import base64 as _b64
+    import hashlib
+    import time as _time
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    nums = key.public_key().public_numbers()
+    def b64(b):
+        return _b64.urlsafe_b64encode(b).rstrip(b"=").decode()
+    def intb(i):
+        return b64(i.to_bytes((i.bit_length() + 7) // 8, "big"))
+    jwk = {"kid": "TESTKID", "kty": "RSA", "alg": "RS256", "n": intb(nums.n), "e": intb(nums.e)}
+    def mint(nonce="raw-nonce", sub="apple-sub-1", aud="com.luvd.app", exp_in=600,
+             alg="RS256", kid="TESTKID", email="dog@person.com", signer=None):
+        now = int(_time.time())
+        head = b64(json.dumps({"alg": alg, "kid": kid}).encode())
+        body = b64(json.dumps({"iss": "https://appleid.apple.com", "aud": aud, "sub": sub,
+                               "iat": now, "exp": now + exp_in, "email": email,
+                               "nonce": hashlib.sha256(nonce.encode()).hexdigest()}).encode())
+        sig = (signer or key).sign(f"{head}.{body}".encode(), padding.PKCS1v15(), hashes.SHA256())
+        return f"{head}.{body}.{b64(sig)}"
+    return jwk, mint
+
+
+def test_apple_identity_tokens_are_verified_not_trusted():
+    import auth
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    jwk, mint = _apple_signer()
+    real_fetch = auth._fetch_keys
+    auth._fetch_keys = lambda: {"TESTKID": jwk}
+    auth._keys.update(at=0.0, by_kid={})
+    try:
+        claims = auth.verify_identity_token(mint(), "raw-nonce")
+        eq("a good token names its person", claims["sub"], "apple-sub-1")
+        def refused(label, token, nonce="raw-nonce"):
+            try:
+                auth.verify_identity_token(token, nonce)
+                eq(label, "accepted", "refused")
+            except auth.AuthError:
+                eq(label, "refused", "refused")
+        refused("another app's token", mint(aud="com.someone.else"))
+        refused("an expired token", mint(exp_in=-3600))
+        refused("the wrong nonce", mint(), nonce="some-other-nonce")
+        refused("no nonce at all", mint(), nonce="")
+        refused("alg none", mint(alg="none"))
+        other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        refused("signed by someone else's key", mint(signer=other))
+        refused("an unknown key id", mint(kid="NOPE"))
+        refused("garbage", "not.a.jwt")
+    finally:
+        auth._fetch_keys = real_fetch
+        auth._keys.update(at=0.0, by_kid={})
+
+
+def test_accounts_sign_in_sync_and_delete():
+    import app as _app
+    import auth
+    fresh_db("accounts.db")
+    c = _app.app.test_client()
+    jwk, mint = _apple_signer()
+    real_fetch = auth._fetch_keys
+    auth._fetch_keys = lambda: {"TESTKID": jwk}
+    auth._keys.update(at=0.0, by_kid={})
+    _app._auth_hits.clear()
+    try:
+        r = c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "wrong"})
+        eq("a token for another sign-in is refused", r.status_code, 401)
+        r = c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "raw-nonce",
+                                            "name": "Cory O'Keefe"})
+        body = r.get_json()
+        eq("signed in", (r.status_code, body["new"], body["account"]),
+           (200, True, {"email": "dog@person.com", "name": "Cory O'Keefe"}))
+        tok = body["token"]
+        auth_h = {"Authorization": f"Bearer {tok}"}
+        eq("no bearer, no account", c.get("/api/me").status_code, 401)
+        eq("a made-up bearer, no account",
+           c.get("/api/me", headers={"Authorization": "Bearer nope"}).status_code, 401)
+        eq("only a hash of the token is stored",
+           db.connect().execute("SELECT COUNT(*) n FROM sessions WHERE token_hash = ?",
+                                (tok,)).fetchone()["n"], 0)
+
+        phone = [
+            {"id": "nyc:a", "city": "nyc", "name": "Arlo", "photo": "https://e.org/a.jpg",
+             "breed": "Pit mix", "rescue": "Muddy Paws", "saved_at": "2026-09-10T12:00:00Z"},
+            {"id": "nyc:b", "name": "Bea", "photo": "http://insecure/b.jpg", "saved_at": "nonsense"},
+            {"id": ""}, "not a dict",
+        ]
+        r = c.post("/api/me/saved", json={"items": phone, "mode": "merge"}, headers=auth_h)
+        saved = r.get_json()["saved"]
+        eq("merge keeps the good entries and drops the junk", sorted(s["id"] for s in saved),
+           ["nyc:a", "nyc:b"])
+        arlo = next(s for s in saved if s["id"] == "nyc:a")
+        eq("a dog carries enough to draw it later",
+           (arlo["city"], arlo["name"], arlo["photo"], arlo["rescue"]),
+           ("NYC", "Arlo", "https://e.org/a.jpg", "Muddy Paws"))
+        eq("a non-https photo is not kept", next(s for s in saved if s["id"] == "nyc:b")["photo"], None)
+
+        # A second phone signs in to the same Apple id and merges its own list.
+        r = c.post("/api/auth/apple", json={"identity_token": mint(email=None), "nonce": "raw-nonce"})
+        eq("the same person again is not a new account, and keeps their details",
+           (r.get_json()["new"], r.get_json()["account"]["email"], r.get_json()["account"]["name"]),
+           (False, "dog@person.com", "Cory O'Keefe"))
+        eq("and arrives with the saves from the first phone",
+           sorted(s["id"] for s in r.get_json()["saved"]), ["nyc:a", "nyc:b"])
+        tok2 = r.get_json()["token"]
+        auth2 = {"Authorization": f"Bearer {tok2}"}
+        r = c.post("/api/me/saved", headers=auth2, json={"mode": "merge", "items": [
+            {"id": "nyc:a", "saved_at": "2026-09-01T08:00:00Z"},
+            {"id": "la:c", "city": "LA", "name": "Cleo", "saved_at": "2026-09-12T09:00:00Z"}]})
+        rows = r.get_json()["saved"]
+        eq("merging on sign-in loses nothing", sorted(s["id"] for s in rows), ["la:c", "nyc:a", "nyc:b"])
+        eq("a dog saved on both keeps the earlier date",
+           next(s for s in rows if s["id"] == "nyc:a")["saved_at"], "2026-09-01T08:00:00Z")
+        # Bea's date was unreadable, so she was stamped with the moment she
+        # synced — today, after every dated save.
+        eq("newest save first", [r["id"] for r in rows], ["nyc:b", "la:c", "nyc:a"])
+
+        r = c.post("/api/me/saved", headers=auth_h, json={"mode": "replace", "items": [
+            {"id": "la:c", "saved_at": "2026-09-12T09:00:00Z"}]})
+        eq("replace makes an unsave on one phone an unsave on the account",
+           [s["id"] for s in r.get_json()["saved"]], ["la:c"])
+        eq("and keeps what it already knew about the dog",
+           r.get_json()["saved"][0]["name"], "Cleo")
+
+        eq("cities: unknown refused", c.post("/api/me/cities", headers=auth_h,
+                                             json={"cities": ["NYC", "ZZZ"]}).status_code, 400)
+        eq("cities saved", c.post("/api/me/cities", headers=auth_h,
+                                  json={"cities": ["la", "NYC"]}).get_json()["cities"], ["LA", "NYC"])
+        eq("and restored on the next sign-in",
+           c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "raw-nonce"})
+            .get_json()["cities"], ["LA", "NYC"])
+
+        eq("signing out ends that phone's session",
+           c.post("/api/auth/signout", headers=auth2).get_json()["ended"], True)
+        eq("which then cannot be used", c.get("/api/me", headers=auth2).status_code, 401)
+        eq("while the other phone stays signed in", c.get("/api/me", headers=auth_h).status_code, 200)
+
+        eq("dev sign-in does not exist unless switched on",
+           c.post("/api/auth/dev", json={}).status_code, 404)
+
+        eq("delete", c.post("/api/me/delete", headers=auth_h).get_json()["ok"], True)
+        conn = db.connect()
+        eq("deleting leaves nothing behind",
+           [conn.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()["n"]
+            for t in ("users", "sessions", "user_saved")], [0, 0, 0])
+        eq("and the deleted account's session is dead", c.get("/api/me", headers=auth_h).status_code, 401)
+        r = c.post("/api/auth/apple", json={"identity_token": mint(), "nonce": "raw-nonce"})
+        eq("signing in again afterwards starts a fresh, empty account",
+           (r.get_json()["new"], r.get_json()["saved"]), (True, []))
+    finally:
+        auth._fetch_keys = real_fetch
+        auth._keys.update(at=0.0, by_kid={})
+        _app._auth_hits.clear()
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
