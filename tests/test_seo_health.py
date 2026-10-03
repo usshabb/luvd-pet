@@ -65,6 +65,30 @@ class HealthTests(unittest.TestCase):
             health.watchdog_once(now=10001)
             notify.assert_not_called()
 
+    def test_first_checked_city_waits_for_combined_initial_publish(self):
+        # Reproduce the production email: NYC checked successfully, LA still
+        # collecting, and neither city has completed its initial publication.
+        health.checked('NYC', [], now=10100)
+        with patch.object(health, 'alert') as notify:
+            snapshot = health.watchdog_once(now=10300, started=10000)
+            self.assertFalse(snapshot['ok'])  # endpoint remains honest
+            notify.assert_not_called()
+            # A hung initial publish must eventually alert despite fresh checks.
+            health.checked('NYC', [], now=12700)
+            health.watchdog_once(now=12701, started=10000)
+            self.assertEqual(notify.call_count, 2)
+
+    def test_startup_grace_does_not_hide_source_failures_or_stale_publish(self):
+        health.checked('NYC', ['rescue failed'], now=10100)
+        with patch.object(health, 'alert') as notify:
+            health.watchdog_once(now=10300, started=10000)
+            self.assertEqual(notify.call_count, 1)
+            self.assertEqual(notify.call_args.kwargs['key'], 'health:NYC')
+        self.seed()
+        with patch.object(health, 'alert') as notify:
+            health.watchdog_once(now=14000, started=13990)
+            self.assertEqual(notify.call_count, 2)  # restart cannot hide stale data
+
     def test_endpoint_status_and_cache(self):
         import app
         with app.app.test_client() as client:

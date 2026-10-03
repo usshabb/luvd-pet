@@ -100,8 +100,12 @@ def watchdog_once(now=None, started=0):
             with _connect() as conn:
                 conn.execute('DELETE FROM scraper_alerts WHERE key=?', ('health:' + city,))
             continue
-        if not result['checked'] and now - started < STALE_SECONDS:
-            continue  # give the first deployment time to seed the roster
+        if (not result['published'] and not result['failed_sources']
+                and now - started < STALE_SECONDS):
+            # A city can finish checking before the combined city pages publish.
+            # Keep the initial grace period through that intermediate state.
+            # Real source failures and already-published stale data still alert.
+            continue
         print(f'scraper health: {city}: {json.dumps(result)}', flush=True)
         alert(f'LUVD {city}: listings need attention',
               f'{city} scraper health: {json.dumps(result)}\n'
