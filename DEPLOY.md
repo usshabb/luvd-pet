@@ -3,8 +3,8 @@
 ## Read this first: `main` deploys itself
 
 `.github/workflows/fly-deploy.yml` runs `flyctl deploy --remote-only` on **every
-push to `main`**. There is no test step, no staging environment and no approval
-gate, so a push is a production release the moment it lands. It needs the
+push to `main`**. Regression tests run before deployment. There is no staging environment or manual
+approval gate, so a passing push is a production release. It needs the
 `FLY_API_TOKEN` repo secret; the live app is `luvd-nyc` (`fly.toml`).
 
 Two consequences worth knowing before you push:

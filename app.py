@@ -529,6 +529,29 @@ def sitemap():
         f"<url><loc>{site}/</loc></url></urlset>", mimetype="application/xml")
 
 
+@app.route("/health/scrapers")
+def scraper_health_status():
+    import scraper_health
+    try:
+        result = scraper_health.status()
+    except Exception:
+        app.logger.exception("Could not read scraper health")
+        result = {"ok": False, "error": "health unavailable"}
+    response = jsonify(result)
+    response.status_code = 200 if result["ok"] else 503
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Robots-Tag"] = "noindex"
+    return response
+
+
+@app.after_request
+def _generated_asset_cache(response):
+    if response.status_code == 200 and re.fullmatch(
+            r"/assets/generated/[a-f0-9]{20}\.(css|js)", request.path):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
 @app.route("/views")
 def views():
     """Live per-dog counts plus the site-wide total, fetched on page load."""

@@ -17,6 +17,7 @@ option carries a live count, and each pill's options are total over the roster,
 so no dog is unreachable and no click leads to an empty page.
 """
 import html
+import hashlib
 import json
 import os
 import re
@@ -58,7 +59,7 @@ def _terms_html(email: str, for_date) -> str:
       <p class="upd">Last updated {upd}</p>
       <p>LUVD (&ldquo;LUVD,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;) is a free
         service that gathers publicly listed adoptable dogs from independent New
-        York City animal rescues and shows them on one page each morning. By using
+        York City animal rescues and shows them on one page throughout the day. By using
         LUVD you agree to these terms. If you don&rsquo;t agree, please don&rsquo;t
         use the site.</p>
 
@@ -697,8 +698,10 @@ def _is_new_today(dog: Dog, today_iso: str, today: date) -> bool:
 def _card(d: Dog, i: int, today: date, is_new: bool = False) -> str:
     photo = d.primary_photo()
     if photo:
+        loading = "eager" if i < 4 else "lazy"
+        priority = ' fetchpriority="high"' if i == 0 else ""
         media = (f'<img class="ph" src="{html.escape(photo)}" '
-                 f'alt="{html.escape(d.name)}" loading="lazy">')
+                 f'alt="{html.escape(d.name)}" loading="{loading}"{priority}>')
     else:
         # Usually a litter the rescue hasn't photographed yet — worth showing,
         # so the tile is designed rather than broken.
@@ -819,7 +822,7 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
         (f"Which {c.short} rescues does LUVD cover?",
          "LUVD currently follows " + ", ".join(rescues) + ". New arrivals from "
          + ("every one of them are" if len(rescues) > 1 else "them are")
-         + " collected each morning."),
+         + " checked throughout the day."),
         (f"How much does it cost to adopt a dog in {c.name}?",
          "Adoption fees are set by each rescue and typically range from about "
          "$150 to $500, which usually covers spay/neuter, vaccinations and "
@@ -831,7 +834,8 @@ def _structured_data(flat, dated, site, for_date, rescues, meta_desc,
          "rescue's own write-up and breed tendencies — the rescue knows the "
          "individual dog best."),
         ("How often is LUVD updated?",
-         "Every morning. Dogs stay listed for as long as their rescue still has "
+         "We check rescue rosters about every 15 minutes and refresh full details "
+         "hourly. Rescue websites can take time to update. Dogs stay listed for as long as their rescue still has "
          "them available, newest arrival first, and the dogs that appeared today "
          "are marked new."),
     ]
@@ -992,8 +996,8 @@ def render(dated, for_date: date = None, city: str = None) -> str:
         if own:
             row["bi"] = own
         rows.append(row)
-    payload = json.dumps(rows)
-    breeds_json = json.dumps(breeds, ensure_ascii=False)
+    payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
+    breeds_json = json.dumps(breeds, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
     subscribe_url = os.getenv("SUBSCRIBE_URL", "/subscribe")
     turnstile_key = os.getenv("TURNSTILE_SITE_KEY", "")
     # Only loaded when a key exists, so an unconfigured deploy ships no
@@ -1028,7 +1032,7 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     meta_desc = (
         f"{total} adoptable dogs from {len(rescues)} {c.name} "
         f"rescue{'' if len(rescues) == 1 else 's'}, "
-        f"updated every morning. Browse today's new arrivals with energy level, "
+        f"updated throughout the day. Browse today's new arrivals with energy level, "
         f"apartment fit and breed guidance, then contact the rescue directly."
     )
     structured_data = json.dumps(_structured_data(flat, dated, site, for_date,
@@ -2960,8 +2964,14 @@ def render(dated, for_date: date = None, city: str = None) -> str:
     </details>
     <details>
       <summary>Which rescues does LUVD cover?</summary>
-      <p>{rescue_sentence} We check all of them every morning and show you what's
+      <p>{rescue_sentence} We check their rosters about every 15 minutes and show you what's
          new, so you don't have to keep a dozen tabs open.</p>
+    </details>
+    <details>
+      <summary>How often is LUVD updated?</summary>
+      <p>We check rescue rosters about every 15 minutes and refresh full details
+         hourly. Rescue websites can take time to update. Morning email digests
+         still arrive once a day.</p>
     </details>
     <details>
       <summary>What does it cost to adopt in {c.short}?</summary>
@@ -3811,7 +3821,7 @@ const CREED = [
 // pulls the share image from the page's og: tags; on image-first apps we also
 // hand over og.png directly.
 const SHARE_TEXT =
-  'Every new rescue dog in {c.short}, on one page every morning. Go meet your dog 🐶';
+  'Every new rescue dog in {c.short}, on one page throughout the day. Go meet your dog 🐶';
 
 async function shareLuvd() {{
   const url = location.origin + location.pathname;
@@ -6094,7 +6104,7 @@ def _dog_page(d: Dog, site: str, today: date, css_href: str = "/app.css",
      page uses, because it is the city page's own showModal() doing the writing. -->
 <div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
 <div class="dpg-foot">
-  <a href="{c.path}">Every adoptable dog in {c.short}, updated every morning</a>
+  <a href="{c.path}">Every adoptable dog in {c.short}, updated throughout the day</a>
   &middot; <a href="{c.rescues_path}">All {c.short} rescues</a>
   {_dp_other_cities(c)}
 </div>
@@ -6354,7 +6364,7 @@ def _breed_page(group: str, dogs: List[Dog], site: str, c) -> str:
     rescues = sorted({d.source_label for d in dogs})
     desc = (f"{n} {lower} dog{'' if n == 1 else 's'} available for adoption "
             f"from {len(rescues)} {c.name} "
-            f"rescue{'' if len(rescues) == 1 else 's'}, updated every morning. "
+            f"rescue{'' if len(rescues) == 1 else 's'}, updated throughout the day. "
             f"See each dog's energy level, apartment fit and who to contact.")
     rows = "".join(
         f'<li><a href="{html.escape(dog_path(d))}">{html.escape(d.name)}</a>'
@@ -6411,7 +6421,7 @@ def _rescue_page(label: str, dogs: List[Dog], site: str) -> str:
     # The description carries the count, which is refreshed far more often.
     title = f"{label} — every dog available today in {c.short}"
     desc = (f"All {n} dog{'' if n == 1 else 's'} available for adoption from "
-            f"{label} in {c.name} right now, refreshed every morning. Photos, "
+            f"{label} in {c.name} right now, refreshed throughout the day. Photos, "
             f"temperament and how to apply.")
     rows = "".join(
         f'<li><a href="{html.escape(dog_path(d))}">{html.escape(d.name)}</a>'
@@ -7045,6 +7055,27 @@ def _carried_sitemap_urls(site: str, owned: set, written_paths: set,
     return keep
 
 
+def _cache_city_assets(document: str) -> str:
+    """Keep roster data inline; cache stable CSS and behavior across refreshes."""
+    def asset(content, suffix):
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:20]
+        relative = f"assets/generated/{digest}.{suffix}"
+        dest = OUT_DIR / relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            dest.write_text(content, encoding="utf-8")
+        return "/" + relative
+
+    document = re.sub(r"<style>(.*?)</style>",
+                      lambda m: f'<link rel="stylesheet" href="{asset(m[1], "css")}">',
+                      document, flags=re.S)
+    start = document.index("/*KIT:dom-esc*/")
+    end = document.index("</script>", start)
+    code = document[start:end]
+    href = asset(code, "js")
+    return document[:start] + f'</script><script src="{href}" defer>' + document[end:]
+
+
 def write(pages, for_date: date = None) -> Path:
     """Publish every city in ONE pass. `pages` is {city_code: dated}.
 
@@ -7119,7 +7150,7 @@ def write(pages, for_date: date = None) -> Path:
         c = cities.resolve(code)
         out = OUT_DIR / c.file
         page_html = render(dated, for_date, c.code)
-        out.write_text(page_html, encoding="utf-8")
+        out.write_text(_cache_city_assets(page_html), encoding="utf-8")
         rendered.add(c.path)
 
         # The city page's stylesheet, written out so the per-dog pages can link

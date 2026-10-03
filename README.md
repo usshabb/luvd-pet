@@ -641,3 +641,27 @@ Normalization and scoring happen centrally, so a new scraper only has to fetch.
 
 - **Breed data.** Roughly a third of dogs come through with breed "Unknown" —
   Muddy Paws in particular. The scores lean on the write-up to compensate.
+
+
+### Scraper health and page performance
+
+`GET /health/scrapers` returns 200 only when every live city has a recent check,
+a recent completed publish (within 45 minutes), and no failed roster sources.
+Otherwise it returns 503, without exposing exception details or credentials.
+`alerts_configured` indicates whether operator mail has a recipient and provider
+configuration; it does not prove successful delivery.
+
+On Fly, a separate `scraper_health.py --watch` process checks every five minutes.
+It sends to `ALERT_EMAIL` (or `OPERATOR_EMAIL`) through the existing Mandrill
+configuration, throttles a continuing issue to six hours, and resets after
+recovery. Health state is stored beside `LUVD_DB` in a separate `.health.db`.
+A new installation has a 45-minute alert grace period. Keep Fly readiness on
+`/views`: an upstream rescue outage should not restart the web server. An
+external uptime monitor can poll `/health/scrapers` to detect whole-machine
+outages; the in-process watchdog cannot alert when its machine is down.
+
+City pages publish content-hashed CSS and deferred JavaScript under
+`/assets/generated/`, cached for one year. Roster data remains inline for the
+website, email renderer and mobile API; images on the first row load eagerly.
+Old hashed assets remain available so a previously opened page still works.
+The deployment workflow runs regression tests before invoking Fly.

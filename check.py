@@ -39,17 +39,11 @@ FORGET_FLOOR_SHARE = 0.5
 
 def _alert(subject: str, body: str):
     """Email the operator when something breaks. Silent if Mandrill isn't set up."""
-    import os
-    import emailer
-    to = os.getenv("ALERT_EMAIL") or os.getenv("OPERATOR_EMAIL")
-    if not emailer.email_configured() or not to:
-        print("  (no MANDRILL_API_KEY/ALERT_EMAIL — alert not sent)")
-        return
+    import scraper_health
     try:
-        emailer.send_email(to, subject, text_body=body)
-        print(f"  alert sent to {to}")
-    except Exception as e:
-        print(f"  alert failed: {type(e).__name__}: {e}")
+        scraper_health.alert(subject, body)
+    except Exception as exc:
+        print(f"  health alert failed: {type(exc).__name__}: {exc}")
 
 
 def _previous_source_dogs(source, city):
@@ -141,6 +135,9 @@ def collect(prefs, city=None, verbose=True):
             kept += 1
         if verbose:
             print(f"  ok    {source.name:<14} {len(found):>3} listed, {kept:>3} kept")
+    if prefs.get("_record_health"):
+        import scraper_health
+        scraper_health.checked(city, failures)
     return dogs, failures
 
 
@@ -274,6 +271,7 @@ def run(dry_run=False, city=None, refresh=False, roster_only=False):
     city = cities.canon(city) or cities.default_run_city()
     prefs = db.get_prefs()
     prefs["_roster_only"] = roster_only
+    prefs["_record_health"] = True
     read_only = dry_run or refresh
     # Each city's day is measured on its own clock, so a dog listed at 9pm
     # Pacific is still a Pacific Tuesday. The container's TZ is fixed, so this
@@ -399,6 +397,9 @@ def run(dry_run=False, city=None, refresh=False, roster_only=False):
 
     path = page.write(pages, today_d)
     print(f"Page written: {path}")
+    import scraper_health
+    for code in pages:
+        scraper_health.published(code)
 
     # The social card leads with real dog faces, so it's rebuilt with the page.
     # Never fatal — a stale card is better than a failed run. Still one shared

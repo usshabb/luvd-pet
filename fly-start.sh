@@ -231,4 +231,7 @@ render() {
   done
 ) &
 
+# Separate process: still checks freshness if the scheduler stalls.
+python scraper_health.py --watch &
+
 exec gunicorn -w 2 -b 0.0.0.0:8000 --timeout 60 app:app
