@@ -140,6 +140,96 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_saved_email ON saved_lists(email)"
         )
+        # A phone that asked to hear about new dogs, one row per city it
+        # follows. The token is Apple's address for one install of the app, not
+        # a person: it names no one, changes on reinstall, and APNs tells us
+        # when it stops working, at which point push.py deletes every row for it.
+        #
+        # (token, city) rather than one row per token, because someone looking
+        # in two cities should hear about both — and each city's morning is its
+        # own notification, sent by its own nightly run, so the rows are exactly
+        # the fan-out the sender needs. `env` is which APNs host the token
+        # belongs to; a debug build's token is a sandbox token.
+        #
+        # The branch's first draft keyed this table on token alone. Nothing
+        # with that shape ever reached production, but a dev database that ran
+        # it is carried across rather than dropped, so a registered phone stays
+        # registered.
+        cols = conn.execute("PRAGMA table_info(devices)").fetchall()
+        legacy = bool(cols) and [c["name"] for c in cols if c["pk"]] == ["token"]
+        if legacy:
+            conn.execute("ALTER TABLE devices RENAME TO devices_v1")
+            conn.execute("DROP INDEX IF EXISTS idx_devices_city")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS devices (
+                token TEXT NOT NULL,
+                city TEXT NOT NULL,
+                platform TEXT NOT NULL DEFAULT 'ios',
+                env TEXT NOT NULL DEFAULT 'production',
+                created TEXT DEFAULT (datetime('now')),
+                updated TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (token, city)
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_devices_city ON devices(city)"
+        )
+        if legacy:
+            conn.execute(
+                "INSERT OR IGNORE INTO devices(token, city, platform, env, created, updated) "
+                "SELECT token, city, platform, env, created, updated FROM devices_v1"
+            )
+            conn.execute("DROP TABLE devices_v1")
+        # An app account, and the only thing on the server that names a person.
+        # Sign in with Apple is the only way in: `apple_sub` is Apple's stable id
+        # for this person and this app, and the email may be a private relay
+        # address that Apple forwards. Apple sends the email and name on the
+        # first sign-in only, so they are kept from then on rather than
+        # overwritten with nothing.
+        #
+        # `cities` is what the account followed last, so signing in on a new
+        # phone restores it. `apple_refresh` is kept only to revoke Apple's grant
+        # when the account is deleted, which Apple requires.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                apple_sub TEXT NOT NULL UNIQUE,
+                email TEXT,
+                name TEXT,
+                cities TEXT,
+                apple_refresh TEXT,
+                created TEXT DEFAULT (datetime('now')),
+                last_seen TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        # A signed-in phone. Only a hash of the token is stored, so a copy of
+        # the database cannot be used to act as anyone.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created TEXT DEFAULT (datetime('now')),
+                last_used TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)"
+        )
+        # An account's saved dogs, with enough of each dog to draw it after it
+        # has left every listing — a new phone has no local copy to fall back on.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS user_saved (
+                user_id INTEGER NOT NULL,
+                dog_id TEXT NOT NULL,
+                city TEXT,
+                name TEXT,
+                photo TEXT,
+                breed TEXT,
+                rescue TEXT,
+                saved_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, dog_id)
+            )"""
+        )
         # One row per mail-out, and click counts hanging off it. Deliberately
         # aggregate: a send knows how many opened it, never which addresses, so
         # the privacy page's "anonymous counts" stays literally true. Going
@@ -759,6 +849,228 @@ def email_stats(days: int = 7) -> dict:
         "opens": totals["opens"] if totals else 0,
         "clicks": totals["clicks"] if totals else 0,
     }
+
+
+def add_device(token: str, city: str, env: str = "production",
+               platform: str = "ios") -> bool:
+    """Follow one more city from a device. True when the row is new or its env moved."""
+    token = (token or "").strip()
+    env = "sandbox" if env == "sandbox" else "production"
+    with connect() as conn:
+        row = conn.execute("SELECT env FROM devices WHERE token = ? AND city = ?",
+                           (token, city)).fetchone()
+        conn.execute(
+            "INSERT INTO devices(token, city, platform, env) VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(token, city) DO UPDATE SET env = excluded.env, "
+            "updated = datetime('now')",
+            (token, city, platform[:16], env),
+        )
+    return row is None or row["env"] != env
+
+
+def set_device_cities(token: str, city_codes, env: str = "production",
+                      platform: str = "ios") -> bool:
+    """Make a device follow exactly `city_codes`. True when anything changed.
+
+    The app sends its whole set on every launch and every change, so this
+    replaces rather than adds: a city unticked in Settings has to stop pushing,
+    and an unchanged re-registration has to be a quiet no-op.
+    """
+    token = (token or "").strip()
+    env = "sandbox" if env == "sandbox" else "production"
+    wanted = list(dict.fromkeys(c for c in city_codes if c))
+    with connect() as conn:
+        before = {r["city"]: r["env"] for r in conn.execute(
+            "SELECT city, env FROM devices WHERE token = ?", (token,))}
+        if wanted:
+            marks = ",".join("?" * len(wanted))
+            conn.execute(f"DELETE FROM devices WHERE token = ? AND city NOT IN ({marks})",
+                         (token, *wanted))
+        else:
+            conn.execute("DELETE FROM devices WHERE token = ?", (token,))
+        for city in wanted:
+            conn.execute(
+                "INSERT INTO devices(token, city, platform, env) VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(token, city) DO UPDATE SET env = excluded.env, "
+                "updated = datetime('now')",
+                (token, city, platform[:16], env),
+            )
+    return set(before) != set(wanted) or any(before[c] != env for c in before if c in wanted)
+
+
+def remove_device(token: str) -> bool:
+    """Forget a device entirely — every city it followed."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM devices WHERE token = ?",
+                           ((token or "").strip(),))
+    return bool(cur.rowcount)
+
+
+def devices_for(city: str) -> list:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT token, env FROM devices WHERE city = ? ORDER BY created",
+            (city,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def device_counts() -> dict:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT city, COUNT(*) n FROM devices GROUP BY city").fetchall()
+    return {r["city"]: r["n"] for r in rows}
+
+
+# ---- App accounts ---------------------------------------------------------
+
+def _hash_token(token: str) -> str:
+    import hashlib
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+def _user_row(row) -> dict:
+    import json
+    d = dict(row)
+    try:
+        d["cities"] = [c for c in json.loads(d.get("cities") or "[]") if c]
+    except ValueError:
+        d["cities"] = []
+    return d
+
+
+def upsert_apple_user(sub: str, email: str = None, name: str = None) -> dict:
+    """The account for an Apple id, created on first sight. `new` says which."""
+    email = (email or "").strip().lower()[:200] or None
+    name = (name or "").strip()[:120] or None
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO users(apple_sub, email, name) VALUES(?, ?, ?)",
+            (sub, email, name))
+        new = bool(cur.rowcount)
+        if not new:
+            conn.execute(
+                "UPDATE users SET email = COALESCE(?, email), "
+                "name = COALESCE(?, name), last_seen = datetime('now') "
+                "WHERE apple_sub = ?", (email, name, sub))
+        row = conn.execute("SELECT * FROM users WHERE apple_sub = ?",
+                           (sub,)).fetchone()
+    user = _user_row(row)
+    user["new"] = new
+    return user
+
+
+def set_apple_refresh(user_id: int, refresh_token: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE users SET apple_refresh = ? WHERE id = ?",
+                     (refresh_token, user_id))
+
+
+def create_session(user_id: int) -> str:
+    """A new bearer token for one phone. Only its hash is kept."""
+    import secrets
+    token = secrets.token_urlsafe(32)
+    with connect() as conn:
+        conn.execute("INSERT INTO sessions(token_hash, user_id) VALUES(?, ?)",
+                     (_hash_token(token), user_id))
+    return token
+
+
+def user_for_session(token: str):
+    if not token:
+        return None
+    h = _hash_token(token)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id "
+            "WHERE s.token_hash = ?", (h,)).fetchone()
+        if row is None:
+            return None
+        conn.execute("UPDATE sessions SET last_used = datetime('now') "
+                     "WHERE token_hash = ?", (h,))
+        conn.execute("UPDATE users SET last_seen = datetime('now') WHERE id = ?",
+                     (row["id"],))
+    return _user_row(row)
+
+
+def end_session(token: str) -> bool:
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM sessions WHERE token_hash = ?",
+                           (_hash_token(token),))
+    return bool(cur.rowcount)
+
+
+_SAVED_COLS = ("dog_id", "city", "name", "photo", "breed", "rescue", "saved_at")
+
+
+def user_saved(user_id: int) -> list:
+    """An account's saved dogs, newest save first."""
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join(_SAVED_COLS)} FROM user_saved WHERE user_id = ? "
+            "ORDER BY saved_at DESC, dog_id", (user_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def merge_saved(user_id: int, items, replace: bool = False) -> list:
+    """Fold a phone's saved dogs into the account's.
+
+    Merge is for signing in: nothing on either side is lost, and a dog saved on
+    both keeps its earlier date. Replace is for a phone that is already signed
+    in sending its whole list after a change, so an unsave on the phone is an
+    unsave on the account. Items arrive already cleaned by the caller.
+    """
+    ids = [i["dog_id"] for i in items]
+    with connect() as conn:
+        if replace:
+            if ids:
+                marks = ",".join("?" * len(ids))
+                conn.execute(f"DELETE FROM user_saved WHERE user_id = ? "
+                             f"AND dog_id NOT IN ({marks})", (user_id, *ids))
+            else:
+                conn.execute("DELETE FROM user_saved WHERE user_id = ?", (user_id,))
+        for i in items:
+            conn.execute(
+                "INSERT INTO user_saved(user_id, dog_id, city, name, photo, breed, "
+                "rescue, saved_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, dog_id) DO UPDATE SET "
+                "city = COALESCE(excluded.city, city), "
+                "name = COALESCE(excluded.name, name), "
+                "photo = COALESCE(excluded.photo, photo), "
+                "breed = COALESCE(excluded.breed, breed), "
+                "rescue = COALESCE(excluded.rescue, rescue), "
+                "saved_at = MIN(saved_at, excluded.saved_at)",
+                (user_id, i["dog_id"], i.get("city"), i.get("name"), i.get("photo"),
+                 i.get("breed"), i.get("rescue"), i["saved_at"]))
+    return user_saved(user_id)
+
+
+def set_user_cities(user_id: int, codes) -> None:
+    import json
+    with connect() as conn:
+        conn.execute("UPDATE users SET cities = ? WHERE id = ?",
+                     (json.dumps(list(codes)), user_id))
+
+
+def delete_user(user_id: int):
+    """Delete an account and everything hanging off it.
+
+    Returns Apple's refresh token, if one was kept, so the caller can revoke
+    the grant after the rows are gone.
+    """
+    with connect() as conn:
+        row = conn.execute("SELECT apple_refresh FROM users WHERE id = ?",
+                           (user_id,)).fetchone()
+        conn.execute("DELETE FROM user_saved WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    return row["apple_refresh"] if row else None
+
+
+def account_counts() -> dict:
+    with connect() as conn:
+        users = conn.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
+        saves = conn.execute("SELECT COUNT(*) n FROM user_saved").fetchone()["n"]
+    return {"users": users, "saved": saves}
 
 
 def weekly_report(days: int = 7) -> dict:

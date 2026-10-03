@@ -6,7 +6,7 @@ import base64
 import logging
 import os
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 import threading
 from html import escape as html_escape
@@ -827,6 +827,308 @@ def subscribers():
         return denied
     return jsonify({"total": len(db.list_subscribers()),
                     "by_city": db.subscriber_city_counts()})
+
+
+# ---- app API -------------------------------------------------------------------
+# What the LUVD iOS app reads and writes. Deliberately thin: the dogs come from
+# the same rendered payload the city page is built from, so the app can never
+# show a dog the site does not, and there is no second pipeline to keep in step.
+
+# The fields the app renders. Named rather than passed through wholesale, so a
+# field added to the page for the page's own reasons does not silently become
+# part of an API an installed app depends on.
+_API_DOG_FIELDS = (
+    "id", "name", "path", "photos", "breed", "breed_group", "age", "age_bucket",
+    "sex", "size_bucket", "weight", "adult_lbs", "source", "source_label",
+    "location", "fee", "cta_url", "url", "first_seen", "waiting_days",
+    "program", "program_label", "quip", "scores", "size_outlook",
+    "monthly_cost", "traits", "description",
+)
+# An APNs device token is 32 bytes of hex today; Apple says to treat the length
+# as variable, so this bounds it rather than pinning it.
+_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{64,200}$")
+_DEVICE_MAX = 20
+_device_hits: dict = {}
+
+
+@app.route("/api/dogs")
+def api_dogs():
+    """Every adoptable dog in one city, in the page's own feed order."""
+    import emailer
+    from zoneinfo import ZoneInfo
+
+    asked = (request.args.get("city") or "").strip()
+    # No city means the default; a city we have never heard of is an error. An
+    # app sending "LAX" and silently receiving New York's dogs would be the
+    # same wrong-city bug the email digest spent weeks shaking out.
+    code = cities.canon(asked) if asked else cities.DEFAULT_CITY
+    if not code:
+        return jsonify({"ok": False, "error": "unknown city"}), 400
+    if not cities.is_live(code):
+        return jsonify({"ok": False, "error": "city not open yet"}), 404
+    c = cities.resolve(code)
+    rows = list(emailer._page_dogs(code).values())
+    if not rows:
+        # No page on disk yet — a fresh volume mid-render. 503 rather than an
+        # empty 200, so the app retries instead of telling someone a whole
+        # city has no dogs.
+        return jsonify({"ok": False, "error": "not rendered yet"}), 503
+    dogs = []
+    for r in rows:
+        d = {k: r[k] for k in _API_DOG_FIELDS if k in r}
+        d["photos"] = [p for p in (r.get("photos") or []) if p][:8]
+        dogs.append(d)
+    page = PUBLIC / c.file
+    updated = (datetime.fromtimestamp(page.stat().st_mtime, tz=timezone.utc)
+               .isoformat() if page.exists() else None)
+    resp = jsonify({
+        "ok": True, "city": c.code, "name": c.name, "short": c.short,
+        # The city's date, not the server's or the phone's. "New today" is
+        # judged against first_seen, which is recorded in the city's own zone,
+        # so a phone in another timezone must not decide what today is.
+        "today": datetime.now(ZoneInfo(c.tz)).date().isoformat(),
+        "updated": updated, "count": len(dogs), "dogs": dogs,
+    })
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
+@app.route("/api/devices", methods=["POST"])
+def api_register_device():
+    """Remember a phone and the cities it wants to hear about new dogs in.
+
+    No form token and no honeypot, unlike the email forms: those exist because
+    a bot that subscribes an address makes us mail a stranger. A fake device
+    token makes us send nothing to anyone — APNs refuses it the first morning
+    and push.py deletes the row. The rate limit is enough to keep the table
+    from being flooded in between.
+    """
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    if not _TOKEN_RE.match(token):
+        return jsonify({"ok": False, "error": "invalid token"}), 400
+    # The whole set of cities the phone follows. `city` (singular) is still
+    # accepted so a single-city client keeps working. Every value is checked
+    # before anything is written: a list with one bad city must not half-apply.
+    raw = data.get("cities")
+    if raw is None:
+        raw = [data.get("city")] if data.get("city") else []
+    if isinstance(raw, str):
+        raw = [raw]
+    codes = []
+    for value in list(raw)[:len(cities.all_codes())]:
+        code = cities.canon(str(value or "").strip())
+        if not code or not cities.is_live(code):
+            return jsonify({"ok": False, "error": "unknown city"}), 400
+        if code not in codes:
+            codes.append(code)
+    if not codes:
+        return jsonify({"ok": False, "error": "no city"}), 400
+    # Unlike the email forms this answers honestly when throttled: the caller is
+    # our own app, which should back off, not a bot to be kept guessing.
+    if not _rate_ok(_device_hits, _client_ip(), _DEVICE_MAX):
+        return jsonify({"ok": False, "error": "slow down"}), 429
+    env = "sandbox" if data.get("env") == "sandbox" else "production"
+    changed = db.set_device_cities(token, codes, env=env)
+    import push
+    # Tells the app whether mornings will arrive as real push. Until they do,
+    # the app notifies from its own background refresh; once they do, it stops,
+    # so nobody gets the same morning twice.
+    return jsonify({"ok": True, "cities": codes, "changed": changed,
+                    "push": push.configured()})
+
+
+@app.route("/api/devices/delete", methods=["POST"])
+def api_remove_device():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    if not _TOKEN_RE.match(token):
+        return jsonify({"ok": False, "error": "invalid token"}), 400
+    return jsonify({"ok": True, "removed": db.remove_device(token)})
+
+
+# ---- App accounts -----------------------------------------------------------
+#
+# Sign in with Apple, and the saved dogs and cities that follow an account from
+# phone to phone. Every account route but sign-in takes a bearer token minted
+# at sign-in; only its hash is stored (db.create_session).
+_AUTH_MAX = 30
+_auth_hits: dict = {}
+_ACCOUNT_MAX = 240
+_account_hits: dict = {}
+_SAVED_ITEMS_MAX = 500
+
+
+def _account_json(user: dict) -> dict:
+    return {"email": user.get("email"), "name": user.get("name")}
+
+
+def _saved_json(rows) -> list:
+    return [{"id": r["dog_id"], "city": r.get("city"), "name": r.get("name"),
+             "photo": r.get("photo"), "breed": r.get("breed"),
+             "rescue": r.get("rescue"), "saved_at": r["saved_at"]} for r in rows]
+
+
+def _clean_saved_items(raw) -> list:
+    """A phone's saved list, bounded and normalised. Bad entries are dropped,
+    not refused: one odd dog must not stop the rest of a list syncing."""
+    out, seen = [], set()
+    for item in list(raw or [])[:_SAVED_ITEMS_MAX]:
+        if not isinstance(item, dict):
+            continue
+        dog_id = str(item.get("id") or "").strip()[:120]
+        if not dog_id or dog_id in seen:
+            continue
+        seen.add(dog_id)
+        saved_at = str(item.get("saved_at") or "").strip()
+        try:
+            when = datetime.fromisoformat(saved_at.replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+        except ValueError:
+            when = datetime.now(timezone.utc)
+        photo = str(item.get("photo") or "").strip()
+        def text(key, n=120):
+            return str(item.get(key) or "").strip()[:n] or None
+        out.append({
+            "dog_id": dog_id,
+            "city": cities.canon(str(item.get("city") or "").strip()) or None,
+            "name": text("name"), "breed": text("breed"), "rescue": text("rescue"),
+            "photo": photo[:600] if photo.startswith("https://") else None,
+            "saved_at": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+    return out
+
+
+def _session_user():
+    header = request.headers.get("Authorization") or ""
+    if not header.startswith("Bearer "):
+        return None
+    return db.user_for_session(header[7:].strip())
+
+
+def _signed_in_response(user: dict, status: int = 200):
+    token = db.create_session(user["id"])
+    return jsonify({"ok": True, "token": token, "account": _account_json(user),
+                    "new": bool(user.get("new")), "cities": user.get("cities") or [],
+                    "saved": _saved_json(db.user_saved(user["id"]))}), status
+
+
+@app.route("/api/auth/apple", methods=["POST"])
+def api_auth_apple():
+    """Trade an Apple identity token for a LUVD session."""
+    import auth
+    if not _rate_ok(_auth_hits, _client_ip(), _AUTH_MAX):
+        return jsonify({"ok": False, "error": "slow down"}), 429
+    data = request.get_json(silent=True) or {}
+    try:
+        claims = auth.verify_identity_token(str(data.get("identity_token") or ""),
+                                            str(data.get("nonce") or ""))
+    except auth.AuthError as e:
+        app.logger.info("apple sign-in refused: %s", e)
+        return jsonify({"ok": False, "error": "sign-in could not be verified"}), 401
+    # The name only ever arrives from the phone, and only on the first sign-in;
+    # the token never carries it.
+    user = db.upsert_apple_user(claims["sub"], claims.get("email"),
+                                str(data.get("name") or ""))
+    code = str(data.get("authorization_code") or "")
+    if code and auth.signin_key_configured():
+        try:
+            refresh = auth.exchange_code(code)
+            if refresh:
+                db.set_apple_refresh(user["id"], refresh)
+        except Exception as e:
+            # Signing in is what they asked for; the refresh token is only for a
+            # later revoke. Never fail the sign-in over it.
+            app.logger.warning("apple code exchange: %s: %s", type(e).__name__, e)
+    app.logger.info("apple sign-in: user %s%s", user["id"], " (new)" if user["new"] else "")
+    return _signed_in_response(user)
+
+
+@app.route("/api/auth/dev", methods=["POST"])
+def api_auth_dev():
+    """A stand-in for Apple, for a simulator talking to a dev server.
+
+    Off unless LUVD_DEV_AUTH=1, and even then only for a request that reached
+    this process directly from this machine — Fly's proxy always adds
+    Fly-Client-IP, so a production request can never qualify.
+    """
+    local = request.remote_addr in ("127.0.0.1", "::1") and not request.headers.get("Fly-Client-IP")
+    if os.getenv("LUVD_DEV_AUTH") != "1" or not local:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    data = request.get_json(silent=True) or {}
+    who = re.sub(r"[^a-z0-9]", "", str(data.get("who") or "tester").lower())[:40] or "tester"
+    user = db.upsert_apple_user(f"dev:{who}", f"{who}@example.com", who.title())
+    return _signed_in_response(user)
+
+
+@app.route("/api/me")
+def api_me():
+    user = _session_user()
+    if not user:
+        return jsonify({"ok": False, "error": "signed out"}), 401
+    return jsonify({"ok": True, "account": _account_json(user),
+                    "cities": user.get("cities") or [],
+                    "saved": _saved_json(db.user_saved(user["id"]))})
+
+
+@app.route("/api/me/saved", methods=["POST"])
+def api_me_saved():
+    """Merge (on sign-in) or replace (after a change) the account's saved dogs."""
+    user = _session_user()
+    if not user:
+        return jsonify({"ok": False, "error": "signed out"}), 401
+    if not _rate_ok(_account_hits, f"u{user['id']}", _ACCOUNT_MAX):
+        return jsonify({"ok": False, "error": "slow down"}), 429
+    data = request.get_json(silent=True) or {}
+    items = _clean_saved_items(data.get("items"))
+    rows = db.merge_saved(user["id"], items, replace=data.get("mode") == "replace")
+    return jsonify({"ok": True, "saved": _saved_json(rows)})
+
+
+@app.route("/api/me/cities", methods=["POST"])
+def api_me_cities():
+    user = _session_user()
+    if not user:
+        return jsonify({"ok": False, "error": "signed out"}), 401
+    data = request.get_json(silent=True) or {}
+    codes = []
+    for value in list(data.get("cities") or [])[:len(cities.all_codes())]:
+        code = cities.canon(str(value or "").strip())
+        if not code or not cities.is_live(code):
+            return jsonify({"ok": False, "error": "unknown city"}), 400
+        if code not in codes:
+            codes.append(code)
+    if not codes:
+        return jsonify({"ok": False, "error": "no city"}), 400
+    db.set_user_cities(user["id"], codes)
+    return jsonify({"ok": True, "cities": codes})
+
+
+@app.route("/api/auth/signout", methods=["POST"])
+def api_auth_signout():
+    header = request.headers.get("Authorization") or ""
+    ended = db.end_session(header[7:].strip()) if header.startswith("Bearer ") else False
+    return jsonify({"ok": True, "ended": ended})
+
+
+@app.route("/api/me/delete", methods=["POST"])
+def api_me_delete():
+    """Delete the account, its saves and every session, then tell Apple."""
+    import auth
+    user = _session_user()
+    if not user:
+        return jsonify({"ok": False, "error": "signed out"}), 401
+    refresh = db.delete_user(user["id"])
+    app.logger.info("account %s deleted", user["id"])
+    if refresh:
+        def _revoke():
+            try:
+                auth.revoke(refresh)
+            except Exception as e:
+                app.logger.warning("apple revoke: %s: %s", type(e).__name__, e)
+        threading.Thread(target=_revoke, daemon=True).start()
+    return jsonify({"ok": True})
 
 
 @app.route("/cities")
