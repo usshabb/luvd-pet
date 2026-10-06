@@ -114,7 +114,7 @@ def email_configured() -> bool:
 
 
 def _from_parts():
-    """FROM_EMAIL accepts 'Name <addr>' or a bare address.
+    """FROM_EMAIL accepts 'Name <addr>' or a bare address; branding stays LUVD.
 
     The default has to be a mailbox that actually exists: it is what runs
     whenever the environment variable is missing or stale, which is the
@@ -122,8 +122,8 @@ def _from_parts():
     """
     raw = os.getenv("FROM_EMAIL", "LUVD <cory@luvd.com>")
     if "<" in raw:
-        name, _, rest = raw.partition("<")
-        return rest.rstrip("> ").strip(), (name.strip() or "LUVD")
+        _, _, rest = raw.partition("<")
+        return rest.rstrip("> ").strip(), "LUVD"
     return raw.strip(), "LUVD"
 
 
