@@ -1699,6 +1699,20 @@ def _fake_apns_key():
     return key, pem
 
 
+def test_email_sender_is_luvd_even_with_a_legacy_city_name():
+    import emailer
+    from unittest.mock import patch
+    cases = {
+        "LUVD NYC <cory@luvd.com>": ("cory@luvd.com", "LUVD"),
+        "LUVD LA <dogs@example.org>": ("dogs@example.org", "LUVD"),
+        "cory@luvd.com": ("cory@luvd.com", "LUVD"),
+    }
+    for raw, expected in cases.items():
+        with patch.dict(os.environ, {"FROM_EMAIL": raw}):
+            eq(f"sender is LUVD and address is preserved: {raw}",
+               emailer._from_parts(), expected)
+
+
 def test_push_payload_reads_like_a_person_wrote_it():
     import push
     one = [dog("muddypaws", 1, "Fiona")]
