@@ -510,6 +510,7 @@ _STYLE = f"""
       .cta-w3{{width:{_grid_w(3, TILE_DESKTOP)}px !important;}}
     }}
     @media only screen and (max-width:480px){{
+      .drop-title{{font-size:36px !important;}}
       .card{{padding-left:18px !important;padding-right:18px !important;}}
     }}
     @media only screen and (max-width:375px){{
@@ -565,76 +566,100 @@ def _city_path(city: str = None) -> str:
     return cities.resolve(city).path if city else "/"
 
 
+def _digest_story(dog: Dog) -> str:
+    """A short, contiguous rescue excerpt: never invent temperament claims."""
+    text = re.sub(r"<[^>]+>", " ", dog.description or "")
+    text = " ".join(html.unescape(text).split())
+    if not text:
+        return (f"Meet {dog.name} through {dog.source_label}. "
+                "Open their profile for the latest details from the rescue.")
+    words = text.split()
+    if len(words) <= 65:
+        return text
+    excerpt = " ".join(words[:65])
+    # Prefer a complete sentence, but do not cherry-pick positive sentences
+    # and silently discard qualifications in between them.
+    ends = list(re.finditer(r"[.!?](?:[’\"']?)(?=\s|$)", excerpt))
+    if ends and ends[-1].end() >= 100:
+        return excerpt[:ends[-1].end()]
+    return excerpt.rstrip(",;:") + "…"
+
+
+def _digest_logo(width: int) -> str:
+    return (f'<img src="{html.escape(_abs(LOGO_FILE))}" width="{width}" '
+            f'alt="LUVD" style="display:block;width:{width}px;max-width:100%;'
+            'height:auto;margin:0 auto;border:0;">')
+
+
+def _digest_card(dog: Dog, send_id: int = None) -> str:
+    name = html.escape(dog.name)
+    link = html.escape(_dog_link(dog, send_id))
+    photo = _email_photo(dog.primary_photo(), width=1104)
+    picture = (f'<a href="{link}"><img src="{html.escape(photo)}" '
+               f'width="552" alt="{name}" style="display:block;width:100%;'
+               'max-width:552px;height:330px;object-fit:cover;object-position:center 38%;border:0;border-radius:14px 14px 0 0;"></a>'
+               if photo else "")
+    if photo:
+        picture = (f'<!--[if mso]><a href="{link}"><img src="{html.escape(photo)}" '
+                   f'width="552" alt="{name}" style="display:block;border:0;"></a><![endif]-->'
+                   f'<!--[if !mso]><!-->{picture}<!--<![endif]-->')
+    facts = " · ".join(html.escape(x) for x in
+                       (dog.age, dog.weight, dog.source_label) if x)
+    program = (f'<p style="font-size:15px;line-height:1.6;">'
+               f'{html.escape(dog.program_label)}: {html.escape(dog.program_note)}</p>'
+               if dog.program_label else "")
+    return f"""<tr><td style="padding:0 24px 27px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid #e6e6e6;border-radius:15px;background:#ffffff;">
+      <tr><td>{picture}</td></tr>
+      <tr><td style="padding:25px 24px 27px;">
+        <h2 style="font-size:32px;line-height:1.2;letter-spacing:-1px;margin:0 0 14px;">{name}</h2>
+        <p style="font-size:16px;line-height:1.7;color:#606060;margin:0 0 17px;">{html.escape(_digest_story(dog))}</p>
+        {program}
+        <p style="font-size:18px;line-height:1.6;font-weight:500;color:#484848;border-top:1px solid #eeeeee;padding-top:14px;margin:0;">{facts}</p>
+        <a href="{link}" style="display:inline-block;background:#ef3043;color:#ffffff;text-decoration:none;border-radius:8px;padding:13px 20px;font-size:16px;font-weight:700;margin-top:18px;">Meet {name} →</a>
+      </td></tr>
+    </table></td></tr>"""
+
+
 def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = None,
                city: str = None, send_id: int = None) -> str:
-    # for_date is unused since the footer stopped printing the date. It stays
-    # in the signature because check.py passes it and a digest is still a thing
-    # that happened on a day; dropping it would be a breaking change for the
-    # sake of one line.
-    #
-    # `city` is the digest's own city, and it decides one thing: where the
-    # button at the bottom goes. The dogs above it are already this city's —
-    # check.py only ever hands us `new_today` from one city's sources — so this
-    # is the last place the mail could still point somewhere else.
-    n = len(dogs)
-    with_photos = [d for d in dogs if d.photos]
-    desk = with_photos[:PREVIEW_COUNT]
-    phone = with_photos[:PHONE_PREVIEW_COUNT]
-    # Two across, an odd number leaves the last dog alone on its own row, which
-    # reads as a photo that failed to load. Drop it into "+ N more on the site"
-    # instead — the counts still add up and the grid stays a rectangle. Only
-    # from three up: one dog is a single row, not an orphaned one.
-    if len(phone) > 1 and len(phone) % 2:
-        phone = phone[:-1]
-
-    # Both grids point at the same photo URLs, so the one that stays hidden
-    # costs no extra bytes on the wire. The phone grid is the visible base and
-    # the desktop grid is hidden until the min-width query reveals it; the mso
-    # fallback rides with whichever one Outlook ends up showing, which is now
-    # the phone one.
-    grid_desk = _grid(desk, 3, TILE_DESKTOP, "g-desk", "dk-img", "dk-cell",
-                      hidden=True, mso_fallback=False, send_id=send_id)
-    grid_phone = _grid(phone, 2, TILE_PHONE_TINY, "g-phone", "ph-img",
-                       "ph-cell", hidden=False, mso_fallback=True,
-                       send_id=send_id)
-
-    more = (_more_line(n - len(phone), "m-phone", hidden=False)
-            + _more_line(n - len(desk), "m-desk", hidden=True))
-
-    # The count moved out of the subject, so the preview carries it. A reader
-    # deciding whether to open still gets the number, and the subject stays
-    # short enough to survive a phone's truncation.
-    face = "face" if n == 1 else "faces"
-    return _document(f"""{_preheader(f"{n} new {face}, all looking for a couch to call home")}
-<div style="background:#fbfbfd;padding:32px 16px;">
-  <div class="card" style="max-width:560px;margin:0 auto;background:#fff;border-radius:20px;
-              padding:36px 28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
-    {_logo()}
-    <h1 style="font:700 27px -apple-system,Segoe UI,Roboto,sans-serif;color:#1d1d1f;
-               text-align:center;letter-spacing:-.02em;margin:16px 0 6px;">
-      {n} new dog{'' if n == 1 else 's'} today</h1>
-    <p style="font:400 15px -apple-system,Segoe UI,Roboto,sans-serif;color:#6e6e73;
-              text-align:center;margin:0 0 26px;">Across every {html.escape(cities.resolve(city).short)} rescue we follow.</p>
-
-    {grid_desk}{grid_phone}
-    {more}
-
-    <table class="cta-w cta-w{_grid_cols(3, len(desk))}" cellpadding="0" cellspacing="0" align="center"
-           style="border-collapse:collapse;margin:24px auto 0;
-                  width:{_grid_w(2, TILE_PHONE_TINY)}px;">
-      <tr><td>
-        <a href="{html.escape(_track(_city_path(city), send_id))}"
-           style="display:block;background:#FF002E;color:#fff;text-decoration:none;
-                  text-align:center;padding:15px;border-radius:13px;font:600 16px
-                  -apple-system,Segoe UI,Roboto,sans-serif;">
-          See all {n} dog{'' if n == 1 else 's'} →</a>
-      </td></tr>
-    </table>
-
-    {_footer(unsubscribe_for)}
-  </div>
-  {_pixel(send_id)}
-</div>""")
+    """Three readable rescue stories, with the rest of the day's arrivals linked."""
+    c = cities.resolve(city)
+    cards = "".join(_digest_card(d, send_id) for d in dogs[:3])
+    extra = ""
+    if len(dogs) > 3:
+        # Bound HTML size on unusually busy mornings; the city link covers all.
+        links = " · ".join(f'<a href="{html.escape(_dog_link(d, send_id))}" '
+                           f'style="color:#242424;">{html.escape(d.name)}</a>'
+                           for d in dogs[3:15])
+        extra = f'<tr><td style="padding:0 30px 27px;font-size:16px;line-height:1.7;"><strong>More new faces today</strong><br>{links}'
+        if len(dogs) > 15:
+            extra += f'<br>Plus {len(dogs) - 15} more on the site.'
+        extra += '</td></tr>'
+    unsubscribe = (f'<a href="{html.escape(unsub_url(unsubscribe_for))}" '
+                   'style="color:#606060;">Unsubscribe</a>' if unsubscribe_for else "")
+    title = "Meet the dog<br>that dropped today." if len(dogs) == 1 else "Meet the dogs<br>that dropped today."
+    return _document(f"""{_preheader(f"{len(dogs)} new dogs in {c.short}. A little hello. A possible forever.")}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;color:#242424;font-family:Arial,Helvetica,sans-serif;">
+<tr><td align="center" style="padding:24px 0;">
+<!--[if mso]><table role="presentation" width="600"><tr><td><![endif]-->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;">
+<tr><td align="center" style="padding:30px 24px 20px;border-bottom:1px solid #ededed;">{_digest_logo(180)}</td></tr>
+<tr><td align="center" style="padding:34px 24px 28px;">
+<h1 class="drop-title" style="font-size:44px;font-weight:700;letter-spacing:-1.5px;line-height:1.12;margin:0;">{title}</h1></td></tr>
+{cards}{extra}
+<tr><td align="center" style="padding:30px 24px;background:#f5f5f5;">
+<h2 style="font-size:23px;line-height:1.3;margin:0 0 12px;">Your next best friend is out there.</h2>
+<p style="font-size:16px;line-height:1.6;color:#606060;margin:0 0 18px;">Still looking? There are more good dogs to meet.</p>
+<a href="{html.escape(_track(_city_path(city), send_id))}" style="font-size:17px;font-weight:700;color:#242424;">See all the dogs in {html.escape(c.short)} →</a>
+</td></tr>
+<tr><td align="center" style="padding:30px 24px;">
+<p style="font-size:16px;color:#606060;margin:0 0 14px;">A little hello. A possible forever.</p>{_digest_logo(120)}
+<p style="font-size:12px;line-height:1.7;color:#606060;margin:24px 0 0;">Excerpts from the rescues’ descriptions. Read each full profile for care needs and adoption details. Availability is confirmed by the rescue.<br>{unsubscribe}</p>
+</td></tr></table>
+<!--[if mso]></td></tr></table><![endif]-->
+{_pixel(send_id)}</td></tr></table>""")
 
 
 def _bulk_headers(to_email: str) -> dict:
@@ -670,6 +695,9 @@ def build_digest_text(dogs: List[Dog], city: str = None,
              else f"{n} new dogs in {c.short} today", ""]
     for d in dogs:
         lines.append(d.name)
+        lines.append("  " + _digest_story(d))
+        if d.program_label:
+            lines.append(f"  {d.program_label}: {d.program_note}")
         facts = [f for f in (d.breed, d.age, d.sex, d.weight) if f]
         if facts:
             lines.append("  " + " · ".join(facts))
@@ -783,6 +811,9 @@ def build_saved_text(dogs: List[Dog], city: str = None,
     lines = [f"Your {n} saved dog" + ("" if n == 1 else "s"), ""]
     for d in dogs:
         lines.append(d.name)
+        lines.append("  " + _digest_story(d))
+        if d.program_label:
+            lines.append(f"  {d.program_label}: {d.program_note}")
         facts = [f for f in (d.breed, d.age, d.sex, d.weight) if f]
         if facts:
             lines.append("  " + " \u00b7 ".join(facts))
