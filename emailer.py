@@ -597,7 +597,7 @@ def _digest_card(dog: Dog, send_id: int = None) -> str:
     photo = _email_photo(dog.primary_photo(), width=1104)
     picture = (f'<a href="{link}"><img src="{html.escape(photo)}" '
                f'width="552" alt="{name}" style="display:block;width:100%;'
-               'max-width:552px;height:330px;object-fit:cover;object-position:center 38%;border:0;border-radius:14px 14px 0 0;"></a>'
+               'max-width:552px;height:330px;object-fit:cover;object-position:center center;border:0;border-radius:14px 14px 0 0;"></a>'
                if photo else "")
     if photo:
         picture = (f'<!--[if mso]><a href="{link}"><img src="{html.escape(photo)}" '
@@ -616,7 +616,7 @@ def _digest_card(dog: Dog, send_id: int = None) -> str:
         <h2 style="font-size:32px;line-height:1.2;letter-spacing:-1px;margin:0 0 14px;">{name}</h2>
         <p style="font-size:16px;line-height:1.7;color:#606060;margin:0 0 17px;">{html.escape(_digest_story(dog))}</p>
         {program}
-        <p style="font-size:18px;line-height:1.6;font-weight:500;color:#484848;border-top:1px solid #eeeeee;padding-top:14px;margin:0;">{facts}</p>
+        <p style="font-size:16px;line-height:1.6;font-weight:500;color:#484848;border-top:1px solid #eeeeee;padding-top:14px;margin:0;">{facts}</p>
         <a href="{link}" style="display:inline-block;background:#ef3043;color:#ffffff;text-decoration:none;border-radius:8px;padding:13px 20px;font-size:16px;font-weight:700;margin-top:18px;">Meet {name} →</a>
       </td></tr>
     </table></td></tr>"""
@@ -640,7 +640,7 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
     unsubscribe = (f'<a href="{html.escape(unsub_url(unsubscribe_for))}" '
                    'style="color:#606060;">Unsubscribe</a>' if unsubscribe_for else "")
     title = "Meet the dog<br>that dropped today." if len(dogs) == 1 else "Meet the dogs<br>that dropped today."
-    return _document(f"""{_preheader(f"{len(dogs)} new dogs in {c.short}. A little hello. A possible forever.")}
+    return _document(f"""{_preheader(f"{len(dogs)} new dogs in {c.short}. Meet today’s arrivals.")}
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;color:#242424;font-family:Arial,Helvetica,sans-serif;">
 <tr><td align="center" style="padding:24px 0;">
 <!--[if mso]><table role="presentation" width="600"><tr><td><![endif]-->
@@ -649,13 +649,11 @@ def build_html(dogs: List[Dog], for_date: date = None, unsubscribe_for: str = No
 <tr><td align="center" style="padding:34px 24px 28px;">
 <h1 class="drop-title" style="font-size:44px;font-weight:700;letter-spacing:-1.5px;line-height:1.12;margin:0;">{title}</h1></td></tr>
 {cards}{extra}
-<tr><td align="center" style="padding:30px 24px;background:#f5f5f5;">
-<h2 style="font-size:23px;line-height:1.3;margin:0 0 12px;">Your next best friend is out there.</h2>
-<p style="font-size:16px;line-height:1.6;color:#606060;margin:0 0 18px;">Still looking? There are more good dogs to meet.</p>
+<tr><td align="center" style="padding:16px 24px 8px;background:#ffffff;">
 <a href="{html.escape(_track(_city_path(city), send_id))}" style="font-size:17px;font-weight:700;color:#242424;">See all the dogs in {html.escape(c.short)} →</a>
 </td></tr>
 <tr><td align="center" style="padding:30px 24px;">
-<p style="font-size:16px;color:#606060;margin:0 0 14px;">A little hello. A possible forever.</p>{_digest_logo(120)}
+{_digest_logo(120)}
 <p style="font-size:12px;line-height:1.7;color:#606060;margin:24px 0 0;">Excerpts from the rescues’ descriptions. Read each full profile for care needs and adoption details. Availability is confirmed by the rescue.<br>{unsubscribe}</p>
 </td></tr></table>
 <!--[if mso]></td></tr></table><![endif]-->
