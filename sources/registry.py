@@ -28,6 +28,9 @@ from .rescues.wagsandwalks import WagsAndWalksSource
 from .rescues.angelcitypits import AngelCityPitsSource
 from .rescues.labelle import LaBelleSource
 from .rescues.muchlove import MuchLoveSource
+from .rescues.bideawee import BideaweeSource
+from .rescues.rescuecity import RescueCitySource
+from .rescues.spcala import SpcaLASource
 from .rescues.socialtees import SocialTeesSource
 
 # Rescues we scrape directly from their own sites.
@@ -85,6 +88,9 @@ _VIA_PLATFORM: List[Source] = [
 # self-manages on Wix and needs its own scraper; MaeDay Rescue publishes
 # availability only on Instagram, which has no read path worth depending on.
 _VIA_ADOPTAPET: List[Source] = [
+    BideaweeSource(),
+    RescueCitySource(),
+    SpcaLASource(),
     SocialTeesSource(),             # 17 — Manhattan, the first NYC one here
     OuttaTheCageSource(),           # 24 — Encino
     HitLivingSource(),              # 25 — Van Nuys
