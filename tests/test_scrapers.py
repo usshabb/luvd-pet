@@ -54,6 +54,34 @@ class AdoptAPetTests(unittest.TestCase):
         with patch.object(s, '_get', return_value=flight({'pets': [card(99)]})):
             with self.assertRaises(ValueError): s._roster_records()
 
+    def test_changing_roster_restarts_and_discards_partial_records(self):
+        s = self.source()
+        for new_last in (1, 3):
+            pages = [roster([card(99)], 1, 2),
+                     roster([card(98)], 2, new_last),
+                     roster([card(1)], 1, 1)]
+            with patch.object(s, '_get', side_effect=pages) as get:
+                self.assertEqual([r['petId'] for r in s._roster_records()], [1])
+                self.assertEqual(get.call_args_list[0], get.call_args_list[2])
+
+    def test_continually_changing_roster_still_fails(self):
+        s = self.source()
+        pages = [roster([card(1)], 1, 2), roster([card(2)], 2, 1)] * 2
+        with patch.object(s, '_get', side_effect=pages) as get:
+            with self.assertRaisesRegex(ValueError, 'pagination changed'):
+                s._roster_records()
+            self.assertEqual(get.call_count, 4)
+
+    def test_failed_fetch_keeps_http_reason(self):
+        import requests
+        s = self.source()
+        with patch('sources.adoptapet.requests.Session') as session:
+            response = session.return_value.__enter__.return_value.get.return_value
+            response.raise_for_status.side_effect = requests.HTTPError('403 Forbidden')
+            with self.assertRaisesRegex(RuntimeError, '403 Forbidden'):
+                s._roster_records()
+            self.assertEqual(session.return_value.__enter__.return_value.get.call_count, 1)
+
     def test_brackets_in_prose(self):
         rows = [card(1), card(2, 'Name ] with bracket')]
         self.assertEqual(_json_array(json.dumps({'availablePets': rows}), 'availablePets'), rows)
