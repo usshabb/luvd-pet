@@ -187,6 +187,10 @@ def _attrs(blob: str) -> dict:
     return out
 
 
+class RosterChanged(ValueError):
+    """Pagination changed while reading a live roster."""
+
+
 class AdoptAPetSource(Source):
     """Subclass with a `shelter_path`; see rescues/outtathecage.py."""
 
@@ -197,10 +201,11 @@ class AdoptAPetSource(Source):
     pause = 0.4
 
     def _get(self, url: str) -> Optional[str]:
+        self._fetch_error = None
         try:
             with requests.Session() as session:
                 session.mount("https://", HTTPAdapter(max_retries=Retry(
-                    total=2, backoff_factor=0.5,
+                    total=3, backoff_factor=2, raise_on_status=False,
                     status_forcelist=(429, 500, 502, 503, 504),
                     allowed_methods=frozenset({"GET"}),
                 )))
@@ -208,6 +213,7 @@ class AdoptAPetSource(Source):
                 r.raise_for_status()
                 return r.text
         except Exception as e:
+            self._fetch_error = f"{type(e).__name__}: {e}"
             print(f"  {self.name}: {url.rsplit('/', 1)[-1][:40]} — "
                   f"{type(e).__name__}: {e}")
             return None
@@ -296,6 +302,17 @@ class AdoptAPetSource(Source):
         )
 
     def _roster_records(self) -> List[dict]:
+        # Discard the entire partial walk if adoptions change pagination.
+        # A second inconsistent walk remains a failure, retaining published dogs.
+        for attempt in range(2):
+            try:
+                return self._roster_snapshot()
+            except RosterChanged:
+                if attempt:
+                    raise
+                time.sleep(self.pause)
+
+    def _roster_snapshot(self) -> List[dict]:
         """Walk the rescue's available roster, excluding recommendation rails.
 
         The shelter HTML also contains unrelated nearby pets. Only records in
@@ -305,15 +322,21 @@ class AdoptAPetSource(Source):
         base = f"{BASE}/{self.shelter_path.lstrip('/')}"
         records_out, seen = [], set()
         page, last = 1, 1
+        expected_pagination = None
         while page <= last:
             html = self._get(base if page == 1 else f"{base}?page={page}")
             if not html:
-                raise RuntimeError(f"roster page {page} could not be fetched")
+                raise RuntimeError(f"roster page {page} could not be fetched: "
+                                   f"{getattr(self, '_fetch_error', None) or 'empty response'}")
             blob = _flight_json(html)
             records = _json_value(blob, "availablePets")
             info = _json_value(blob, "paginatorInfo")
             if not isinstance(records, list) or not isinstance(info, dict):
                 raise ValueError("available roster or pagination missing")
+            pagination = (int(info.get("lastPage", 1)), int(info.get("total", 0)))
+            if expected_pagination is not None and pagination != expected_pagination:
+                raise RosterChanged(f"roster pagination changed from {expected_pagination} to {pagination}")
+            expected_pagination = pagination
             if int(info.get("currentPage", 0)) != page:
                 raise ValueError(f"requested roster page {page}, got {info.get('currentPage')}")
             last = int(info.get("lastPage", 1))

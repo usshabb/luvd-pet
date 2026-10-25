@@ -55,6 +55,27 @@ class HealthTests(unittest.TestCase):
             self.assertFalse(health.alert('broken', 'details'))
             self.assertEqual(send.call_count, 2)
 
+    def test_recovery_does_not_reset_alert_cooldown(self):
+        self.seed()
+        with patch.dict(os.environ, {'ALERT_EMAIL': 'operator@example.invalid'}), \
+             patch.object(emailer, 'email_configured', return_value=True), \
+             patch.object(emailer, 'send_email') as send, \
+             patch.object(health.time, 'time', return_value=10001):
+            health.checked('NYC', ['bideawee: HTTP 503'], now=10001)
+            health.watchdog_once(now=10001)
+            self.assertIn('bideawee: HTTP 503', send.call_args.kwargs['text_body'])
+            health.checked('NYC', [], now=10002)
+            health.watchdog_once(now=10002)
+            health.checked('NYC', ['rescuecity: HTTP 503'], now=10003)
+            self.assertFalse(health.watchdog_once(now=10003)['ok'])
+            self.assertEqual(send.call_count, 1)
+        with patch.dict(os.environ, {'ALERT_EMAIL': 'operator@example.invalid'}), \
+             patch.object(emailer, 'email_configured', return_value=True), \
+             patch.object(emailer, 'send_email') as send, \
+             patch.object(health.time, 'time', return_value=10002 + health.ALERT_INTERVAL):
+            health.watchdog_once(now=10003)
+            self.assertEqual(send.call_count, 1)
+
     def test_watchdog_grace_and_healthy_recovery(self):
         with patch.object(health, 'alert') as notify:
             health.watchdog_once(now=10000, started=9990)

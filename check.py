@@ -37,11 +37,11 @@ from sources.registry import sources_for_city
 FORGET_FLOOR_SHARE = 0.5
 
 
-def _alert(subject: str, body: str):
+def _alert(subject: str, body: str, key=None):
     """Email the operator when something breaks. Silent if Mandrill isn't set up."""
     import scraper_health
     try:
-        scraper_health.alert(subject, body)
+        scraper_health.alert(subject, body, key=key)
     except Exception as exc:
         print(f"  health alert failed: {type(exc).__name__}: {exc}")
 
@@ -289,7 +289,8 @@ def run(dry_run=False, city=None, refresh=False, roster_only=False):
         _alert(f"LUVD {city}: {len(failures)} scraper(s) failed",
                "These sources did not complete a fresh roster:\n  - "
                + "\n  - ".join(failures)
-               + "\n\nTheir last published rosters were retained where available.")
+               + "\n\nTheir last published rosters were retained where available.",
+               key="health:" + city)
 
     if not dogs or all(d.source in _failed_names(failures) for d in dogs):
         print("No fresh dogs returned by any source — leaving the existing page alone.")

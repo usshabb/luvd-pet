@@ -97,8 +97,7 @@ def watchdog_once(now=None, started=0):
     snapshot = status(now)
     for city, result in snapshot['cities'].items():
         if result['ok']:
-            with _connect() as conn:
-                conn.execute('DELETE FROM scraper_alerts WHERE key=?', ('health:' + city,))
+            # Keep the cooldown through brief recoveries between failures.
             continue
         if (not result['published'] and not result['failed_sources']
                 and now - started < STALE_SECONDS):
@@ -107,8 +106,12 @@ def watchdog_once(now=None, started=0):
             # Real source failures and already-published stale data still alert.
             continue
         print(f'scraper health: {city}: {json.dumps(result)}', flush=True)
+        with _connect() as conn:
+            row = conn.execute('SELECT failures FROM scraper_health WHERE city=?', (city,)).fetchone()
+        failures = json.loads(row['failures'] or '[]') if row else []
+        details = '\nSources: ' + '; '.join(failures) if failures else ''
         alert(f'LUVD {city}: listings need attention',
-              f'{city} scraper health: {json.dumps(result)}\n'
+              f'{city} scraper health: {json.dumps(result)}{details}\n'
               'Check the scraper logs. Existing listings may be retained from an earlier run.',
               key='health:' + city)
     return snapshot
