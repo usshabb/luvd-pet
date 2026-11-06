@@ -200,7 +200,7 @@ class AdoptAPetSource(Source):
     # (single digits), so this costs seconds, not minutes.
     pause = 0.4
 
-    def _get(self, url: str) -> Optional[str]:
+    def _get(self, url: str, revalidate=False) -> Optional[str]:
         self._fetch_error = None
         try:
             with requests.Session() as session:
@@ -209,7 +209,10 @@ class AdoptAPetSource(Source):
                     status_forcelist=(429, 500, 502, 503, 504),
                     allowed_methods=frozenset({"GET"}),
                 )))
-                r = session.get(url, headers=_HEADERS, timeout=30)
+                headers = dict(_HEADERS)
+                if revalidate:
+                    headers["Cache-Control"] = "no-cache"
+                r = session.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 return r.text
         except Exception as e:
@@ -303,16 +306,17 @@ class AdoptAPetSource(Source):
 
     def _roster_records(self) -> List[dict]:
         # Discard the entire partial walk if adoptions change pagination.
-        # A second inconsistent walk remains a failure, retaining published dogs.
+        # Revalidate cached pages on retry: independently cached pages can report
+        # different totals. Still reject an inconsistent retry and retain dogs.
         for attempt in range(2):
             try:
-                return self._roster_snapshot()
+                return self._roster_snapshot(revalidate=bool(attempt))
             except RosterChanged:
                 if attempt:
                     raise
                 time.sleep(self.pause)
 
-    def _roster_snapshot(self) -> List[dict]:
+    def _roster_snapshot(self, revalidate=False) -> List[dict]:
         """Walk the rescue's available roster, excluding recommendation rails.
 
         The shelter HTML also contains unrelated nearby pets. Only records in
@@ -324,7 +328,8 @@ class AdoptAPetSource(Source):
         page, last = 1, 1
         expected_pagination = None
         while page <= last:
-            html = self._get(base if page == 1 else f"{base}?page={page}")
+            html = self._get(base if page == 1 else f"{base}?page={page}",
+                             revalidate=revalidate)
             if not html:
                 raise RuntimeError(f"roster page {page} could not be fetched: "
                                    f"{getattr(self, '_fetch_error', None) or 'empty response'}")

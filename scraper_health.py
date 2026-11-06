@@ -46,6 +46,11 @@ def published(city, now=None):
                      (time.time() if now is None else now, city))
 
 
+def email_alerts_enabled():
+    """Operator mail is opt-in; automated monitoring uses health records."""
+    return os.getenv("LUVD_OPERATOR_EMAIL_ALERTS", "").lower() in {"1", "true", "yes"}
+
+
 def status(now=None):
     now = time.time() if now is None else now
     with _connect() as conn:
@@ -61,7 +66,7 @@ def status(now=None):
                         'checked': checked_at, 'published': published_at,
                         'failed_sources': len(failures)}
     import emailer
-    alerts_configured = bool((os.getenv('ALERT_EMAIL') or os.getenv('OPERATOR_EMAIL'))
+    alerts_configured = bool(email_alerts_enabled() and (os.getenv('ALERT_EMAIL') or os.getenv('OPERATOR_EMAIL'))
                              and emailer.email_configured())
     return {'ok': all(r['ok'] for r in result.values()), 'cities': result,
             'alerts_configured': alerts_configured}
@@ -69,6 +74,9 @@ def status(now=None):
 
 def alert(subject, body, key=None):
     """At most one successful notification per issue every six hours."""
+    if not email_alerts_enabled():
+        print(f"  operator alert recorded (email disabled): {subject}: {body}", flush=True)
+        return False
     import emailer
     recipient = os.getenv('ALERT_EMAIL') or os.getenv('OPERATOR_EMAIL')
     if not recipient or not emailer.email_configured():

@@ -44,8 +44,22 @@ class HealthTests(unittest.TestCase):
         health.checked('LA', [], now=14000)
         self.assertTrue(health.status(14000)['cities']['NYC']['stale'])
 
+    def test_operator_mail_disabled_preserves_failure_status(self):
+        self.seed()
+        health.checked('LA', ['angelcitypits: RosterChanged'], now=10001)
+        with patch.dict(os.environ, {'LUVD_OPERATOR_EMAIL_ALERTS': '',
+                                    'ALERT_EMAIL': 'operator@example.invalid'}), \
+             patch.object(emailer, 'email_configured', return_value=True), \
+             patch.object(emailer, 'send_email') as send:
+            snapshot = health.watchdog_once(now=10002)
+            self.assertFalse(snapshot['ok'])
+            self.assertEqual(snapshot['cities']['LA']['failed_sources'], 1)
+            self.assertFalse(snapshot['alerts_configured'])
+            self.assertFalse(health.alert('ALL scrapers failed', 'retained'))
+            send.assert_not_called()
+
     def test_alert_throttle_and_failure_retry(self):
-        with patch.dict(os.environ, {'ALERT_EMAIL':'operator@example.invalid'}), \
+        with patch.dict(os.environ, {'LUVD_OPERATOR_EMAIL_ALERTS': 'true', 'ALERT_EMAIL':'operator@example.invalid'}), \
              patch.object(emailer, 'email_configured', return_value=True), \
              patch.object(emailer, 'send_email') as send:
             send.side_effect = RuntimeError('offline')
@@ -57,7 +71,7 @@ class HealthTests(unittest.TestCase):
 
     def test_recovery_does_not_reset_alert_cooldown(self):
         self.seed()
-        with patch.dict(os.environ, {'ALERT_EMAIL': 'operator@example.invalid'}), \
+        with patch.dict(os.environ, {'LUVD_OPERATOR_EMAIL_ALERTS': 'true', 'ALERT_EMAIL': 'operator@example.invalid'}), \
              patch.object(emailer, 'email_configured', return_value=True), \
              patch.object(emailer, 'send_email') as send, \
              patch.object(health.time, 'time', return_value=10001):
@@ -69,7 +83,7 @@ class HealthTests(unittest.TestCase):
             health.checked('NYC', ['rescuecity: HTTP 503'], now=10003)
             self.assertFalse(health.watchdog_once(now=10003)['ok'])
             self.assertEqual(send.call_count, 1)
-        with patch.dict(os.environ, {'ALERT_EMAIL': 'operator@example.invalid'}), \
+        with patch.dict(os.environ, {'LUVD_OPERATOR_EMAIL_ALERTS': 'true', 'ALERT_EMAIL': 'operator@example.invalid'}), \
              patch.object(emailer, 'email_configured', return_value=True), \
              patch.object(emailer, 'send_email') as send, \
              patch.object(health.time, 'time', return_value=10002 + health.ALERT_INTERVAL):
