@@ -62,7 +62,9 @@ class AdoptAPetTests(unittest.TestCase):
                      roster([card(1)], 1, 1)]
             with patch.object(s, '_get', side_effect=pages) as get:
                 self.assertEqual([r['petId'] for r in s._roster_records()], [1])
-                self.assertEqual(get.call_args_list[0], get.call_args_list[2])
+                self.assertEqual(get.call_args_list[0].args, get.call_args_list[2].args)
+                self.assertFalse(get.call_args_list[0].kwargs["revalidate"])
+                self.assertTrue(get.call_args_list[2].kwargs["revalidate"])
 
     def test_continually_changing_roster_still_fails(self):
         s = self.source()
@@ -71,6 +73,26 @@ class AdoptAPetTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'pagination changed'):
                 s._roster_records()
             self.assertEqual(get.call_count, 4)
+
+    def test_inconsistent_cached_totals_retry_full_snapshot(self):
+        s = self.source()
+        def page(pid, current, total):
+            return flight({'availablePets': [card(pid)], 'paginatorInfo': {
+                'currentPage': current, 'lastPage': 5, 'total': total}})
+        pages = [page(99, 1, 37), page(98, 2, 39)]
+        pages += [page(n, n, 39) for n in range(1, 6)]
+        with patch.object(s, '_get', side_effect=pages) as get:
+            self.assertEqual([r['petId'] for r in s._roster_records()], [1, 2, 3, 4, 5])
+            self.assertTrue(all(c.kwargs['revalidate'] for c in get.call_args_list[2:]))
+
+    def test_revalidation_header_only_on_retry(self):
+        s = self.source()
+        with patch('sources.adoptapet.requests.Session') as session:
+            get = session.return_value.__enter__.return_value.get
+            s._get('https://www.adoptapet.com/shelter/test')
+            self.assertNotIn('Cache-Control', get.call_args.kwargs['headers'])
+            s._get('https://www.adoptapet.com/shelter/test', revalidate=True)
+            self.assertEqual(get.call_args.kwargs['headers']['Cache-Control'], 'no-cache')
 
     def test_failed_fetch_keeps_http_reason(self):
         import requests

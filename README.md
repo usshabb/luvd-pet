@@ -648,13 +648,16 @@ Normalization and scoring happen centrally, so a new scraper only has to fetch.
 `GET /health/scrapers` returns 200 only when every live city has a recent check,
 a recent completed publish (within 45 minutes), and no failed roster sources.
 Otherwise it returns 503, without exposing exception details or credentials.
-`alerts_configured` indicates whether operator mail has a recipient and provider
-configuration; it does not prove successful delivery.
+`alerts_configured` indicates whether operator mail is enabled and has a recipient
+and provider configuration; it does not prove successful delivery.
 
 On Fly, a separate `scraper_health.py --watch` process checks every five minutes.
-It sends to `ALERT_EMAIL` (or `OPERATOR_EMAIL`) through the existing Mandrill
-configuration, throttles a continuing issue to six hours, and resets after
-recovery. Health state is stored beside `LUVD_DB` in a separate `.health.db`.
+Operator alert email is disabled by default; failures remain in logs and health
+state for automated monitoring and repair. To explicitly opt back in, set
+`LUVD_OPERATOR_EMAIL_ALERTS=true`; mail then goes to `ALERT_EMAIL` (or
+`OPERATOR_EMAIL`) through Mandrill, with a six-hour cooldown that survives brief
+recoveries. Subscriber digests are unaffected. Health state is stored beside
+`LUVD_DB` in a separate `.health.db`.
 A new installation has a 45-minute alert grace period. Keep Fly readiness on
 `/views`: an upstream rescue outage should not restart the web server. An
 external uptime monitor can poll `/health/scrapers` to detect whole-machine
